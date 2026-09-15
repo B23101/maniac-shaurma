@@ -1,0 +1,21 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven {
+            name = 'MinecraftForge'
+            url = 'https://maven.minecraftforge.net/'
+        }
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.7.0'
+}
+
+rootProject.name = 'maniac'
+
+includeBuild('../shaurma-lib') {
+    dependencySubstitution {
+        substitute module('dev.shaurmalib:shaurma-lib-forge') using project(':lib-forge')
+    }
+}

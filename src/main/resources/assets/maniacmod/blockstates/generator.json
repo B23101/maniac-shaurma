@@ -1,0 +1,6 @@
+{
+  "variants": {
+    "active=false": { "model": "maniacmod:block/generator_off" },
+    "active=true":  { "model": "maniacmod:block/generator_on"  }
+  }
+}

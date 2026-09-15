@@ -1,0 +1,12 @@
+.gradle/
+build/
+run/
+
+.idea/
+*.iml
+out/
+
+*.log
+hs_err_pid*
+
+local.properties
