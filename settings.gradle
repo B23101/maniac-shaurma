@@ -14,8 +14,11 @@ plugins {
 
 rootProject.name = 'maniac'
 
-includeBuild('../shaurma-lib') {
-    dependencySubstitution {
-        substitute module('dev.shaurmalib:shaurma-lib-forge') using project(':lib-forge')
+def localShaurmaLib = file('../shaurma-lib')
+if (localShaurmaLib.isDirectory()) {
+    includeBuild(localShaurmaLib) {
+        dependencySubstitution {
+            substitute module('dev.shaurmalib:shaurma-lib-forge') using project(':lib-forge')
+        }
     }
 }
