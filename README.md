@@ -16,8 +16,8 @@ Forge-мод для Minecraft 1.20.1.
 
 Готові файли з'являться в `build\libs\`.
 
-Якщо поруч із цим проектом є папка `shaurma-lib`, Gradle використає її локально.
-Інакше залежність завантажується з GitHub Packages.
+ShaurmaLib підключається як опублікований артефакт із GitHub Packages:
+`dev.shaurmalib:shaurma-lib-forge:0.1.0-SNAPSHOT`.
 
 ## Налаштування доступу до ShaurmaLib
 
