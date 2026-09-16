@@ -1,6 +1,8 @@
 package com.log_to_kot.maniacmod.blocks;
 
-import com.log_to_kot.maniacmod.game.ManiacGameManager;
+import com.log_to_kot.maniacmod.ManiacMod;
+import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
+import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -20,19 +22,19 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Генератор — блок який виживаючі ремонтують (утримання ПКМ).
+ * Блок генератора.
  *
- * Логіка ремонту:
- *   - Виживаючий тримає ПКМ на генераторі → ServerEventHandler.onServerTick()
- *     кожен тік детектує це через raycast і викликає ManiacGameManager.tickRepairOnBlock().
- *   - Прогрес відображається overlay'єм GeneratorProgressOverlay біля курсора.
- *   - ПКМ клік (use) залишено ТІЛЬКИ для маньяка (ламати активний генератор).
+ * ── Що змінилось відносно v3 ─────────────────────────────────────────
+ * v3-блок звертався до ManiacGameManager напряму — і тим самим тягнув
+ * у себе весь матч: пастки, бій, трупи. Тепер блок знає рівно два
+ * питання: «чи дозволяє фаза ремонт» і «кому передати намір».
  *
- * Властивості блоку:
- *   ACTIVE — true коли генератор повністю відремонтований (світиться)
+ * Перевірка фази — тут, а не всередині модуля: якщо фаза не ігрова,
+ * не варто навіть створювати сесію ремонту.
  */
 public class GeneratorBlock extends Block {
 
+    /** true, коли генератор повністю готовий — блок світиться. */
     public static final BooleanProperty ACTIVE = BooleanProperty.create("active");
 
     private static final VoxelShape SHAPE = Block.box(2, 0, 2, 14, 14, 14);
@@ -43,8 +45,7 @@ public class GeneratorBlock extends Block {
             .strength(3.5f, 6.0f)
             .sound(SoundType.METAL)
             .lightLevel(state -> state.getValue(ACTIVE) ? 10 : 0)
-            .requiresCorrectToolForDrops()
-        );
+            .requiresCorrectToolForDrops());
         registerDefaultState(this.stateDefinition.any().setValue(ACTIVE, false));
     }
 
@@ -60,30 +61,35 @@ public class GeneratorBlock extends Block {
 
     @Override
     public InteractionResult use(BlockState state, Level level, BlockPos pos,
-                                  Player player, InteractionHand hand, BlockHitResult hit) {
+                                 Player player, InteractionHand hand, BlockHitResult hit) {
         if (level.isClientSide) return InteractionResult.SUCCESS;
         if (!(player instanceof ServerPlayer sp)) return InteractionResult.FAIL;
 
-        // Тільки маньяк може ламати активний генератор кліком
-        if (ManiacGameManager.isManiac(sp)) {
-            if (state.getValue(ACTIVE)) {
-                level.setBlock(pos, state.setValue(ACTIVE, false), 3);
-                ManiacGameManager.deactivateGenerator(pos);
-                sp.sendSystemMessage(Component.translatable("maniacmod.generator.broken"));
-            } else {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return InteractionResult.PASS;
+        if (!match.phases().allows(PhaseRule.GENERATOR_REPAIR)) return InteractionResult.PASS;
+
+        // Маньяк ламає готовий генератор.
+        if (match.isManiac(sp.getUUID())) {
+            if (!state.getValue(ACTIVE)) {
                 sp.sendSystemMessage(Component.translatable("maniacmod.generator.not_active"));
+                return InteractionResult.SUCCESS;
             }
+            level.setBlock(pos, state.setValue(ACTIVE, false), 3);
+            match.generatorModule().sabotage(pos);
+            sp.sendSystemMessage(Component.translatable("maniacmod.generator.broken"));
             return InteractionResult.SUCCESS;
         }
 
-        // Виживаючий — реєструємо/оновлюємо ремонт (use() викликається повторно поки тримаєш ПКМ)
-        if (!state.getValue(ACTIVE)) {
-            ManiacGameManager.refreshRepair(sp, pos);
+        // Виживий працює над генератором. use() приходить повторно,
+        // поки тримається ПКМ — модуль сам розуміє, коли відпустили.
+        if (match.isSurvivor(sp.getUUID()) && !state.getValue(ACTIVE)) {
+            match.generatorModule().refreshRepair(sp, pos);
         }
         return InteractionResult.SUCCESS;
     }
 
-    /** Викликається з ManiacGameManager коли генератор активується — оновлює blockstate. */
+    /** Вмикає світло блоку. Викликається модулем генераторів при завершенні. */
     public static void activateInWorld(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.getBlock() instanceof GeneratorBlock) {

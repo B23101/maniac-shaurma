@@ -1,0 +1,153 @@
+package com.log_to_kot.maniacmod.client;
+
+import com.log_to_kot.maniacmod.core.phase.GamePhase;
+import com.log_to_kot.maniacmod.core.phase.PhaseRule;
+import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
+import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
+import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import net.minecraft.core.BlockPos;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Клієнтське дзеркало стану матчу.
+ *
+ * Усе, що HUD, клавіші й рендер мають знати про поточну гру, лежить
+ * тут — і оновлюється ТІЛЬКИ пакетами з сервера. Жоден клієнтський
+ * клас не рахує ігровий стан сам.
+ *
+ * v3-еквівалент: client/ManiacClientState — там було лише два поля
+ * (чи я маньяк + тип), тому клієнт виживого фактично нічого не знав
+ * про матч, і кожен оверлей тримав власні статичні прапорці, які
+ * ніхто не скидав при виході з гри (див. reset()).
+ */
+public final class ClientMatchState {
+
+    // ── Фаза ─────────────────────────────────────────────────────────────
+    private static GamePhase phase = GamePhase.LOBBY;
+
+    // ── Роль ─────────────────────────────────────────────────────────────
+    private static RoleSyncPacket.Role role = RoleSyncPacket.Role.SPECTATOR;
+    private static String archetypeId = "";
+
+    // ── Показники виживого ───────────────────────────────────────────────
+    private static int hp = 0;
+    private static int maxHp = 0;
+    private static float stamina = 1f;
+    private static SurvivorState survivorState = SurvivorState.HEALTHY;
+    private static float heartbeat = 0f;
+
+    // ── Кулдауни здібностей: id → тік клієнта, коли кулдаун завершиться ──
+    private static final Map<String, Long> abilityReadyAt = new java.util.HashMap<>();
+    private static final Map<String, Integer> abilityTotal = new java.util.HashMap<>();
+
+    // ── Підсвітка генераторів ────────────────────────────────────────────
+    private static List<GeneratorHighlightPacket.Entry> highlight = List.of();
+    private static long highlightUntilTick = 0;
+
+    private ClientMatchState() {}
+
+    // ── Запис (викликається лише з ClientPacketHandler) ──────────────────
+
+    static void setPhase(GamePhase next) {
+        phase = next;
+        // Вихід із матчу гасить усе, що показує HUD. У v3 це доводилось
+        // робити в кожному оверлеї окремо — і про половину забували.
+        if (next == GamePhase.LOBBY || next == GamePhase.RESET) reset();
+    }
+
+    static void setRole(RoleSyncPacket.Role newRole, String newArchetypeId) {
+        role = newRole;
+        archetypeId = newArchetypeId;
+    }
+
+    static void setVitals(int newHp, int newMaxHp, float newStamina,
+                          SurvivorState state, float newHeartbeat) {
+        hp = newHp;
+        maxHp = newMaxHp;
+        stamina = newStamina;
+        survivorState = state;
+        heartbeat = newHeartbeat;
+    }
+
+    static void setAbilityCooldown(String abilityId, int totalTicks, long currentTick) {
+        if (totalTicks <= 0) {
+            abilityReadyAt.remove(abilityId);
+            abilityTotal.remove(abilityId);
+            return;
+        }
+        abilityReadyAt.put(abilityId, currentTick + totalTicks);
+        abilityTotal.put(abilityId, totalTicks);
+    }
+
+    static void setHighlight(List<GeneratorHighlightPacket.Entry> entries,
+                             int durationTicks, long currentTick) {
+        highlight = List.copyOf(entries);
+        highlightUntilTick = currentTick + durationTicks;
+    }
+
+    /** Повне скидання. Викликається при виході з матчу і при диконекті. */
+    public static void reset() {
+        role = RoleSyncPacket.Role.SPECTATOR;
+        archetypeId = "";
+        hp = 0;
+        maxHp = 0;
+        stamina = 1f;
+        survivorState = SurvivorState.HEALTHY;
+        heartbeat = 0f;
+        abilityReadyAt.clear();
+        abilityTotal.clear();
+        highlight = List.of();
+        highlightUntilTick = 0;
+        com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
+    }
+
+    // ── Читання ──────────────────────────────────────────────────────────
+
+    public static GamePhase phase()            { return phase; }
+    public static boolean isGameplay()         { return phase.isGameplay(); }
+    public static boolean allows(PhaseRule r)  { return phase.allows(r); }
+
+    public static boolean isManiac()           { return role == RoleSyncPacket.Role.MANIAC; }
+    public static boolean isSurvivor()         { return role == RoleSyncPacket.Role.SURVIVOR; }
+    public static RoleSyncPacket.Role role()   { return role; }
+    public static String archetypeId()         { return archetypeId; }
+
+    public static int hp()                     { return hp; }
+    public static int maxHp()                  { return maxHp; }
+    public static float stamina()              { return stamina; }
+    public static SurvivorState survivorState() { return survivorState; }
+    public static float heartbeat()            { return heartbeat; }
+
+    /** Частка кулдауну, що лишилась: 1.0 щойно активовано, 0.0 готово. */
+    public static float abilityCooldownFraction(String abilityId, long currentTick) {
+        Long readyAt = abilityReadyAt.get(abilityId);
+        Integer total = abilityTotal.get(abilityId);
+        if (readyAt == null || total == null || total <= 0) return 0f;
+        long left = readyAt - currentTick;
+        if (left <= 0) return 0f;
+        return Math.min(1f, (float) left / total);
+    }
+
+    /** Генератори, які зараз підсвічені. Порожньо, якщо підсвітка згасла. */
+    public static List<GeneratorHighlightPacket.Entry> activeHighlight(long currentTick) {
+        return currentTick < highlightUntilTick ? highlight : List.of();
+    }
+
+    /** Колір підсвітки конкретного стану. Одне місце — щоб HUD і світ збігались. */
+    public static int highlightColor(GeneratorPoi.VisualState state) {
+        return switch (state) {
+            case IDLE        -> 0xFFFFFFFF; // білий
+            case IN_PROGRESS -> 0xFFFFD54F; // жовтий
+            case FAILED      -> 0xFFE53935; // червоний
+            case DONE        -> 0xFF43A047; // зелений
+        };
+    }
+
+    /** Позиція генератора зі списку підсвітки — зручність для рендера. */
+    public static BlockPos posOf(GeneratorHighlightPacket.Entry entry) {
+        return entry.pos();
+    }
+}
