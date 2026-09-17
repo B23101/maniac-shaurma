@@ -160,6 +160,33 @@ public final class MatchOrchestrator {
             } else if (phase == GamePhase.SCATTER) {
                 scatterApplied = applySpawnPlan(players);
                 scatterFailed = !scatterApplied;
+            } else if (phase == GamePhase.LOBBY) {
+                // БАГ (гравці отримували урон у лобі): вхід у LOBBY тут
+                // не робив НІЧОГО з гравцями, що вже були онлайн — тільки
+                // ServerHooks.onPlayerJoin викликав lib.lobbyModule()
+                // .sendToLobby(...), а це подія ВХОДУ на сервер, не подія
+                // "матч завершився/скинутий". Тому гравець, що пережив
+                // матч (стоп командою, victory/loss, чи просто був онлайн
+                // при /maniac stop чи /stopgame), лишався там, де застала
+                // фаза LOBBY: у ADVENTURE/SURVIVAL ігрового світу, без
+                // телепорту в лобі-точку і без скидання hp/інвентаря.
+                // DamageInterceptorRegistry сам по собі блокує лише
+                // ВАНІЛЬНИЙ шлях урону (LivingHurtEvent) — падіння з
+                // висоти, вогонь, потоплення це покриває, але воно НЕ
+                // телепортує гравця й не приводить його стан у порядок,
+                // тож будь-хто, хто в момент завершення матчу залишався
+                // серед мобів/пасток на активній карті гри, і надалі
+                // отримував "усе" (мобів, залишки пасток, провалювання
+                // у порожнечу карти) — усе те, чого немає у власному
+                // vanilla LivingHurtEvent і чого interceptor не бачить.
+                // Тепер той самий виклик, що робить ServerHooks.onPlayerJoin
+                // для гравця, що заходить під час LOBBY, виконується і
+                // тут — для ВСІХ, хто вже онлайн, щойно матч повертається
+                // у LOBBY (RESET → LOBBY, а також прямий стоп команди).
+                for (ServerPlayer player : players) {
+                    ManiacMod.lib().lobbyModule().sendToLobby(player);
+                    ManiacMod.lib().lobbyModule().hideNameTag(player);
+                }
             }
         }
     }

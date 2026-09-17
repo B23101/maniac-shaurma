@@ -140,6 +140,21 @@ public final class ManiacCommand {
                 .executes(ctx -> clearPoints(ctx.getSource()))));
 
         dispatcher.register(root);
+
+        // Аліаси /startgame і /stopgame — окремі корені дерева команд,
+        // ті самі callback-и, що /maniac start і /maniac stop. Додано
+        // на прохання: адмінам звичніше коротке /startgame, ніж повне
+        // /maniac start.
+        dispatcher.register(Commands.literal("startgame")
+            .requires(src -> src.hasPermission(2))
+            .executes(ctx -> start(ctx.getSource(), null))
+            .then(Commands.argument("maniac", EntityArgument.player())
+                .executes(ctx -> start(ctx.getSource(),
+                    EntityArgument.getPlayer(ctx, "maniac")))));
+
+        dispatcher.register(Commands.literal("stopgame")
+            .requires(src -> src.hasPermission(2))
+            .executes(ctx -> stop(ctx.getSource())));
     }
 
     // ── Матч ─────────────────────────────────────────────────────────────
