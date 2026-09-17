@@ -8,3 +8,13 @@ map:
 loot:
   pickupRangeBlocks: 2.0
   fallMaxTicks: 200
+lobby:
+  x: 0.0
+  y: 64.0
+  z: 0.0
+  yaw: 0.0
+survivorSpawns: []
+maniacSpawns: []
+itemPoints: []
+generatorPoints: []
+exitPoints: []

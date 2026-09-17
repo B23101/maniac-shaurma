@@ -64,6 +64,20 @@ public final class SpawnPlanner {
         public Map<UUID, SpawnPoint> survivorPoints()   { return Map.copyOf(survivorPoints); }
         public List<SpawnPoint> engagedItemPoints()     { return List.copyOf(engagedItemPoints); }
         public List<SpawnPoint> generatorPoints()       { return List.copyOf(generatorPoints); }
+
+        /**
+         * Порожній план — нікого не телепортувати й нічого не спавнити.
+         * Використовується лише в дебазі, коли карта не розмічена й
+         * будувати план нема з чого, а матч усе одно має стартувати.
+         */
+        public static SpawnPlan empty() {
+            return new SpawnPlan(null, Map.of(), List.of(), List.of());
+        }
+
+        /** Чи в плані немає жодної дії (дебаг без розмітки). */
+        public boolean isEmptyPlan() {
+            return maniacPoint == null && survivorPoints.isEmpty();
+        }
     }
 
     /** Кидається, коли карта розмічена так, що коректний план неможливий. */
@@ -127,6 +141,44 @@ public final class SpawnPlanner {
     }
 
     /**
+     * План БЕЗ маньяка (дебаг-режим «ти виживий» або гравець, якому ще
+     * не обрано архетип). Єдина відмінність від {@link #plan}: точки
+     * маньяка не обов'язкові — якщо їх немає, дистанція до маньяка просто
+     * не перевіряється, а "якорем" для вибору генераторів стає перша
+     * обрана точка виживих.
+     */
+    public SpawnPlan planSurvivorsOnly(List<SpawnPoint> allPoints, List<UUID> survivorIds) {
+        List<SpawnPoint> survivorPool = filter(allPoints, SpawnPointKind.SURVIVOR, null);
+        if (survivorPool.size() < survivorIds.size()) {
+            throw new SpawnPlanFailure(
+                "Точок для виживих " + survivorPool.size() + ", а гравців " + survivorIds.size()
+              + ". Одна точка не може вмістити двох — додай ще точок.");
+        }
+
+        List<SpawnPoint> maniacPoints = filter(allPoints, SpawnPointKind.MANIAC, null);
+        SpawnPoint anchor = maniacPoints.isEmpty()
+            ? null : maniacPoints.get(rng.nextInt(maniacPoints.size()));
+
+        double minToManiac = anchor == null ? 0.0 : ManiacConfigs.get(ConfigSchema.MIN_SURVIVOR_TO_MANIAC);
+        double minToSurvivor = ManiacConfigs.get(ConfigSchema.MIN_SURVIVOR_TO_PEER);
+        int maxPasses = ManiacConfigs.get(ConfigSchema.MAX_RELAXATION_PASSES);
+        double step = ManiacConfigs.get(ConfigSchema.RELAXATION_STEP);
+
+        for (int pass = 0; pass <= maxPasses; pass++) {
+            Map<UUID, SpawnPoint> assigned =
+                tryAssign(survivorPool, survivorIds, anchor, minToManiac, minToSurvivor);
+            if (assigned != null) {
+                return new SpawnPlan(anchor, assigned, pickItemPoints(allPoints),
+                    pickGeneratorPoints(allPoints, anchor, 1));
+            }
+            minToManiac *= step;
+            minToSurvivor *= step;
+        }
+        throw new SpawnPlanFailure(
+            "Не вдалося рознести виживих навіть із послабленими дистанціями.");
+    }
+
+    /**
      * Скільки точок генераторів реально заспавнити цього раунду.
      *
      * generatorsRequired — скільки треба ПОЛАГОДИТИ, це число не
@@ -157,7 +209,11 @@ public final class SpawnPlanner {
             SpawnPoint best = null;
             double bestDistance = -1;
             for (SpawnPoint candidate : pool) {
-                double nearest = candidate.horizontalDistanceTo(maniacPoint);
+                // Точки маньяка може не бути взагалі (дебаг без маньяка) —
+                // тоді розносимо генератори лише відносно вже обраних.
+                double nearest = maniacPoint == null
+                    ? Double.MAX_VALUE
+                    : candidate.horizontalDistanceTo(maniacPoint);
                 for (SpawnPoint chosen : selected) {
                     nearest = Math.min(nearest, candidate.horizontalDistanceTo(chosen));
                 }
@@ -191,7 +247,10 @@ public final class SpawnPlanner {
             for (SpawnPoint candidate : shuffled) {
                 // 1 точка = 1 гравець. Це правило не послаблюється ніколи.
                 if (taken.contains(candidate)) continue;
-                if (candidate.horizontalDistanceTo(maniacPoint) < minToManiac) continue;
+                // maniacPoint == null — дебаг без маньяка: обмеження
+                // "далі від маньяка" просто немає, кого враховувати.
+                if (maniacPoint != null
+                        && candidate.horizontalDistanceTo(maniacPoint) < minToManiac) continue;
 
                 boolean tooCloseToPeer = false;
                 for (SpawnPoint other : taken) {

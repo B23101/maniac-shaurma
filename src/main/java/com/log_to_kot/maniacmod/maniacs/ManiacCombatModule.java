@@ -98,8 +98,19 @@ public final class ManiacCombatModule implements PhaseListener {
         double range = archetype.attackRangeBlocks();
         if (attacker.distanceTo(victim) > range) return false;
 
-        boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
-        if (downed) match.survivors().onSurvivorDowned(victim);
+        // Добивання: удар по вже непритомному не знімає хп заново (він
+        // і так на нулі) — це остаточне вибуття, а не ще один "downed".
+        if (match.survivorStateOf(victim.getUUID()) == com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS) {
+            match.survivors().onSurvivorLeftMatch(victim, com.log_to_kot.maniacmod.survivors.SurvivorState.ELIMINATED);
+            match.markEliminated(victim);
+            // Подія важлива для табу й фіналу — не чекаємо наступного
+            // throttled roster-тіку з SurvivorModule.onPhaseTick.
+            com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(
+                attacker.getServer().getPlayerList().getPlayers());
+        } else {
+            boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
+            if (downed) match.survivors().onSurvivorDowned(victim);
+        }
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
     }

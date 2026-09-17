@@ -3,6 +3,7 @@ package com.log_to_kot.maniacmod.entity;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
+import dev.shaurmalib.forge.inventory.InventorySlotAllocation;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -142,8 +143,16 @@ public class GroundItemEntity extends Entity {
     // ── Підбирання ───────────────────────────────────────────────────────
 
     /**
-     * Підбирання. Ліміт слотів інвентаря перевіряє модуль виживих —
-     * сутність не має знати правил ролей.
+     * Підбирання. Ліміт слотів інвентаря перевіряє бібліотека
+     * ({@link InventorySlotAllocation}) — сутність не має знати правил
+     * ролей.
+     *
+     * <p><b>Виправлення:</b> раніше тут було {@code player.getInventory().add(...)},
+     * а ванільний {@code add} кладе стек у БУДЬ-ЯКИЙ вільний слот, тому
+     * навіть з нулем дозволених слотів (маньяк) або при повних 4 слотах
+     * виживого предмет усе одно "підбирався" — просто зникав у
+     * недоступному слоті. Тепер стек кладеться лише в дозволені слоти, і
+     * якщо місця немає — предмет лишається лежати.</p>
      */
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
@@ -157,7 +166,15 @@ public class GroundItemEntity extends Entity {
             discard();
             return InteractionResult.FAIL;
         }
-        if (!player.getInventory().add(new ItemStack(item))) {
+
+        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
+                && InventorySlotAllocation.isEnabled()) {
+            ItemStack remaining = InventorySlotAllocation.addToAllowedSlots(
+                serverPlayer, new ItemStack(item));
+            if (!remaining.isEmpty()) {
+                return InteractionResult.FAIL; // немає місця в дозволених слотах
+            }
+        } else if (!player.getInventory().add(new ItemStack(item))) {
             return InteractionResult.FAIL; // інвентар повний — предмет лишається лежати
         }
         discard();

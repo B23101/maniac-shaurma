@@ -1,0 +1,23 @@
+# Час доби та погода.
+
+# Час доби Minecraft у тіках (0..23999). Утримується в КОЖНІЙ фазі —
+# і в лобі, і під час гри (напр. 18000 — ніч, 6000 — день).
+world:
+  gameTimeTicks: 18000
+  maintainGameTime: true
+
+  # ── Погода (лише ігрові фази) ───────────────────────────────────────
+  # У лобі дощу й грози не існує взагалі — там працює лише час вище;
+  # це правило режиму, а не налаштування.
+  #
+  # Події запускаються не частіше, ніж через випадковий інтервал.
+  weatherEventsEnabled: true
+  weatherEventChance: 0.2
+  weatherTargetShare: 0.2
+  weatherMinIntervalSeconds: 300
+  weatherMaxIntervalSeconds: 900
+
+  # 120/180/300 секунд відповідають 2/3/5 хвилинам.
+  weatherMinDurationSeconds: 120
+  weatherMaxDurationSeconds: 300
+  weatherThunderChance: 0.35

@@ -34,25 +34,101 @@ public final class ConfigSchema {
 
     private ConfigSchema() {}
 
-    /** Ім'я файлу в теці namespace. */
+    /** Ім'я ГОЛОВНОГО файлу конфігу в теці namespace. */
     public static final String FILE_NAME = "maniac.yml";
 
     /** Шлях до дефолту всередині jar (для поблочного лікування). */
     public static final String DEFAULT_RESOURCE = "/config/maniacmod/" + FILE_NAME;
 
-    // ── match ────────────────────────────────────────────────────────────
+    // ── game (головний блок) ─────────────────────────────────────────
 
     public static final ConfigKey<Integer> MIN_PLAYERS =
-        ConfigKey.integer("match", "minPlayers", 2, 2, 32);
+        ConfigKey.integer("game", "minPlayers", 2, 2, 32);
 
-    public static final ConfigKey<Integer> CINEMATIC_SECONDS =
-        ConfigKey.integer("match", "cinematicSeconds", 20, 0, 300);
+    // Тривалості фази CINEMATIC у конфігу НЕМАЄ навмисно: кінематики ще
+    // не існує, тому фаза пропускається ПРОПУСКОМ У КОДІ
+    // (MatchOrchestrator: один тік на підготовку плану і одразу SCATTER).
+    // Коли кінематика з'явиться — сюди повернеться ключ із тривалістю,
+    // а в коді — очікування замість пропуску.
+
+    /**
+     * Дебаг-режим для одиночних перевірок: матч можна почати з одним
+     * гравцем, і він не завершується, коли з будь-якого боку лишається 0
+     * гравців.
+     */
+    public static final ConfigKey<Boolean> DEBUG_MODE =
+        ConfigKey.bool("game", "debugMode", false);
+
+    /**
+     * Ким буде єдиний гравець у дебазі.
+     *
+     * <ul>
+     *   <li>{@code AUTO} — звичайний вибір маньяка (реєстр/конфіг);</li>
+     *   <li>{@code MANIAC} — ти маньяк, виживих немає взагалі;</li>
+     *   <li>{@code SURVIVOR} — ти виживий, маньяка немає взагалі (треба
+     *       для перевірки слотів, стаміни, генераторів, луту — усього,
+     *       що не залежить від маньяка).</li>
+     * </ul>
+     */
+    public static final ConfigKey<String> DEBUG_ROLE =
+        ConfigKey.option("game", "debugRole", "MANIAC", List.of("AUTO", "MANIAC", "SURVIVOR"));
 
     public static final ConfigKey<Integer> ROLE_REVEAL_SECONDS =
-        ConfigKey.integer("match", "roleRevealSeconds", 5, 1, 60);
+        ConfigKey.integer("game", "roleRevealSeconds", 5, 1, 60);
 
     public static final ConfigKey<Integer> ENDING_SECONDS =
-        ConfigKey.integer("match", "endingSeconds", 10, 1, 120);
+        ConfigKey.integer("game", "endingSeconds", 10, 1, 120);
+
+    // ── world ─────────────────────────────────────────────────────────────
+
+    /** Час доби у тіках Minecraft, який утримується під час активної гри. */
+    public static final ConfigKey<Integer> GAME_TIME_TICKS =
+        ConfigKey.integer("world", "gameTimeTicks", 18000, 0, 23999);
+
+    /**
+     * Чи утримувати час доби {@link #GAME_TIME_TICKS}.
+     *
+     * <p>Діє в КОЖНІЙ фазі (і лобі, і гра): час доби — це декорація
+     * режиму, а не предмет гри, тому він не має "плисти" між матчами.</p>
+     */
+    public static final ConfigKey<Boolean> MAINTAIN_GAME_TIME =
+        ConfigKey.bool("world", "maintainGameTime", true);
+
+    // ПОГОДИ У ЛОБІ НЕМАЄ ЯК НАЛАШТУВАННЯ: у всіх технічних фазах дощ/гроза
+    // прибираються примусово (WorldEnvironmentModule), бо лобі — це
+    // очікування, а не гра. Налаштування, яке можна випадково вимкнути й
+    // отримати дощ у лобі, тут шкідливе; погодні ключі нижче стосуються
+    // ЛИШЕ ігрових фаз.
+
+    public static final ConfigKey<Boolean> WEATHER_EVENTS_ENABLED =
+        ConfigKey.bool("world", "weatherEventsEnabled", true);
+
+    /**
+     * Шанс запуску події після чергового випадкового інтервалу.
+     * WEATHER_TARGET_SHARE додатково не дає погоді перевищити задану
+     * частку активної гри.
+     */
+    public static final ConfigKey<Double> WEATHER_EVENT_CHANCE =
+        ConfigKey.decimal("world", "weatherEventChance", 0.20, 0.0, 1.0);
+
+    public static final ConfigKey<Double> WEATHER_TARGET_SHARE =
+        ConfigKey.decimal("world", "weatherTargetShare", 0.20, 0.0, 1.0);
+
+    public static final ConfigKey<Integer> WEATHER_MIN_INTERVAL_SECONDS =
+        ConfigKey.integer("world", "weatherMinIntervalSeconds", 300, 0, 86400);
+
+    public static final ConfigKey<Integer> WEATHER_MAX_INTERVAL_SECONDS =
+        ConfigKey.integer("world", "weatherMaxIntervalSeconds", 900, 0, 86400);
+
+    /** Діапазон тривалості: 120/180/300 секунд дає готові 2/3/5 хвилин. */
+    public static final ConfigKey<Integer> WEATHER_MIN_DURATION_SECONDS =
+        ConfigKey.integer("world", "weatherMinDurationSeconds", 120, 1, 86400);
+
+    public static final ConfigKey<Integer> WEATHER_MAX_DURATION_SECONDS =
+        ConfigKey.integer("world", "weatherMaxDurationSeconds", 300, 1, 86400);
+
+    public static final ConfigKey<Double> WEATHER_THUNDER_CHANCE =
+        ConfigKey.decimal("world", "weatherThunderChance", 0.35, 0.0, 1.0);
 
     // ── map ──────────────────────────────────────────────────────────────
 
@@ -215,11 +291,45 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> GROUND_ITEM_FALL_MAX_TICKS =
         ConfigKey.integer("loot", "fallMaxTicks", 200, 20, 1200);
 
+    // ── inventory ────────────────────────────────────────────────────────
+
+    /**
+     * Чи звільняти гравців у CREATIVE/SPECTATOR від обмежень слотів і
+     * приховування хотбару.
+     *
+     * <p>{@code true} (дефолт) — креатив і спостереження виводяться за межі
+     * правил. У маніяку креатив — інструмент адміна/картобудівника, а не
+     * ігровий режим: гравці ходять в ADVENTURE, тож обмеження на них і так
+     * діють, а адмін у креативі не мусить боротися з 0/4 слотами.</p>
+     *
+     * <p>{@code false} — правила ДІЮТЬ для всіх режимів, включно з
+     * креативом: адмін бачить ті самі 0/4 слоти, що й гравець. Потрібно,
+     * коли треба перевірити розкладку клавіш і хотбар з адмінського акаунта
+     * або коли креатив використовується у самій грі.</p>
+     */
+    public static final ConfigKey<Boolean> INVENTORY_BYPASS_CREATIVE =
+        ConfigKey.bool("inventory", "bypassCreative", true);
+
     // ── Реєстр блоків ────────────────────────────────────────────────────
 
-    public static final ConfigBlock MATCH = ConfigBlock.settings("match", "start_rules.yml",
-        "Тривалості технічних фаз і мінімум гравців.",
-        MIN_PLAYERS, CINEMATIC_SECONDS, ROLE_REVEAL_SECONDS, ENDING_SECONDS);
+    /**
+     * Головний блок — тривалості технічних фаз і мінімум гравців.
+     * Живе у ГОЛОВНОМУ файлі {@code maniac.yml} (решта блоків — другорядні,
+     * кожен у своєму файлі: survivors.yml, maniacs.yml, points.yml...).
+     */
+    public static final ConfigBlock GAME = ConfigBlock.settings("game", FILE_NAME,
+        "Головні правила матчу: мінімум гравців, тривалості технічних фаз "
+        + "і дебаг-режим для одиночних перевірок.",
+        MIN_PLAYERS, ROLE_REVEAL_SECONDS, ENDING_SECONDS, DEBUG_MODE, DEBUG_ROLE);
+
+    public static final ConfigBlock WORLD = ConfigBlock.settings("world", "world.yml",
+        "Час доби (в усіх фазах) і керовані погодні події під час гри. "
+        + "У лобі погоди немає завжди.",
+        GAME_TIME_TICKS, MAINTAIN_GAME_TIME,
+        WEATHER_EVENTS_ENABLED, WEATHER_EVENT_CHANCE, WEATHER_TARGET_SHARE,
+        WEATHER_MIN_INTERVAL_SECONDS, WEATHER_MAX_INTERVAL_SECONDS,
+        WEATHER_MIN_DURATION_SECONDS, WEATHER_MAX_DURATION_SECONDS,
+        WEATHER_THUNDER_CHANCE);
 
     public static final ConfigBlock MAP = ConfigBlock.settings("map", "points.yml",
         "Розмір карти й правила розкидання гравців.",
@@ -255,6 +365,10 @@ public final class ConfigSchema {
         "Предмети, що лежать на карті.",
         GROUND_ITEM_PICKUP_RANGE, GROUND_ITEM_FALL_MAX_TICKS);
 
+    public static final ConfigBlock INVENTORY = ConfigBlock.settings("inventory", "inventory.yml",
+        "Скільки слотів хотбару бачить кожна роль і чи діють правила в креативі.",
+        INVENTORY_BYPASS_CREATIVE);
+
     public static final ConfigBlock SPAWN_POINTS = ConfigBlock.data("spawn_points",
         "Розмітка точок. Наповнюється командою /maniac point add. "
         + "Вміст ніколи не відновлюється з дефолту — видалена точка лишається видаленою.");
@@ -265,7 +379,7 @@ public final class ConfigSchema {
 
     /** Порядок = порядок блоків у згенерованому файлі. */
     public static final List<ConfigBlock> BLOCKS = List.of(
-        MATCH, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT);
+        GAME, WORLD, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT, INVENTORY);
 
     public static ConfigBlock blockById(String id) {
         for (ConfigBlock block : BLOCKS) {

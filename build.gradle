@@ -25,6 +25,14 @@ tasks.withType(Javadoc).configureEach {
 }
 
 repositories {
+    // Локальна перевірка змін у shaurma-lib без публікації:
+    //   (у shaurma-lib)  ./gradlew publishToMavenLocal
+    //   (тут)            ./gradlew compileJava -PuseLocalLib=true
+    // Без прапорця поведінка не змінюється — береться як і раніше
+    // опублікований артефакт із GitHub Packages.
+    if (findProperty('useLocalLib') == 'true') {
+        mavenLocal()
+    }
     mavenCentral()
     maven { url = 'https://maven.minecraftforge.net/' }
     maven { url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/' }
@@ -76,7 +84,9 @@ dependencies {
     minecraft 'net.minecraftforge:forge:1.20.1-47.2.0'
     implementation fg.deobf('software.bernie.geckolib:geckolib-forge-1.20.1:4.4.4')
     implementation fg.deobf('dev.kosmx.player-anim:player-animation-lib-forge:1.0.2-rc1+1.20')
-    implementation 'dev.shaurmalib:shaurma-lib-forge:0.1.0-SNAPSHOT'
+    jarJar(implementation('dev.shaurmalib:shaurma-lib-forge:0.1.0-SNAPSHOT')) {
+        jarJar.ranged(it, '[0.1.0,0.2.0)')
+    }
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
 

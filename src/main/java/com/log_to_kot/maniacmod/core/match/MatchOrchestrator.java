@@ -1,5 +1,6 @@
 package com.log_to_kot.maniacmod.core.match;
 
+import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
@@ -11,9 +12,12 @@ import com.log_to_kot.maniacmod.map.GeneratorModule;
 import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.maniacs.ManiacCombatModule;
+import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
 import com.log_to_kot.maniacmod.spawn.SpawnPlanner;
 import com.log_to_kot.maniacmod.spawn.SpawnPointKind;
 import com.log_to_kot.maniacmod.survivors.SurvivorRegistry;
+import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import com.log_to_kot.maniacmod.world.WorldEnvironmentModule;
 import dev.shaurmalib.common.lobby.LobbySpawnPoint;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.MinecraftServer;
@@ -93,6 +97,7 @@ public final class MatchOrchestrator {
      * одному з предметних пакетів.
      */
     private final InventoryAllocationModule inventoryAllocation = new InventoryAllocationModule(() -> this);
+    private final WorldEnvironmentModule worldEnvironment = new WorldEnvironmentModule(() -> this);
 
     public MatchOrchestrator() {
         Phases.bind(phases);
@@ -106,6 +111,7 @@ public final class MatchOrchestrator {
         phases.register(generators);
         phases.register(combat);
         phases.register(survivors);
+        phases.register(worldEnvironment);
     }
 
     /** Модуль генераторів — для GeneratorBlock і ServerPacketHandler. */
@@ -135,6 +141,10 @@ public final class MatchOrchestrator {
         @Override
         public void onPhaseEnter(GamePhase phase, java.util.List<ServerPlayer> players) {
             com.log_to_kot.maniacmod.server.ServerHooks.broadcastPhase(players, phase);
+            // Ролі й стани щойно могли змінитись цілком (ROLE_REVEAL,
+            // RESET) — таб має побачити новий склад одразу, не чекаючи
+            // наступного throttled roster-тіку з SurvivorModule.
+            com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(players);
         }
 
     }
@@ -278,6 +288,40 @@ public final class MatchOrchestrator {
         return context.escapedIds();
     }
 
+    /** Хто вибув остаточно (маньяк добив непритомного) цього матчу. */
+    public List<UUID> eliminatedSurvivorIds() {
+        return context.eliminatedIds();
+    }
+
+    /** Гравець дійшов до зони втечі здоровим — фіксує втечу. */
+    public void markEscaped(ServerPlayer player) {
+        context.markEscaped(player.getUUID(), player.getGameProfile().getName());
+    }
+
+    /** Маньяк добив непритомного — гравець вибуває з матчу остаточно. */
+    public void markEliminated(ServerPlayer player) {
+        context.markEliminated(player.getUUID(), player.getGameProfile().getName());
+    }
+
+    /**
+     * Усі, хто вже пішов з активних виживих цього матчу — втекли чи
+     * загинули (для табу й підсумкового екрана). UUID, які повернути з
+     * {@link #survivorIds()}, тут не дублюються.
+     */
+    public List<UUID> terminalSurvivorIds() {
+        return context.terminalIds();
+    }
+
+    /** Ім'я гравця, що вже вибув (втік/загинув) цього матчу. null, якщо такого немає. */
+    public String terminalDisplayNameOf(UUID playerId) {
+        return context.terminalDisplayNameOf(playerId);
+    }
+
+    /** ESCAPED або ELIMINATED для гравця, який уже не серед активних виживих. null, якщо такого немає. */
+    public SurvivorState terminalStateOf(UUID playerId) {
+        return context.terminalStateOf(playerId);
+    }
+
     /** Досягнення матчу (POWER_RESTORED, EXIT_OPENED...) — лише читання. */
     public java.util.Set<MatchObjectives.Objective> completedObjectives() {
         return context.objectives().completed();
@@ -302,6 +346,11 @@ public final class MatchOrchestrator {
         return context.map().generators();
     }
 
+    /** Усі зони втечі карти — лише для читання (перевірка, чи виживий утік). */
+    public List<com.log_to_kot.maniacmod.map.zones.EscapeZoneArchetype> escapeZones() {
+        return context.map().escapeZones();
+    }
+
     /** Розмітка точок цього матчу — лише для читання (команди, план спавну). */
     public List<com.log_to_kot.maniacmod.spawn.SpawnPoint> spawnPoints() {
         return context.spawnPoints();
@@ -318,10 +367,68 @@ public final class MatchOrchestrator {
         context.map().clear();
     }
 
+    /**
+     * Зведення по ВСІХ гравцях матчу — джерело даних
+     * {@link com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket}
+     * для tab-екрана. Живих виживих і маньяка бере з поточних мап
+     * онлайн-гравців; тих, хто вже втік/загинув, — з
+     * {@code terminalIds()} (їх може вже не бути серед {@code players},
+     * якщо вони вийшли з гри — таб усе одно повинен показати підсумок).
+     *
+     * Один метод, а не розсипані по net/ виклики фасаду: сама структура
+     * ростера ("як показати роль/hp/стан у одному записі") — знання
+     * про матч, тому належить сюди, а не в пакет чи в ServerHooks.
+     */
+    public List<com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry> rosterEntries(
+            List<ServerPlayer> onlinePlayers) {
+        var entries = new ArrayList<com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry>();
+
+        // Гравці, що вже вибули (втекли/загинули), обробляються ОКРЕМИМ
+        // циклом нижче через terminalSurvivorIds() — навіть якщо вони й
+        // досі онлайн (типовий випадок: добитого гравця не кикає з
+        // сервера). Без цього skip вибулий онлайн-гравець потрапив би в
+        // ростер ДВІЧІ: тут як SPECTATOR (бо isManiac/isSurvivor уже
+        // false для нього) і ще раз нижче як SURVIVOR з термінальним
+        // станом.
+        var terminal = java.util.Set.copyOf(terminalSurvivorIds());
+
+        for (ServerPlayer player : onlinePlayers) {
+            UUID id = player.getUUID();
+            if (terminal.contains(id)) continue;
+            String name = player.getGameProfile().getName();
+
+            if (isManiac(id)) {
+                String archetypeId = maniacArchetype() == null ? "" : maniacArchetype().id();
+                entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
+                    id, name, RoleSyncPacket.Role.MANIAC, archetypeId, SurvivorState.HEALTHY, 0, 0));
+            } else if (isSurvivor(id)) {
+                entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
+                    id, name, RoleSyncPacket.Role.SURVIVOR, "",
+                    survivorStateOf(id), hpOf(id), maxHpOf(id)));
+            } else {
+                entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
+                    id, name, RoleSyncPacket.Role.SPECTATOR, "", SurvivorState.HEALTHY, 0, 0));
+            }
+        }
+
+        // Хто вже вибув (втік/загинув), онлайн чи ні — players() міг би
+        // і не повернути гравця, що вийшов із сервера, але таб мусить
+        // показати підсумок до самого RESET.
+        for (UUID id : terminal) {
+            String name = terminalDisplayNameOf(id);
+            if (name == null) continue;
+            entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
+                id, name, RoleSyncPacket.Role.SURVIVOR, "", terminalStateOf(id), 0, 0));
+        }
+
+        return entries;
+    }
+
     /** Рядок статусу для /maniac status — єдине місце, що читає кілька полів разом. */
     public String debugStatusLine() {
         return "виживих: " + context.aliveSurvivorCount()
             + " | втекло: " + context.escapedIds().size()
+            + " | вибуло: " + context.eliminatedIds().size()
             + " | точок: " + context.spawnPoints().size()
             + " | досягнення: " + context.objectives().completed();
     }
@@ -334,6 +441,63 @@ public final class MatchOrchestrator {
     /** Сервер потрібен для аварійного очищення при RESET і shutdown. */
     public void attachServer(MinecraftServer server) {
         this.server = server;
+    }
+
+    /** Server access for world-level phase modules. */
+    public MinecraftServer server() {
+        return server;
+    }
+
+    // ── Дебаг: morph/unmorph у лобі ─────────────────────────────────────
+
+    /**
+     * Перетворити гравця на маньяка в лобі (дебаг-тестування).
+     * Надсилає RoleSyncPacket і застосовує 0 слотів хотбару.
+     */
+    public void morphManiac(ServerPlayer player, ManiacArchetype archetype) {
+        if (!phases.is(GamePhase.LOBBY)) return;
+        context.assignManiac(player.getUUID(), archetype);
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new RoleSyncPacket(RoleSyncPacket.Role.MANIAC, archetype == null ? "" : archetype.id()));
+        inventoryAllocation().applyOnJoin(player);
+    }
+
+    /**
+     * Перетворити гравця на виживого в лобі (дебаг-тестування).
+     * Надсилає RoleSyncPacket і встановлює слоти виживого.
+     */
+    public void morphSurvivor(ServerPlayer player) {
+        if (!phases.is(GamePhase.LOBBY)) return;
+        com.log_to_kot.maniacmod.survivors.SurvivorRole role =
+            com.log_to_kot.maniacmod.survivors.SurvivorRegistry.defaultRole();
+        context.addSurvivor(player.getUUID(), role);
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR, ""));
+        inventoryAllocation().applyOnJoin(player);
+        // Надіслати віталс, щоб HUD з'явився одразу
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket(
+                role.maxHp(), role.maxHp(), 1f,
+                com.log_to_kot.maniacmod.survivors.SurvivorState.HEALTHY, 0f));
+    }
+
+    /**
+     * Зняти роль і повернути гравця в SPECTATOR (дебаг-тестування).
+     * Очищає role на сервері й клієнті, скидає слоти до 0.
+     */
+    public void unmorph(ServerPlayer player) {
+        if (!phases.is(GamePhase.LOBBY)) return;
+        context.clearRole(player.getUUID());
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, ""));
+        inventoryAllocation().applyOnJoin(player);
+    }
+
+    /** Гравці в режимі Spectator не беруть участі в наступному матчі. */
+    public List<ServerPlayer> eligiblePlayers(List<ServerPlayer> onlinePlayers) {
+        return onlinePlayers.stream()
+            .filter(player -> !player.isSpectator())
+            .toList();
     }
 
     /**
@@ -388,19 +552,29 @@ public final class MatchOrchestrator {
     public boolean start(List<ServerPlayer> players, ServerPlayer maniacPlayer,
                          ManiacArchetype maniacArchetype) {
         if (!phases.is(GamePhase.LOBBY)) return false;
-        if (players.size() < ManiacConfigs.get(ConfigSchema.MIN_PLAYERS)) return false;
+        List<ServerPlayer> participants = eligiblePlayers(players);
+
+        // Дебаг: один гравець — це вже повноцінний матч (див. DebugMode).
+        int minPlayers = DebugMode.enabled() ? 1 : ManiacConfigs.get(ConfigSchema.MIN_PLAYERS);
+        if (participants.size() < minPlayers) return false;
+        // maniacPlayer == null дозволено: це дебаг-режим "ти виживий" —
+        // матч іде без маньяка взагалі (треба для перевірки слотів,
+        // стаміни, генераторів і луту).
+        if (maniacPlayer != null && !participants.contains(maniacPlayer)) return false;
 
         List<com.log_to_kot.maniacmod.spawn.SpawnPoint> configuredPoints =
             List.copyOf(context.spawnPoints());
         releaseSpawnPoints(configuredPoints);
 
         MatchContext fresh = new MatchContext();
-        fresh.assignManiac(maniacPlayer.getUUID(), maniacArchetype);
+        if (maniacPlayer != null) {
+            fresh.assignManiac(maniacPlayer.getUUID(), maniacArchetype);
+        }
         for (var point : configuredPoints) fresh.addSpawnPoint(point);
 
         List<UUID> survivorIds = new ArrayList<>();
-        for (ServerPlayer p : players) {
-            if (p.getUUID().equals(maniacPlayer.getUUID())) continue;
+        for (ServerPlayer p : participants) {
+            if (maniacPlayer != null && p.getUUID().equals(maniacPlayer.getUUID())) continue;
             fresh.addSurvivor(p.getUUID(), SurvivorRegistry.defaultRole());
             survivorIds.add(p.getUUID());
         }
@@ -413,7 +587,8 @@ public final class MatchOrchestrator {
         int survivorPoints = SpawnPlanner
             .countByKind(fresh.spawnPoints())
             .getOrDefault(SpawnPointKind.SURVIVOR, 0);
-        if (!fresh.spawnPoints().isEmpty() && survivorPoints < survivorIds.size()) {
+        if (!DebugMode.enabled()
+            && !fresh.spawnPoints().isEmpty() && survivorPoints < survivorIds.size()) {
             return false;
         }
 
@@ -476,6 +651,10 @@ public final class MatchOrchestrator {
      */
     private void checkPhaseExitConditions(List<ServerPlayer> players) {
         if (phases.is(GamePhase.CINEMATIC)) {
+            // Кінематики ще немає — фаза ПРОПУСКАЄТЬСЯ в коді: тут лишається
+            // тільки підготовка плану розкидання, і зразу SCATTER. Коли
+            // кінематика з'явиться, тут буде `ticksInPhase() >= <тривалість>`,
+            // а тривалість повернеться до ConfigSchema (див. коментар там).
             if (!plannerReady) {
                 try {
                     prepareSpawnPlan();
@@ -484,8 +663,7 @@ public final class MatchOrchestrator {
                     return;
                 }
             }
-            if (plannerReady
-                && phases.ticksInPhase() >= cinematicTicks()) {
+            if (plannerReady) {
                 advanceTo(GamePhase.SCATTER, players);
             }
             return;
@@ -493,7 +671,13 @@ public final class MatchOrchestrator {
 
         if (phases.is(GamePhase.SCATTER)) {
             if (scatterFailed) {
-                reset(players);
+                if (DebugMode.enabled()) {
+                    // Дебаг: розкидання не вдалось (немає карти/точок) — не
+                    // скидаємо матч, ідемо далі й дивимось механіки.
+                    advanceTo(GamePhase.ROLE_REVEAL, players);
+                } else {
+                    reset(players);
+                }
                 return;
             }
             if (scatterApplied) advanceTo(GamePhase.ROLE_REVEAL, players);
@@ -514,7 +698,9 @@ public final class MatchOrchestrator {
 
         if (!phases.isGameplay()) return;
 
-        if (noSurvivorsLeft()) {
+        // Дебаг: 0 виживих (або 0 маньяків) НЕ завершує матч — інакше
+        // одиночна перевірка за маньяка кидала б у ENDING на першому ж тіку.
+        if (!DebugMode.enabled() && noSurvivorsLeft()) {
             advanceTo(GamePhase.ENDING, players);
             return;
         }
@@ -554,10 +740,14 @@ public final class MatchOrchestrator {
         return context.aliveSurvivorCount() == 0;
     }
 
-    private int cinematicTicks() {
-        return ManiacConfigs.get(ConfigSchema.CINEMATIC_SECONDS) * 20;
-    }
-
+    /**
+     * Тривалість CINEMATIC. {@code 0} (дефолт) — фазу пропущено: вона
+     * живе рівно один тік, за який {@link MatchStartCoordinator} встигає
+     * підготувати план, і одразу йде SCATTER. Так матч стартує моментально
+     * з повним розподілом (гравці + генератори + точки луту), поки самої
+     * кінематики немає; коли з'явиться — достатньо підняти
+     * {@code cinematicSeconds} у maniac.yml, код міняти не треба.
+     */
     private int roleRevealTicks() {
         return ManiacConfigs.get(ConfigSchema.ROLE_REVEAL_SECONDS) * 20;
     }
@@ -573,31 +763,57 @@ public final class MatchOrchestrator {
      */
     private void prepareSpawnPlan() {
         if (plannerReady) return;
+        try {
+            pendingSpawnPlan = buildSpawnPlan();
+        } catch (SpawnPlanner.SpawnPlanFailure failure) {
+            if (!DebugMode.enabled()) throw failure;
+            // Дебаг: карти може ще не бути взагалі. Матч усе одно стартує —
+            // просто без телепорту й без генераторів (порожній план).
+            ManiacMod.LOGGER.warn("[debug] план розкидання не побудовано: {} — матч іде без нього (debugMode=true)",
+                failure.getMessage());
+            pendingSpawnPlan = SpawnPlanner.SpawnPlan.empty();
+        }
+        plannerReady = true;
+    }
 
+    /**
+     * План розкидання для поточного складу матчу.
+     *
+     * <p>Три випадки: повний матч (є маньяк з архетипом), дебаг "ти
+     * виживий" (маньяка немає), і матч, у якому архетип маньяка ще не
+     * обрано (MENU) — в останньому точок його архетипу фізично не існує,
+     * тому беремо план без маньяка, а не падаємо з NPE на {@code .id()}.</p>
+     */
+    private SpawnPlanner.SpawnPlan buildSpawnPlan() {
+        ManiacArchetype archetype = context.maniacArchetype();
+        if (context.maniacUUID() == null || archetype == null) {
+            return spawnPlanner.planSurvivorsOnly(context.spawnPoints(), context.survivorIds());
+        }
         // numManiacs = 1: зараз матч підтримує рівно одного маньяка
         // (context.maniacUUID() — скаляр). Коли з'явиться підтримка
         // двох маньяків одночасно, тут достатньо підставити реальну
         // кількість — формула бонусних генераторів у SpawnPlanner уже
         // готова, змінювати саму логіку розкидання не треба.
-        pendingSpawnPlan = spawnPlanner.plan(
-            context.spawnPoints(),
-            context.maniacArchetype().id(),
-            context.survivorIds(),
-            1);
-        plannerReady = true;
+        return spawnPlanner.plan(
+            context.spawnPoints(), archetype.id(), context.survivorIds(), 1);
     }
 
     private boolean applySpawnPlan(List<ServerPlayer> players) {
         if (pendingSpawnPlan == null) return false;
 
-        ServerPlayer maniac = findPlayer(players, context.maniacUUID());
-        if (maniac == null) return false;
+        // Маньяка може не бути взагалі (дебаг "ти виживий") — тоді просто
+        // нікого не телепортуємо як маньяка, і це не помилка плану.
+        ServerPlayer maniac = context.maniacUUID() == null
+            ? null : findPlayer(players, context.maniacUUID());
+        if (context.maniacUUID() != null && maniac == null) return false;
         for (UUID survivorId : pendingSpawnPlan.survivorPoints().keySet()) {
             if (findPlayer(players, survivorId) == null) return false;
         }
 
-        teleportToSpawn(maniac, pendingSpawnPlan.maniacPoint());
-        context.rememberSpawn(maniac.getUUID(), pendingSpawnPlan.maniacPoint());
+        if (maniac != null && pendingSpawnPlan.maniacPoint() != null) {
+            teleportToSpawn(maniac, pendingSpawnPlan.maniacPoint());
+            context.rememberSpawn(maniac.getUUID(), pendingSpawnPlan.maniacPoint());
+        }
 
         for (var entry : pendingSpawnPlan.survivorPoints().entrySet()) {
             ServerPlayer survivor = findPlayer(players, entry.getKey());
@@ -644,7 +860,9 @@ public final class MatchOrchestrator {
     public void onPlayerLeft(ServerPlayer player) {
         List<ServerPlayer> online = player.getServer().getPlayerList().getPlayers();
         if (context.isManiac(player.getUUID())) {
-            if (!phases.is(GamePhase.LOBBY) && !phases.is(GamePhase.RESET)) reset(online);
+            // Дебаг: вихід/перезахід не має скидати тобі матч наодинці.
+            if (!DebugMode.enabled()
+                && !phases.is(GamePhase.LOBBY) && !phases.is(GamePhase.RESET)) reset(online);
             return;
         }
 
@@ -657,7 +875,8 @@ public final class MatchOrchestrator {
         scatterApplied = false;
         scatterFailed = phases.is(GamePhase.SCATTER);
 
-        if (context.aliveSurvivorCount() == 0) {
+        // Дебаг: 0 виживих не завершує матч (див. DebugMode).
+        if (!DebugMode.enabled() && context.aliveSurvivorCount() == 0) {
             advanceTo(GamePhase.ENDING, online);
         }
     }

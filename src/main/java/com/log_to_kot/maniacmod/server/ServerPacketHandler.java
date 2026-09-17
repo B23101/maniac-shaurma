@@ -78,6 +78,9 @@ public final class ServerPacketHandler {
         if (!ManiacRegistry.exists(maniacId)) return;
 
         match.onManiacChosen(player, ManiacRegistry.get(maniacId));
+        // Таб мусить показати ЯКОГО САМЕ маньяка обрано одразу, не
+        // чекаючи наступного переходу фази.
+        ServerHooks.broadcastRoster(player.getServer().getPlayerList().getPlayers());
     }
 
     // ── Виживі ───────────────────────────────────────────────────────────

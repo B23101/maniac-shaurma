@@ -48,7 +48,7 @@ public final class ClientMatchState {
     private static List<GeneratorHighlightPacket.Entry> highlight = List.of();
     private static long highlightUntilTick = 0;
 
-    // ── Ростер (таб-список) ─────────────────────────────────────────────
+    // ── Ростер (tab-екран) ───────────────────────────────────────────────
     private static List<RosterSyncPacket.RosterEntry> roster = List.of();
 
     private ClientMatchState() {}
@@ -160,7 +160,7 @@ public final class ClientMatchState {
         return entry.pos();
     }
 
-    /** Ростер усіх гравців матчу для таб-екрану — лише читання. */
+    /** Ростер усіх гравців матчу для tab-екрана — читається лише поки Tab утримується. */
     public static List<RosterSyncPacket.RosterEntry> roster() {
         return roster;
     }

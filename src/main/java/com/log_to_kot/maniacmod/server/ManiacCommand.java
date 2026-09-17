@@ -7,6 +7,8 @@ import com.log_to_kot.maniacmod.config.ConfigDiagnostics;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
+import com.log_to_kot.maniacmod.core.match.DebugMode;
+import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
 import com.log_to_kot.maniacmod.maniacs.ManiacSelection;
 import com.log_to_kot.maniacmod.spawn.SpawnPlanner;
@@ -30,6 +32,8 @@ import java.util.Map;
  * ── Структура ────────────────────────────────────────────────────────
  *   /maniac start [маньяк]        — старт матчу
  *   /maniac stop                  — примусове завершення
+ *   /maniac debug                 — увімкнути/вимкнути дебаг-режим
+ *   /maniac morph <maniac|survivor|reset> — дебаг-перетворення в лобі
  *   /maniac phase <фаза>          — ручний перехід (налагодження)
  *   /maniac status                — хто в якій ролі, яка фаза, чи готова карта
  *   /maniac lobby set             — точка лобі = позиція виконавця
@@ -52,6 +56,8 @@ public final class ManiacCommand {
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("maniac")
             .requires(src -> src.hasPermission(2));
+        // /maniac start        — звичайний старт (маньяк обирається конфігом)
+        // /maniac start <нік>  — маньяк = вказаний гравець (і в дебазі теж)
 
         root.then(Commands.literal("start")
             .executes(ctx -> start(ctx.getSource(), null))
@@ -64,6 +70,20 @@ public final class ManiacCommand {
 
         root.then(Commands.literal("reload")
             .executes(ctx -> reloadConfig(ctx.getSource())));
+
+        root.then(Commands.literal("debug")
+            .executes(ctx -> toggleDebug(ctx.getSource())));
+
+        root.then(Commands.literal("morph")
+            .then(Commands.literal("maniac")
+                .executes(ctx -> morphManiac(ctx.getSource(),
+                    ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null)))
+            .then(Commands.literal("survivor")
+                .executes(ctx -> morphSurvivor(ctx.getSource(),
+                    ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null)))
+            .then(Commands.literal("reset")
+                .executes(ctx -> unmorph(ctx.getSource(),
+                    ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null))));
 
         root.then(Commands.literal("status")
             .executes(ctx -> status(ctx.getSource())));
@@ -129,21 +149,65 @@ public final class ManiacCommand {
         if (match == null) return 0;
 
         var players = source.getServer().getPlayerList().getPlayers();
-        if (players.size() < ManiacConfigs.get(ConfigSchema.MIN_PLAYERS)) {
-            source.sendFailure(Component.translatable("maniacmod.command.need_players",
-                ManiacConfigs.get(ConfigSchema.MIN_PLAYERS)));
+        var participants = match.eligiblePlayers(players);
+
+        // Дебаг: один гравець — вже матч (DebugMode). Перевірка тут, а не
+        // тільки всередині match.start, щоб адмін бачив ту саму межу, за
+        // якою старт відмовляється працювати.
+        boolean debug = DebugMode.enabled();
+        int minPlayers = debug ? 1 : ManiacConfigs.get(ConfigSchema.MIN_PLAYERS);
+        if (participants.size() < minPlayers) {
+            source.sendFailure(Component.translatable("maniacmod.command.need_players", minPlayers));
             return 0;
         }
 
+        // ── Дебаг «ти виживий» ────────────────────────────────────────
+        // Маньяка немає взагалі, тому реєстр маньяків не потрібен: сенс
+        // режиму саме в тому, щоб перевіряти все, що не залежить від
+        // маньяка (слоти, стаміна, генератори, лут).
+        if (debug && DebugMode.role() == DebugMode.Role.SURVIVOR) {
+            if (!match.start(players, null, null)) {
+                source.sendFailure(Component.translatable("maniacmod.command.start_failed"));
+                return 0;
+            }
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.started_debug_survivor"), true);
+            return 1;
+        }
+
         // Порожній реєстр — нормальний стан під час розробки, тому
-        // окреме зрозуміле повідомлення замість падіння.
-        if (ManiacRegistry.isEmpty()) {
+        // окреме зрозуміле повідомлення замість падіння. У дебазі
+        // «ти маньяк» він теж не завада: архетип лишиться null, і
+        // гравець обере персонажа сам у фазі ROLE_REVEAL.
+        if (ManiacRegistry.isEmpty() && !debug) {
             source.sendFailure(Component.translatable("maniacmod.command.no_maniacs"));
             return 0;
         }
 
+        // ── Дебаг «ти маньяк» ─────────────────────────────────────────
+        // Маньяк = виконавець команди (або нік в аргументі), виживих
+        // може не бути взагалі.
+        if (debug && DebugMode.role() == DebugMode.Role.MANIAC) {
+            ServerPlayer requested = chosenManiac;
+            if (requested == null && source.getEntity() instanceof ServerPlayer self) requested = self;
+            final ServerPlayer maniac = (requested == null || !participants.contains(requested))
+                ? participants.get(0) : requested;
+
+            ManiacSelection.Choice debugChoice = ManiacRegistry.isEmpty()
+                ? null : ManiacSelection.choose(participants, maniac, RNG);
+            ManiacArchetype archetype = debugChoice == null ? null : debugChoice.archetype();
+            if (debugChoice != null && debugChoice.needsMenu()) archetype = null;
+
+            if (!match.start(players, maniac, archetype)) {
+                source.sendFailure(Component.translatable("maniacmod.command.start_failed"));
+                return 0;
+            }
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.started",
+                maniac.getName().getString()), true);
+            return 1;
+        }
+
         ManiacSelection.Choice choice = ManiacSelection.choose(
-            players, chosenManiac, RNG);
+            participants, chosenManiac, RNG);
         if (choice == null) {
             source.sendFailure(Component.translatable("maniacmod.command.no_maniacs"));
             return 0;
@@ -183,6 +247,64 @@ public final class ManiacCommand {
             source.sendSystemMessage(Component.literal(
                 (warn ? "§e⚠ " : "§7• ") + entry.message()));
         }
+        return 1;
+    }
+
+    private static int toggleDebug(CommandSourceStack source) {
+        boolean nowOn = DebugMode.toggleRuntime();
+        source.sendSuccess(() -> Component.translatable(
+            nowOn ? "maniacmod.command.debug_on" : "maniacmod.command.debug_off"), true);
+        return 1;
+    }
+
+    private static int morphManiac(CommandSourceStack source, ServerPlayer player) {
+        if (player == null) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        if (!match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY)) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_lobby_only"));
+            return 0;
+        }
+        // Архетип: якщо реєстр порожній — null (маньяк без архетипу, як у дебазі)
+        ManiacArchetype archetype = ManiacRegistry.isEmpty()
+            ? null : ManiacRegistry.all().values().iterator().next();
+        match.morphManiac(player, archetype);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_maniac"), true);
+        return 1;
+    }
+
+    private static int morphSurvivor(CommandSourceStack source, ServerPlayer player) {
+        if (player == null) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        if (!match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY)) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_lobby_only"));
+            return 0;
+        }
+        match.morphSurvivor(player);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_survivor"), true);
+        return 1;
+    }
+
+    private static int unmorph(CommandSourceStack source, ServerPlayer player) {
+        if (player == null) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        if (!match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY)) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_lobby_only"));
+            return 0;
+        }
+        match.unmorph(player);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_reset"), true);
         return 1;
     }
 

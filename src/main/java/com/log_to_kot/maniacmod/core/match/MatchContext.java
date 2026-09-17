@@ -80,6 +80,19 @@ final class MatchContext {
     /** Хто вже втік — щоб не рахувати їх ні живими, ні мертвими. */
     private final List<UUID> escaped = new ArrayList<>();
 
+    /** Хто вибув остаточно (маньяк добив непритомного). */
+    private final List<UUID> eliminated = new ArrayList<>();
+
+    /**
+     * Ім'я й термінальний стан (ESCAPED/ELIMINATED) гравців, яких уже
+     * прибрано з {@link #survivorRoles} — щоб таб і підсумковий екран
+     * і далі бачили рядок "хто це був і чим скінчив", а не просто
+     * зникле ім'я. {@code isSurvivor(uuid)} на них навмисно повертає
+     * false: вони більше не беруть участь у ремонті/русі/урону.
+     */
+    private final Map<UUID, String> terminalDisplayNames = new LinkedHashMap<>();
+    private final Map<UUID, SurvivorState> terminalStates = new HashMap<>();
+
     // ── Карта ────────────────────────────────────────────────────────────
 
     private final MapManager map = new MapManager();
@@ -116,12 +129,31 @@ final class MatchContext {
         if (survivorRoles.containsKey(uuid)) survivorStates.put(uuid, state);
     }
 
-    public void markEscaped(UUID uuid) {
+    public void markEscaped(UUID uuid, String displayName) {
         if (survivorRoles.remove(uuid) != null) {
             objectives.complete(MatchObjectives.Objective.SOMEONE_ESCAPED);
             survivorStates.remove(uuid);
             survivorHp.remove(uuid);
             escaped.add(uuid);
+            terminalDisplayNames.put(uuid, displayName);
+            terminalStates.put(uuid, SurvivorState.ESCAPED);
+        }
+    }
+
+    /**
+     * Маньяк добив непритомного. На відміну від {@code removeSurvivor}
+     * (вихід із сервера) це остаточний ігровий підсумок — гравець
+     * лишається в {@link #terminalDisplayNames}/{@link #terminalStates}
+     * для табу й фіналу, а не просто зникає з мап.
+     */
+    public void markEliminated(UUID uuid, String displayName) {
+        if (survivorRoles.remove(uuid) != null) {
+            objectives.complete(MatchObjectives.Objective.FIRST_BLOOD);
+            survivorStates.remove(uuid);
+            survivorHp.remove(uuid);
+            eliminated.add(uuid);
+            terminalDisplayNames.put(uuid, displayName);
+            terminalStates.put(uuid, SurvivorState.ELIMINATED);
         }
     }
 
@@ -171,6 +203,17 @@ final class MatchContext {
         return next == 0;
     }
 
+    /** Знімає роль (маньяка або виживого) з гравця. Для дебаг-команди morph. */
+    public void clearRole(UUID uuid) {
+        if (uuid.equals(maniacUUID)) {
+            maniacUUID = null;
+            maniacArchetype = null;
+        }
+        survivorRoles.remove(uuid);
+        survivorStates.remove(uuid);
+        survivorHp.remove(uuid);
+    }
+
     // ── Ролі: читання ────────────────────────────────────────────────────
 
     public boolean isManiac(UUID uuid)    { return maniacUUID != null && maniacUUID.equals(uuid); }
@@ -183,7 +226,17 @@ final class MatchContext {
 
     public List<UUID> survivorIds()       { return List.copyOf(survivorRoles.keySet()); }
     public List<UUID> escapedIds()        { return List.copyOf(escaped); }
+    public List<UUID> eliminatedIds()     { return List.copyOf(eliminated); }
     public int aliveSurvivorCount()       { return survivorRoles.size(); }
+
+    /** Усі, хто вибув остаточно — втекли або загинули (для табу/фіналу). */
+    public List<UUID> terminalIds()       { return List.copyOf(terminalDisplayNames.keySet()); }
+
+    /** Ім'я гравця, що вже пішов з {@link #survivorRoles} (втік/загинув). null, якщо такого немає. */
+    public String terminalDisplayNameOf(UUID uuid) { return terminalDisplayNames.get(uuid); }
+
+    /** ESCAPED або ELIMINATED для гравця, якого вже нема серед активних виживих. null, якщо такого немає. */
+    public SurvivorState terminalStateOf(UUID uuid) { return terminalStates.get(uuid); }
 
     /** Скільки виживих ще здатні щось робити (не непритомні). */
     public int activeSurvivorCount() {

@@ -33,6 +33,10 @@ public final class ClientPacketHandler {
 
     public static void onPhase(GamePhase phase) {
         ClientMatchState.setPhase(phase);
+        if (phase == GamePhase.ENDING) {
+            Minecraft.getInstance().setScreen(
+                new com.log_to_kot.maniacmod.client.screen.statistics.MatchResultScreen());
+        }
     }
 
     public static void onRole(RoleSyncPacket.Role role, String archetypeId) {
@@ -69,7 +73,10 @@ public final class ClientPacketHandler {
         dev.shaurmalib.forge.overlay.ActionBarMessageSystem.show(type, text.getString());
     }
 
-    /** Ростер усіх гравців матчу — джерело даних для таб-екрану. */
+    /**
+     * Ростер усіх гравців матчу — джерело даних для
+     * {@code client/overlay/roster/TabRosterOverlay} (утримання Tab).
+     */
     public static void onRoster(List<RosterSyncPacket.RosterEntry> entries) {
         ClientMatchState.setRoster(entries);
     }

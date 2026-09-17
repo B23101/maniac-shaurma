@@ -1,0 +1,57 @@
+{
+  "game_start": {
+    "sounds": [
+      { "name": "maniacmod:game_start", "stream": false }
+    ]
+  },
+  "countdown_beep": {
+    "sounds": [
+      { "name": "maniacmod:countdown_beep", "stream": false }
+    ]
+  },
+  "countdown_final": {
+    "sounds": [
+      { "name": "maniacmod:countdown_final", "stream": false }
+    ]
+  },
+  "generator_repair": {
+    "sounds": [
+      { "name": "maniacmod:generator_repair", "stream": false }
+    ]
+  },
+  "generator_on": {
+    "sounds": [
+      { "name": "maniacmod:generator_on", "stream": false }
+    ]
+  },
+  "power_on": {
+    "sounds": [
+      { "name": "maniacmod:power_on", "stream": false }
+    ]
+  },
+  "exit_open": {
+    "sounds": [
+      { "name": "maniacmod:exit_open", "stream": false }
+    ]
+  },
+  "survivor_escaped": {
+    "sounds": [
+      { "name": "maniacmod:survivor_escaped", "stream": false }
+    ]
+  },
+  "maniac_nearby": {
+    "sounds": [
+      { "name": "maniacmod:maniac_nearby", "stream": false }
+    ]
+  },
+  "trap_snap": {
+    "sounds": [
+      { "name": "maniacmod:trap_snap", "stream": false }
+    ]
+  },
+  "wire_zap": {
+    "sounds": [
+      { "name": "maniacmod:wire_zap", "stream": false }
+    ]
+  }
+}

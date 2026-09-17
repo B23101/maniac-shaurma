@@ -3,6 +3,7 @@ package com.log_to_kot.maniacmod;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
+import com.log_to_kot.maniacmod.core.match.ManiacChatChannels;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
 import com.log_to_kot.maniacmod.core.match.MatchBlockRegistry;
@@ -18,6 +19,8 @@ import dev.shaurmalib.common.damage.DamageInterceptorRegistry;
 import dev.shaurmalib.common.lifecycle.DisconnectPolicy;
 import dev.shaurmalib.common.lifecycle.JoinPolicy;
 import dev.shaurmalib.common.lifecycle.MatchLifecycleState;
+import dev.shaurmalib.common.chat.ChatChannelRegistry;
+import dev.shaurmalib.forge.chat.ChatModule;
 import dev.shaurmalib.common.sound.SoundCategoryRegistry;
 import dev.shaurmalib.common.sound.SoundCueRegistry;
 import dev.shaurmalib.forge.ShaurmaLib;
@@ -65,6 +68,14 @@ public class ManiacMod {
     /** Ідентифікатор scoreboard-команди для приховування нікнеймів у лобі. */
     private static final String NAMETAG_HIDE_TEAM = "maniac_nametag_hide";
 
+    /**
+     * Канали гри: лобі / виживші / маньяки / глядачі. Правила доступу
+     * лежать у {@link ManiacChatChannels}, сама бібліотека про ці канали
+     * нічого не знає — для неї це звичайні зареєстровані канали. Фід
+     * чату — {@code "maniac"} (спливаюче повідомлення справа зверху).
+     */
+    public static final String CHAT_FEED_ID = "maniac";
+
     private static ShaurmaLib.Handle lib;
     private static MatchOrchestrator match;
 
@@ -104,6 +115,10 @@ public class ManiacMod {
     private void onServerAboutToStart(final ServerAboutToStartEvent event) {
         Path worldRoot = event.getServer()
             .getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
+
+        // Канали чату мають існувати до build(): ChatModule.syncChannels
+        // шукає їх у реєстрі при першому ж логіні.
+        ManiacChatChannels.registerChannels();
 
         match = new MatchOrchestrator();
         match.attachServer(event.getServer());
@@ -155,6 +170,12 @@ public class ManiacMod {
             .withAnimatedBlocks()
             .withSound()
             .withOverlays()
+            // Чат: окремі канали за ролями (лобі/виживші/маньяки/глядачі)
+            // + звук вхідного повідомлення. Кнопки каналів бібліотека малює
+            // сама; кнопки-дії (налаштування/статистика) — через
+            // ChatScreenButtonRegistry (тут вони свідомо не реєструються:
+            // це API бібліотеки, а не логіка режиму).
+            .withChatChannels(new ManiacChatChannels(), CHAT_FEED_ID, () -> 0)
             .withActionBarMessages()
             .withAnimatedCountdown()
             .build();
@@ -168,11 +189,14 @@ public class ManiacMod {
         // Звуки описуються один раз — далі будь-де досить SoundCenter.play(...).
         ModSoundCues.register();
 
-        // Ванільний урон вимкнено на весь час матчу: шкоду наносить
-        // лише удар маньяка через власний модуль. Одна причина в
-        // реєстрі замість обробника LivingHurtEvent у моді.
+        // Ванільний урон вимкнено НА ВЕСЬ ЧАС (і в лобі теж): шкоду
+        // наносить лише удар маньяка через власний модуль, а HP виживих
+        // рахує MatchContext. Раніше причина спрацьовувала лише коли
+        // `phases().isGameplay()`, тож поза ігровою фазою ванільний урон
+        // проходив — саме тому гравці в лобі були смертними (падали,
+        // горіли, тонули). Тепер лобі безсмертне.
         DamageInterceptorRegistry.register(MOD_ID + ":match_damage",
-            (victim, source, amount, ctx) -> match != null && match.phases().isGameplay());
+            (victim, source, amount, ctx) -> true);
 
         // Фази дзеркаляться в грубий стан бібліотеки одним місцем.
         // v3 тримав для цього окремий enum GameState і switch — тепер
@@ -213,12 +237,24 @@ public class ManiacMod {
         DamageInterceptorRegistry.clear();
         SoundCueRegistry.clear();
         SoundCategoryRegistry.clear();
+        // Канали/фід/історія чату теж статичні — без очищення наступний
+        // світ у тій самій JVM успадкував би канали попереднього матчу.
+        ChatChannelRegistry.clear();
+        ChatModule.shutdown();
         lib = null;
         LOGGER.info("[ManiacMod] матч знято, стан очищено");
     }
 
     private void onRegisterOverlays(final RegisterGuiOverlaysEvent event) {
         ShaurmaLib.attachOverlayEngine(event);
+        ShaurmaLib.attachVanillaHudCancel(
+            () -> true,  // chat
+            () -> false, // hotbar
+            () -> true,  // health
+            () -> true,  // food
+            () -> true,  // experience
+            () -> false  // armor
+        );
     }
 
     // ── Доступ ───────────────────────────────────────────────────────────

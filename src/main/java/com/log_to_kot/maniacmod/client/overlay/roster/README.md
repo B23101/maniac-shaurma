@@ -1,33 +1,45 @@
-# client/overlay/roster — таб-список гравців
+# client/overlay/roster — tab-екран
 
-Ця папка зараз порожня. Тут з'явиться сам рендер таб-списку (клавіша
-Tab, зведення хто живий/вибув/яка роль) — функціональний overlay:
-не ефект, не постійний власний HUD, не одноразове повідомлення, а
-довідкова панель, що показується по утриманню клавіші.
+## Статус: реалізовано
 
-## Джерело даних — вже існує
+`TabRosterOverlay` малює таблицю через `dev.shaurmalib.forge.tab.TabListStyle`
+(shaurma-lib). Показ/приховання — не власний keybind, а ванільна
+клавіша Tab, підключена через `dev.shaurmalib.forge.tab.TabVisibilityModule`
+(shaurma-lib): `ShaurmaLib.attachTabVisibility(new TabRosterOverlay())`
+викликається один раз у `ClientSetup.onClientSetup`. Модуль сам
+скасовує ванільний `minecraft:player_list` і показує наш рендер по
+тій самій клавіші — окремого `ManiacKeybinds`-запису для табу немає й
+не треба.
 
-Пакет уже є: `s2c/matchstate/RosterSyncPacket` →
-`ClientPacketHandler.onRoster(List<RosterEntry>)` — зараз метод
-порожній, бо цього UI-компонента ще нема. Коли розпочнеться
-реалізація:
+## Джерело даних
 
-1. Додати `List<RosterSyncPacket.RosterEntry> roster` у
-   `ClientMatchState` (метод-сеттер `setRoster(...)`, як і решта
-   полів — пакетом, скидання в `reset()`).
-2. Дописати виклик `ClientMatchState.setRoster(entries)` у вже
-   існуючий `ClientPacketHandler.onRoster(...)`.
-3. Клас тут читає `ClientMatchState.roster()`, малює список лише
-   коли клавіша Tab утримується (реєстрація — новий keybind у
-   `ManiacKeybinds`, обробка утримання — за зразком
-   `ClientInputHandler.handleRescueHold()`, бо це так само утримання,
-   а не одноразове натискання).
+`s2c/matchstate/RosterSyncPacket` → `ClientPacketHandler.onRoster(...)`
+→ `ClientMatchState.setRoster(...)` → `ClientMatchState.roster()`.
+`TabRosterOverlay` нічого не рахує сам, лише розкладає вже готові
+`RosterEntry` в `TabRow`.
 
 ## Заборонено (нагадування з `net/README.md`)
 
-Не запитувати в `RosterSyncPacket` stamina/heartbeat — ці числа мають
-сенс лише для власного гравця й летять через `SurvivorVitalsPacket`.
-hp/maxHp — виняток: `RosterEntry` несе їх свідомо (командний огляд
-чужого хп), із поясненням прямо в docstring пакета. Якщо для UI
-бракує ще якоїсь деталізації — питання до пакета, а не компенсація
-на клієнті вигаданими значеннями.
+Не запитувати в `RosterSyncPacket` stamina/heartbeat — цей таб їх не
+показує. hp/maxHp — виняток, свідомо доданий (обґрунтування в
+docstring самого пакета): це єдине джерело чужого хп для UI, не
+компенсація вигаданими значеннями на клієнті.
+
+## Технічна дрібниця
+
+Голови гравців (`drawHead`) використовують `PlayerInfo.getSkin()` з
+мережевого з'єднання — працює лише для гравців, які вже отримали
+скін від сервера (звичайний ванільний лаг в 1 кадр на приєднанні),
+нічого додатково кешувати не треба.
+
+## Лобі-режим
+
+Зараз у `LOBBY` кожен `RosterEntry` приходить з `role == SPECTATOR`
+(роль призначається лише на `ROLE_REVEAL`), тому таб у лобі показує
+всіх однаково сірим — поділу "гратиме / просто дивиться" поки немає.
+
+Це очікувано, а не недоробка цього класу: коли гра почне вирішувати
+"хто гратиме" ще на етапі лобі, вона просто виставить відповідну
+роль/стан раніше — `TabRosterOverlay` уже читає `role`/`state` з
+кожного `RosterEntry` і одразу підхопить це без жодної зміни коду
+тут. Нічого додаткового заводити заздалегідь не треба.

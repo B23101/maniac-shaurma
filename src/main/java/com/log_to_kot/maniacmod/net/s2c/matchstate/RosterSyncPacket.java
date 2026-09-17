@@ -10,7 +10,9 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Сервер → клієнт: зведення по ВСІХ гравцях матчу (майбутній таб/скорборд).
+ * Сервер → клієнт: зведення по ВСІХ гравцях матчу для tab-екрана
+ * (утримання Tab), реалізованого в
+ * {@code client/overlay/roster/TabRosterOverlay}.
  *
  * ── Категорія: matchstate, не roster ─────────────────────────────────
  * Це проєкція вже наявного стану матчу (хто є хто) без власної логіки
@@ -19,22 +21,20 @@ import java.util.UUID;
  * порожню {@code roster/} — суто як місце для нотатки-правила, без
  * власного пакета.
  *
- * ── Правило, яке цей пакет виконує технічно, а не лише текстом ──────
- * Тут НЕМАЄ stamina/heartbeat — ці числа мають сенс лише для
- * ВЛАСНИКА і вже летять через
- * {@link com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket}.
- * Роль власника — через {@link RoleSyncPacket}. Дублювати їх тут не
- * можна: два пакети з однаковими числами — два джерела правди.
+ * ── Свідомий виняток із правила "не дублюй числа з vitals" ──────────
+ * {@link com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket}
+ * несе hp ЛИШЕ власнику — для власного HUD. Tab показує hp ІНШИМ
+ * гравцям (усій команді виживих одночасно), а це інший глядач і інша
+ * причина існування числа: vitals лишається джерелом правди для "мій
+ * хп на екрані", RosterEntry — для "хп тіммейта в таблиці". Це не
+ * випадковий дубль (той, проти якого застережено вище) — це свідомо
+ * заведене поле під нову, раніше не потрібну функцію. Немає жодного
+ * коду, що читає чуже hp з іншого місця: hp у RosterEntry — ЄДИНЕ
+ * джерело для tab-екрана. stamina/heartbeat так само НЕ додаються
+ * сюди: їх tab не показує, тому дублювати нема причини.
  *
- * hp/maxHp — виняток, доданий свідомо (не "про всяк випадок"): це
- * єдине число, яке команді треба бачити ПРО ІНШИХ (tab-екран:
- * "живі виживші бачать хп кожного тіммейта"), а vitals у принципі не
- * може його нести — vitals показує лише показники власного гравця,
- * а не чужі. Тому це не дублікат, а нові дані для нового глядача
- * (командний огляд, а не власний HUD).
- *
- * Надсилається на ПОДІЮ (хтось приєднався/вибув/змінив стан чи хп), а
- * не щотік — та сама логіка, що вже є в SurvivorVitalsPacket.
+ * Надсилається на ПОДІЮ (хтось приєднався/вибув/змінив стан/хп), а не
+ * щотік — та сама логіка, що вже є в SurvivorVitalsPacket.
  *
  * @param entries усі гравці матчу станом на момент відправки
  */
@@ -42,15 +42,19 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
 
     /**
      * @param playerId    UUID гравця — посилання, не дублікат даних
-     * @param displayName ім'я для відображення в таб/скорборді
+     * @param displayName ім'я для відображення в таб-таблиці
      * @param role        роль гравця (та сама емуляція, що й RoleSyncPacket.Role)
-     * @param state       стан виживого; для маньяка/глядача — HEALTHY (не читається)
-     * @param hp          поточне хп; для маньяка/глядача — 0 (не читається)
-     * @param maxHp       максимум хп; для маньяка/глядача — 0 (не читається)
+     * @param archetypeId маньяк: id архетипу ("chucky") — таб показує, ЯКИЙ саме маньяк;
+     *                    виживий/глядач: порожній рядок
+     * @param state       стан виживого (HEALTHY/.../ELIMINATED/ESCAPED);
+     *                    для маньяка/глядача — HEALTHY (не читається)
+     * @param hp          поточне хп виживого; для маньяка/глядача і для
+     *                    ELIMINATED/ESCAPED (уже вибув) — 0, не читається
+     * @param maxHp       максимум хп виживого; той самий виняток, що й hp
      */
     public record RosterEntry(UUID playerId, String displayName,
-                               RoleSyncPacket.Role role, SurvivorState state,
-                               int hp, int maxHp) {}
+                               RoleSyncPacket.Role role, String archetypeId,
+                               SurvivorState state, int hp, int maxHp) {}
 
     public RosterSyncPacket(FriendlyByteBuf buf) {
         this(readEntries(buf));
@@ -64,6 +68,7 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
                 buf.readUUID(),
                 buf.readUtf(),
                 buf.readEnum(RoleSyncPacket.Role.class),
+                buf.readUtf(),
                 buf.readEnum(SurvivorState.class),
                 buf.readVarInt(),
                 buf.readVarInt()));
@@ -78,6 +83,7 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
             buf.writeUUID(e.playerId());
             buf.writeUtf(e.displayName());
             buf.writeEnum(e.role());
+            buf.writeUtf(e.archetypeId());
             buf.writeEnum(e.state());
             buf.writeVarInt(e.hp());
             buf.writeVarInt(e.maxHp());
