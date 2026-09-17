@@ -79,6 +79,17 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> GENERATORS_REQUIRED =
         ConfigKey.integer("generators", "generatorsRequired", 5, 1, 32);
 
+    /**
+     * Скільки ЗАЙВИХ (нерозв'язуваних наперед) точок генераторів
+     * додається на кожного маньяка в матчі — понад generatorsRequired.
+     * Проти кемпінгу: якщо полагодити треба 6, а маньяк один, то
+     * спавниться 6 + 1×bonusGeneratorsPerManiac = 7 точок; з двома
+     * маньяками — 6 + 2×bonus. Полагодити завжди треба рівно
+     * generatorsRequired, решта — відволікаючі.
+     */
+    public static final ConfigKey<Integer> BONUS_GENERATORS_PER_MANIAC =
+        ConfigKey.integer("generators", "bonusGeneratorsPerManiac", 1, 0, 8);
+
     public static final ConfigKey<Integer> MINIGAMES_PER_GENERATOR =
         ConfigKey.integer("generators", "minigamesPerGenerator", 5, 1, 20);
 
@@ -99,6 +110,22 @@ public final class ConfigSchema {
 
     public static final ConfigKey<Integer> FAIL_FLASH_TICKS =
         ConfigKey.integer("generators", "failFlashTicks", 60, 0, 600);
+
+    public static final ConfigKey<Integer> MINIGAME_FAIL_LOSS_PERCENT =
+        ConfigKey.integer("generators", "minigameFailLossPercent", 0, 0, 100);
+
+    public static final ConfigKey<Integer> REPAIR_SECONDS_PER_STAGE =
+        ConfigKey.integer("generators", "repairSecondsPerStage", 10, 1, 600);
+
+    public static final ConfigKey<Double> SCREWDRIVER_SPEED_BONUS =
+        ConfigKey.decimal("generators", "screwdriverSpeedBonus", 0.25, 0.0, 5.0);
+
+    public static final ConfigKey<Double> SCREWDRIVER_MINIGAME_REDUCTION =
+        ConfigKey.decimal("generators", "screwdriverMinigameReduction", 0.25, 0.0, 1.0);
+
+    public static final ConfigKey<String> GENERATOR_STAGE_ORDER =
+        ConfigKey.option("generators", "stageOrder", "REPAIR_THEN_FUEL",
+            List.of("REPAIR_THEN_FUEL", "FUEL_THEN_REPAIR"));
 
     // ── survivors ────────────────────────────────────────────────────────
 
@@ -130,7 +157,7 @@ public final class ConfigSchema {
         ConfigKey.decimal("survivors", "legBreakChance", 0.35, 0.0, 1.0);
 
     public static final ConfigKey<Integer> HEARTBEAT_RANGE_BLOCKS =
-        ConfigKey.integer("survivors", "heartbeatRangeBlocks", 24, 0, 128);
+        ConfigKey.integer("survivors", "heartbeatRangeBlocks", 12, 0, 128);
 
     // ── maniac ───────────────────────────────────────────────────────────
 
@@ -190,38 +217,41 @@ public final class ConfigSchema {
 
     // ── Реєстр блоків ────────────────────────────────────────────────────
 
-    public static final ConfigBlock MATCH = ConfigBlock.settings("match",
+    public static final ConfigBlock MATCH = ConfigBlock.settings("match", "start_rules.yml",
         "Тривалості технічних фаз і мінімум гравців.",
         MIN_PLAYERS, CINEMATIC_SECONDS, ROLE_REVEAL_SECONDS, ENDING_SECONDS);
 
-    public static final ConfigBlock MAP = ConfigBlock.settings("map",
+    public static final ConfigBlock MAP = ConfigBlock.settings("map", "points.yml",
         "Розмір карти й правила розкидання гравців.",
         MAP_SIZE_BLOCKS, MIN_SURVIVOR_TO_MANIAC, MIN_SURVIVOR_TO_PEER,
         ITEM_POINT_ENGAGE_RATIO, RELAXATION_STEP, MAX_RELAXATION_PASSES);
 
-    public static final ConfigBlock GENERATORS = ConfigBlock.settings("generators",
+    public static final ConfigBlock GENERATORS = ConfigBlock.settings("generators", "generators.yml",
         "Ремонт, бензин і підсвітка генераторів.",
-        GENERATORS_REQUIRED, MINIGAMES_PER_GENERATOR, MINIGAME_FAIL_CHANCE,
+        GENERATORS_REQUIRED, BONUS_GENERATORS_PER_MANIAC,
+        MINIGAMES_PER_GENERATOR, MINIGAME_FAIL_CHANCE,
         MINIGAME_TICKS, FUEL_REQUIRED_PERCENT, FUEL_PER_CANISTER,
-        HIGHLIGHT_DURATION_TICKS, FAIL_FLASH_TICKS);
+        HIGHLIGHT_DURATION_TICKS, FAIL_FLASH_TICKS, MINIGAME_FAIL_LOSS_PERCENT,
+        REPAIR_SECONDS_PER_STAGE, SCREWDRIVER_SPEED_BONUS,
+        SCREWDRIVER_MINIGAME_REDUCTION, GENERATOR_STAGE_ORDER);
 
-    public static final ConfigBlock SURVIVORS = ConfigBlock.settings("survivors",
+    public static final ConfigBlock SURVIVORS = ConfigBlock.settings("survivors", "survivors.yml",
         "Здоров'я, стаміна, падіння, підняття непритомних.",
         SURVIVOR_MAX_HP, SURVIVOR_SLOTS, FLASHLIGHT_COOLDOWN_TICKS, RESCUE_TICKS,
         RESCUE_HELPER_BONUS, STAMINA_DRAIN_PER_TICK, STAMINA_REGEN_PER_TICK,
         FALL_KNOCKDOWN_HEIGHT, LEG_BREAK_CHANCE, HEARTBEAT_RANGE_BLOCKS);
 
-    public static final ConfigBlock MANIAC = ConfigBlock.settings("maniac",
+    public static final ConfigBlock MANIAC = ConfigBlock.settings("maniac", "maniacs.yml",
         "Базові параметри маньяка. Архетип може перевизначити їх для себе.",
         ATTACK_RANGE_BLOCKS, ATTACK_COOLDOWN_TICKS, ATTACK_DAMAGE,
         TRAP_PLACE_COOLDOWN_TICKS, TRAP_MIN_DISTANCE_TO_PLAYER);
 
-    public static final ConfigBlock MANIAC_SELECTION = ConfigBlock.settings("maniac_selection",
+    public static final ConfigBlock MANIAC_SELECTION = ConfigBlock.settings("maniac_selection", "maniacs.yml",
         "Хто стає маньяком і як обирається персонаж.",
         MANIAC_PLAYER_MODE, MANIAC_TYPE_MODE, FIXED_MANIAC_ID,
         SELECTION_TIMEOUT_SECONDS, INTRO_SCENE_ENABLED);
 
-    public static final ConfigBlock LOOT = ConfigBlock.settings("loot",
+    public static final ConfigBlock LOOT = ConfigBlock.settings("loot", "points.yml",
         "Предмети, що лежать на карті.",
         GROUND_ITEM_PICKUP_RANGE, GROUND_ITEM_FALL_MAX_TICKS);
 
@@ -235,8 +265,7 @@ public final class ConfigSchema {
 
     /** Порядок = порядок блоків у згенерованому файлі. */
     public static final List<ConfigBlock> BLOCKS = List.of(
-        MATCH, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT,
-        SPAWN_POINTS, ZONES);
+        MATCH, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT);
 
     public static ConfigBlock blockById(String id) {
         for (ConfigBlock block : BLOCKS) {

@@ -1,0 +1,14 @@
+generatorsRequired: 5
+bonusGeneratorsPerManiac: 1
+minigamesPerGenerator: 5
+minigameFailChance: 0.15
+minigameTicks: 200
+fuelRequiredPercent: 200
+fuelPerCanister: 100
+highlightDurationTicks: 100
+failFlashTicks: 60
+minigameFailLossPercent: 0
+repairSecondsPerStage: 10
+screwdriverSpeedBonus: 0.25
+screwdriverMinigameReduction: 0.25
+stageOrder: REPAIR_THEN_FUEL

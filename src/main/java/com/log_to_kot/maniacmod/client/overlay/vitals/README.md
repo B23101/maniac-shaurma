@@ -1,19 +1,36 @@
 # client/overlay/vitals — постійний HUD показників гравця
 
-Ця папка зараз порожня. Тут з'явиться постійно намальований
-HUD-елемент (бар хп, іконка стану, індикатор стаміни) для ВЛАСНОГО
-гравця — намальований завжди, поки триває матч, а не на подію.
+Постійно намальований HUD-елемент (хп-бар, серце, стаміна-бар, іконки
+стану) для ВЛАСНОГО гравця — намальований завжди, поки триває матч
+(видимий лише виживому — маньяк і глядач свого хп не бачать).
+
+Реалізація: `SurvivorVitalsOverlay.java`. Стиль: круглий медальйон із
+серцем зліва, справа від нього дві сегментовані шкали-"камінці" (хп
+зверху, стаміна знизу) — за наданим референсом, не суцільні бари.
 
 ## Джерело даних
 
 Тільки `ClientMatchState` (`hp()`, `maxHp()`, `stamina()`,
-`survivorState()`). Ці поля вже приходять із сервера через
-`s2c/vitals/SurvivorVitalsPacket` → `ClientPacketHandler.onVitals(...)`.
-Новий елемент тут НЕ отримує власного пакета — читає вже наявні
-поля. Якщо оверлею потрібне поле, якого немає в `ClientMatchState`,
-питання спершу до `s2c/vitals/SurvivorVitalsPacket` (чи не дублює
-воно щось із іншої категорії — див. `net/README.md`), а не до нового
-пакета одразу.
+`survivorState()`, `heartbeat()`). Ці поля вже приходять із сервера
+через `s2c/vitals/SurvivorVitalsPacket` → `ClientPacketHandler.onVitals(...)`.
+Оверлей нічого не рахує сам — питання про нове поле спершу до
+`SurvivorVitalsPacket`, а не до нового пакета одразу.
+
+## Іконки стану: потрібні PNG
+
+`SurvivorVitalsOverlay` малює іконки поламаної ноги / повзання /
+непритомності як тимчасові кольорові комірки з літерою — текстур ще
+немає в проєкті. Шляхи вже зафіксовані константами в класі:
+
+- `textures/gui/vitals/broken_leg.png`
+- `textures/gui/vitals/crawling.png`
+- `textures/gui/vitals/unconscious.png`
+
+Коли PNG (16×16) покладені за цими шляхами в
+`assets/maniacmod/`, заміна на реальну текстуру — один виклик
+`graphics.blit(...)` замість `drawIconPlaceholder(...)` усередині
+`renderStatusIcons()`; розкладка (позиція, розмір, відступи) вже
+готова й міняти її не треба.
 
 ## Чому не `overlay/effects/`
 
@@ -24,8 +41,8 @@ HUD-блок у кутку.
 
 ## Реєстрація
 
-Як і `GeneratorProgressOverlay` — через
-`RegisterGuiOverlaysEvent` у `ClientSetup.onRegisterOverlays`, метод
-`render(GuiGraphics)`, скидання стану через
-`ClientMatchState.reset()` (той самий шаблон, що вже є для
-`actionprogress/GeneratorProgressOverlay`).
+Як і `GeneratorProgressOverlay` — через `RegisterGuiOverlaysEvent` у
+`ClientSetup.onRegisterOverlays`, метод `render(GuiGraphics)`. Стану
+між кадрами немає (все читається з `ClientMatchState` щоразу), тому
+окремого `reset()` не потребує — `ClientMatchState.reset()` вже
+скидає джерело даних, яке цей оверлей читає.

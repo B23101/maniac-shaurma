@@ -48,18 +48,22 @@ public final class SpawnPlanner {
         private final SpawnPoint maniacPoint;
         private final Map<UUID, SpawnPoint> survivorPoints;
         private final List<SpawnPoint> engagedItemPoints;
+        private final List<SpawnPoint> generatorPoints;
 
         SpawnPlan(SpawnPoint maniacPoint,
                   Map<UUID, SpawnPoint> survivorPoints,
-                  List<SpawnPoint> engagedItemPoints) {
+                  List<SpawnPoint> engagedItemPoints,
+                  List<SpawnPoint> generatorPoints) {
             this.maniacPoint = maniacPoint;
             this.survivorPoints = survivorPoints;
             this.engagedItemPoints = engagedItemPoints;
+            this.generatorPoints = generatorPoints;
         }
 
         public SpawnPoint maniacPoint()                 { return maniacPoint; }
         public Map<UUID, SpawnPoint> survivorPoints()   { return Map.copyOf(survivorPoints); }
         public List<SpawnPoint> engagedItemPoints()     { return List.copyOf(engagedItemPoints); }
+        public List<SpawnPoint> generatorPoints()       { return List.copyOf(generatorPoints); }
     }
 
     /** Кидається, коли карта розмічена так, що коректний план неможливий. */
@@ -73,8 +77,13 @@ public final class SpawnPlanner {
      * @param allPoints   уся розмітка карти
      * @param maniacId    id архетипу маньяка ("chucky") — визначає його точки
      * @param survivorIds UUID усіх виживих
+     * @param numManiacs  скільки маньяків у цьому матчі (зараз завжди 1 —
+     *                    параметр існує заздалегідь, щоб підтримку 2+
+     *                    маньяків можна було увімкнути, змінивши лише
+     *                    виклик цього методу, а не формулу генераторів)
      */
-    public SpawnPlan plan(List<SpawnPoint> allPoints, String maniacId, List<UUID> survivorIds) {
+    public SpawnPlan plan(List<SpawnPoint> allPoints, String maniacId, List<UUID> survivorIds,
+                          int numManiacs) {
         List<SpawnPoint> maniacPoints = filter(allPoints, SpawnPointKind.MANIAC, maniacId);
         if (maniacPoints.isEmpty()) {
             throw new SpawnPlanFailure(
@@ -104,16 +113,63 @@ public final class SpawnPlanner {
                 tryAssign(survivorPool, survivorIds, maniacPoint, minToManiac, minToSurvivor);
 
             if (assigned != null) {
-                return new SpawnPlan(maniacPoint, assigned, pickItemPoints(allPoints));
+                return new SpawnPlan(maniacPoint, assigned, pickItemPoints(allPoints),
+                    pickGeneratorPoints(allPoints, maniacPoint, numManiacs));
             }
 
-            minToManiac   *= step;
-            minToSurvivor *= step;
+                    minToManiac   *= step;
+                    minToSurvivor *= step;
         }
 
         throw new SpawnPlanFailure(
             "Не вдалося рознести гравців навіть із послабленими дистанціями. "
           + "Точки виживих стоять надто щільно або надто близько до маньяка.");
+    }
+
+    /**
+     * Скільки точок генераторів реально заспавнити цього раунду.
+     *
+     * generatorsRequired — скільки треба ПОЛАГОДИТИ, це число не
+     * залежить від кількості маньяків. Понад нього додається
+     * bonusGeneratorsPerManiac × numManiacs "зайвих" точок — вони
+     * теж генератори, але їх лагодити не обов'язково; вони існують,
+     * щоб виживі не могли впевнено закемпити відомий набір з
+     * generatorsRequired точок. Чим більше маньяків, тим більше
+     * бонусних точок і тим важче вгадати, які з них — справжні.
+     */
+    private List<SpawnPoint> pickGeneratorPoints(List<SpawnPoint> allPoints,
+                                                  SpawnPoint maniacPoint, int numManiacs) {
+        List<SpawnPoint> pool = new ArrayList<>(filter(allPoints, SpawnPointKind.GENERATOR, null));
+        int required = ManiacConfigs.get(ConfigSchema.GENERATORS_REQUIRED);
+        int bonusPerManiac = ManiacConfigs.get(ConfigSchema.BONUS_GENERATORS_PER_MANIAC);
+        int desired = required + bonusPerManiac * Math.max(0, numManiacs);
+        Collections.shuffle(pool, rng);
+        if (pool.size() < desired) {
+            throw new SpawnPlanFailure("Потрібно щонайменше " + desired
+                + " точок генераторів (" + required + " на ремонт + "
+                + bonusPerManiac + "×" + numManiacs + " бонусних), а налаштовано "
+                + pool.size() + ".");
+        }
+
+        List<SpawnPoint> selected = new ArrayList<>();
+        selected.add(pool.remove(rng.nextInt(pool.size())));
+        while (selected.size() < desired) {
+            SpawnPoint best = null;
+            double bestDistance = -1;
+            for (SpawnPoint candidate : pool) {
+                double nearest = candidate.horizontalDistanceTo(maniacPoint);
+                for (SpawnPoint chosen : selected) {
+                    nearest = Math.min(nearest, candidate.horizontalDistanceTo(chosen));
+                }
+                if (nearest > bestDistance) {
+                    best = candidate;
+                    bestDistance = nearest;
+                }
+            }
+            selected.add(best);
+            pool.remove(best);
+        }
+        return selected;
     }
 
     /**

@@ -5,6 +5,7 @@ import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
+import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import net.minecraft.core.BlockPos;
 
@@ -47,6 +48,9 @@ public final class ClientMatchState {
     private static List<GeneratorHighlightPacket.Entry> highlight = List.of();
     private static long highlightUntilTick = 0;
 
+    // ── Ростер (таб-список) ─────────────────────────────────────────────
+    private static List<RosterSyncPacket.RosterEntry> roster = List.of();
+
     private ClientMatchState() {}
 
     // ── Запис (викликається лише з ClientPacketHandler) ──────────────────
@@ -88,6 +92,10 @@ public final class ClientMatchState {
         highlightUntilTick = currentTick + durationTicks;
     }
 
+    static void setRoster(List<RosterSyncPacket.RosterEntry> entries) {
+        roster = List.copyOf(entries);
+    }
+
     /** Повне скидання. Викликається при виході з матчу і при диконекті. */
     public static void reset() {
         role = RoleSyncPacket.Role.SPECTATOR;
@@ -101,6 +109,7 @@ public final class ClientMatchState {
         abilityTotal.clear();
         highlight = List.of();
         highlightUntilTick = 0;
+        roster = List.of();
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
     }
 
@@ -149,5 +158,10 @@ public final class ClientMatchState {
     /** Позиція генератора зі списку підсвітки — зручність для рендера. */
     public static BlockPos posOf(GeneratorHighlightPacket.Entry entry) {
         return entry.pos();
+    }
+
+    /** Ростер усіх гравців матчу для таб-екрану — лише читання. */
+    public static List<RosterSyncPacket.RosterEntry> roster() {
+        return roster;
     }
 }

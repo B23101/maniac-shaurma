@@ -11,3 +11,6 @@ hs_err_pid*
 
 local.properties
 libs/
+
+# Locally generated release archives
+shaurma-maniac-*.zip

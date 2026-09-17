@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod.server;
 
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
+import com.log_to_kot.maniacmod.config.MapPointConfigs;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.maniacs.ManiacCombatModule;
 import com.log_to_kot.maniacmod.net.ModNetwork;
@@ -55,6 +56,10 @@ public final class ServerHooks {
         if (++tickCounter >= CONFIG_CHECK_INTERVAL_TICKS) {
             tickCounter = 0;
             ManiacConfigs.tickWatcher();
+            if (MapPointConfigs.tickWatcher()) {
+                MatchOrchestrator current = ManiacMod.match();
+                if (current != null) current.reloadConfiguredMap();
+            }
         }
 
         MatchOrchestrator match = ManiacMod.match();
@@ -98,6 +103,7 @@ public final class ServerHooks {
 
         ModNetwork.toPlayer(player, new PhaseSyncPacket(match.phases().current()));
         ModNetwork.toPlayer(player, roleOf(match, player));
+        match.inventoryAllocation().applyOnJoin(player);
     }
 
     /**
@@ -132,10 +138,26 @@ public final class ServerHooks {
         }
     }
 
-    // TODO(міграція survivors): LivingFallEvent → збиття з ніг і шанс
-    //   зламати ногу. Хук навмисно не додано зараз: без модуля виживих
-    //   йому нікуди делегувати, а порожній обробник події — саме те
-    //   сміття, від якого відмивається ця реорганізація.
+    /**
+     * Падіння з висоти. SurvivorModule сам вирішує, чи висота достатня
+     * (fallKnockdownHeightBlocks) і чи ламається нога (legBreakChance);
+     * тут лише переадресація й скасування ванільного урону від
+     * падіння, коли модуль підтвердив, що обробив його сам.
+     *
+     * Окремо від DamageInterceptorRegistry: LivingFallEvent — не
+     * LivingHurtEvent, тому загальна "ванільний урон вимкнено на весь
+     * матч" гвардія його не ловить — цей хук закриває саме цю прогалину.
+     */
+    @SubscribeEvent
+    public void onLivingFall(net.minecraftforge.event.entity.living.LivingFallEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+
+        boolean handled = match.survivors().onFall(player, event.getDistance());
+        if (handled) event.setCanceled(true);
+    }
 
     // TODO(міграція maniacs): EntityEvent.Size → хітбокс і висота очей
     //   з архетипу маньяка (v3 ServerEventHandler.onEntitySize).

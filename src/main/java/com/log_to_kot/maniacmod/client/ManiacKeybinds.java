@@ -25,6 +25,7 @@ import org.lwjgl.glfw.GLFW;
  * | Підвестися після падіння  | пробіл  | виживі | ванільна (jump)  |
  * | Підняти непритомного      | Shift   | виживі | ванільна (sneak) |
  * | Ремонт / залив / підбір   | ПКМ     | виживі | ванільна (use)   |
+ * | Таб-екран (ростер)        | Tab     | усі    | ванільна (playerlist) |
  *
  * ── Чому цифри вільні ────────────────────────────────────────────────
  * У маньяка немає інвентаря взагалі (0 слотів hotbar), тому клавіші
@@ -86,6 +87,11 @@ public final class ManiacKeybinds {
     /** Shift: утримання для підняття непритомного. */
     public static boolean isRescueHeld() {
         return Minecraft.getInstance().options.keyShift.isDown();
+    }
+
+    /** Tab: утримання для таб-екрану (живі/маньяк/спостерігачі). Ванільна клавіша списку гравців. */
+    public static boolean isRosterHeld() {
+        return Minecraft.getInstance().options.keyPlayerList.isDown();
     }
 
     // ── Внутрішнє ────────────────────────────────────────────────────────

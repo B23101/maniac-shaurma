@@ -69,17 +69,9 @@ public final class ClientPacketHandler {
         dev.shaurmalib.forge.overlay.ActionBarMessageSystem.show(type, text.getString());
     }
 
-    /**
-     * Ростер усіх гравців матчу — поки без адресата. Табу/скорборду ще
-     * немає (заплановано в {@code client/screen/roster/}), тому цей
-     * метод свідомо порожній: пакет уже їде, приймач допишеться, коли
-     * з'явиться сам UI. Порожній метод тут — не забутий TODO, а місце,
-     * зафіксоване заздалегідь, щоб перший, хто писатиме tab-екран, не
-     * шукав, куди чіпляти обробку.
-     */
+    /** Ростер усіх гравців матчу — джерело даних для таб-екрану. */
     public static void onRoster(List<RosterSyncPacket.RosterEntry> entries) {
-        // TODO(screen/roster): передати в ClientMatchState.setRoster(...),
-        // коли з'явиться сам tab/scoreboard-екран.
+        ClientMatchState.setRoster(entries);
     }
 
     public static void onCountdown(int digit, int accentArgb) {

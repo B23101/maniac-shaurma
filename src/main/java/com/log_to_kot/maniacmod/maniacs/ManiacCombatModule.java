@@ -98,7 +98,8 @@ public final class ManiacCombatModule implements PhaseListener {
         double range = archetype.attackRangeBlocks();
         if (attacker.distanceTo(victim) > range) return false;
 
-        match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
+        boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
+        if (downed) match.survivors().onSurvivorDowned(victim);
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
     }

@@ -1,8 +1,16 @@
 package com.log_to_kot.maniacmod.survivors;
 
+import com.log_to_kot.maniacmod.config.ConfigSchema;
+import com.log_to_kot.maniacmod.config.ManiacConfigs;
+
 /**
  * Звичайний виживий — єдина роль на зараз. Дані з презентації
  * "Виживші": 100 хп, 4 слоти інвентаря, підсвітка з перезарядкою 30с.
+ *
+ * Значення читаються з {@link ConfigSchema} щоразу при створенні ролі
+ * (одна роль на матч на гравця — див. {@code SurvivorRegistry.defaultRole()}),
+ * а не захардкоджені в конструкторі: адмін, що змінив maxHp/inventorySlots
+ * у survivors.yml, мусить побачити ефект без перекомпіляції.
  */
 public class DefaultSurvivorRole extends SurvivorRole {
 
@@ -12,23 +20,19 @@ public class DefaultSurvivorRole extends SurvivorRole {
         super(
             /* id                        */ ID,
             /* displayName               */ "Виживий",
-            /* maxHp                     */ 100,
-            /* maxInventorySlots         */ 4,
-            /* flashlightCooldownTicks   */ 600 // 30с
+            /* maxHp                     */ ManiacConfigs.get(ConfigSchema.SURVIVOR_MAX_HP),
+            /* maxInventorySlots         */ ManiacConfigs.get(ConfigSchema.SURVIVOR_SLOTS),
+            /* flashlightCooldownTicks   */ ManiacConfigs.get(ConfigSchema.FLASHLIGHT_COOLDOWN_TICKS)
         );
     }
 
     @Override
     public float staminaDrainRate() {
-        // TODO: перенести реальне число зі схеми "При русі гравця чи
-        // стрибка тратиться стаміна" — точне число не було зафіксовано
-        // в v3 коді (система стаміни там взагалі відсутня, лише lives).
-        return 1.0f;
+        return (float) (double) ManiacConfigs.get(ConfigSchema.STAMINA_DRAIN_PER_TICK);
     }
 
     @Override
     public float staminaRegenRate() {
-        // TODO: реальне число регенерації стаміни в стані спокою
-        return 0.5f;
+        return (float) (double) ManiacConfigs.get(ConfigSchema.STAMINA_REGEN_PER_TICK);
     }
 }

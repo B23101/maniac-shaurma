@@ -1,0 +1,10 @@
+maxHp: 100
+inventorySlots: 4
+flashlightCooldownTicks: 600
+rescueTicks: 300
+rescueHelperBonus: 0.2
+staminaDrainPerTick: 0.008
+staminaRegenPerTick: 0.004
+fallKnockdownHeightBlocks: 4
+legBreakChance: 0.35
+heartbeatRangeBlocks: 12

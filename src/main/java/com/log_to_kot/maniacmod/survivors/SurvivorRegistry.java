@@ -7,27 +7,39 @@ import java.util.Map;
  * Реєстр усіх ролей виживого. Зараз лише DEFAULT — але коли
  * з'явиться друга роль (медик, розвідник тощо), додається сюди
  * так само, як маньяк чи пастка.
+ *
+ * ── Чому defaultRole() будує роль щоразу, а не кешує в static{} ──────
+ * DefaultSurvivorRole читає maxHp/inventorySlots/... з ManiacConfigs
+ * у своєму конструкторі. Якби реєстрація була одноразовою в static{}
+ * (як раніше), роль побудувалась би з тих значень, що діяли в момент
+ * ПЕРШОГО звернення до класу — а адмінська правка survivors.yml
+ * посеред сесії сервера ніколи не підхопилась би для наступного
+ * матчу, бо застарілий об'єкт роль лишався б у мапі назавжди. Це
+ * порушило б саме те правило ManiacConfigs, що гетер завжди читає
+ * актуальний снапшот (див. коментар класу ManiacConfigs).
  */
 public final class SurvivorRegistry {
 
-    private static final Map<String, SurvivorRole> BY_ID = new LinkedHashMap<>();
+    private static final Map<String, java.util.function.Supplier<SurvivorRole>> FACTORIES =
+        new LinkedHashMap<>();
 
     static {
-        register(new DefaultSurvivorRole());
+        register(DefaultSurvivorRole.ID, DefaultSurvivorRole::new);
     }
 
     private SurvivorRegistry() {}
 
-    public static void register(SurvivorRole role) {
-        BY_ID.put(role.id(), role);
+    /** Реєструє фабрику ролі за id — роль будується заново при кожному запиті. */
+    public static void register(String id, java.util.function.Supplier<SurvivorRole> factory) {
+        FACTORIES.put(id, factory);
     }
 
     public static SurvivorRole get(String id) {
-        SurvivorRole found = BY_ID.get(id);
-        if (found == null) {
+        var factory = FACTORIES.get(id);
+        if (factory == null) {
             throw new IllegalArgumentException("Невідома роль виживого: " + id);
         }
-        return found;
+        return factory.get();
     }
 
     /**
@@ -40,7 +52,12 @@ public final class SurvivorRegistry {
         return get(DefaultSurvivorRole.ID);
     }
 
+    /** Список id усіх зареєстрованих ролей — для команд/діагностики. */
     public static Map<String, SurvivorRole> all() {
-        return Map.copyOf(BY_ID);
+        Map<String, SurvivorRole> snapshot = new LinkedHashMap<>();
+        for (var entry : FACTORIES.entrySet()) {
+            snapshot.put(entry.getKey(), entry.getValue().get());
+        }
+        return Map.copyOf(snapshot);
     }
 }

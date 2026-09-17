@@ -6,6 +6,7 @@ import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.config.ConfigDiagnostics;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
+import com.log_to_kot.maniacmod.config.MapPointConfigs;
 import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
 import com.log_to_kot.maniacmod.maniacs.ManiacSelection;
 import com.log_to_kot.maniacmod.spawn.SpawnPlanner;
@@ -13,6 +14,7 @@ import com.log_to_kot.maniacmod.spawn.SpawnPoint;
 import com.log_to_kot.maniacmod.spawn.SpawnPointKind;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -102,6 +104,18 @@ public final class ManiacCommand {
                             StringArgumentType.getString(ctx, "owner"))))))
             .then(Commands.literal("list")
                 .executes(ctx -> listPoints(ctx.getSource())))
+            .then(Commands.literal("remove")
+                .then(Commands.argument("kind", StringArgumentType.word())
+                    .suggests((ctx, builder) -> {
+                        for (SpawnPointKind kind : SpawnPointKind.values()) {
+                            builder.suggest(kind.name().toLowerCase());
+                        }
+                        return builder.buildFuture();
+                    })
+                    .then(Commands.argument("index", IntegerArgumentType.integer(0))
+                        .executes(ctx -> removePoint(ctx.getSource(),
+                            StringArgumentType.getString(ctx, "kind"),
+                            IntegerArgumentType.getInteger(ctx, "index"))))))
             .then(Commands.literal("clear")
                 .executes(ctx -> clearPoints(ctx.getSource()))));
 
@@ -153,6 +167,9 @@ public final class ManiacCommand {
      */
     private static int reloadConfig(CommandSourceStack source) {
         ConfigDiagnostics diag = ManiacConfigs.reload("команда /maniac reload");
+        MapPointConfigs.reload();
+        MatchOrchestrator match = ManiacMod.match();
+        if (match != null) match.reloadConfiguredMap();
 
         if (diag.isEmpty()) {
             source.sendSuccess(() -> Component.translatable("maniacmod.command.reload_clean"), true);
@@ -218,6 +235,7 @@ public final class ManiacCommand {
         var pos = source.getPosition();
         float yaw = source.getRotation().y;
         match.setLobbySpawn(pos.x, pos.y, pos.z, yaw);
+        MapPointConfigs.writeLobby(pos.x, pos.y, pos.z, yaw);
 
         source.sendSuccess(() -> Component.translatable("maniacmod.command.lobby_set"), true);
         return 1;
@@ -243,8 +261,10 @@ public final class ManiacCommand {
         }
 
         var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
-        match.addSpawnPoint(
-            new SpawnPoint(pos, source.getRotation().y, kind, owner));
+        SpawnPoint point = new SpawnPoint(pos, source.getRotation().y, kind, owner);
+        match.addSpawnPoint(point);
+        MapPointConfigs.add(pointType(kind),
+            new MapPointConfigs.PointData(pos, source.getRotation().y, owner));
 
         source.sendSuccess(() -> Component.translatable("maniacmod.command.point_added",
             kind.name(), pos.toShortString()), true);
@@ -271,8 +291,38 @@ public final class ManiacCommand {
         if (match == null) return 0;
 
         match.clearMap();
+        MapPointConfigs.clearAll();
         source.sendSuccess(() -> Component.translatable("maniacmod.command.points_cleared"), true);
         return 1;
+    }
+
+    private static int removePoint(CommandSourceStack source, String rawKind, int index) {
+        SpawnPointKind kind;
+        try {
+            kind = SpawnPointKind.valueOf(rawKind.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            source.sendFailure(Component.translatable("maniacmod.command.unknown_point", rawKind));
+            return 0;
+        }
+        if (!MapPointConfigs.remove(pointType(kind), index)) {
+            source.sendFailure(Component.literal("Немає точки з індексом " + index + "."));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match != null) match.reloadConfiguredMap();
+        source.sendSuccess(() -> Component.literal("Точку " + kind.name()
+            + " #" + index + " видалено."), true);
+        return 1;
+    }
+
+    private static MapPointConfigs.Type pointType(SpawnPointKind kind) {
+        return switch (kind) {
+            case SURVIVOR -> MapPointConfigs.Type.SURVIVOR_SPAWNS;
+            case MANIAC -> MapPointConfigs.Type.MANIAC_SPAWNS;
+            case ITEM -> MapPointConfigs.Type.ITEM_POINTS;
+            case GENERATOR -> MapPointConfigs.Type.GENERATOR_POINTS;
+            case EXIT -> MapPointConfigs.Type.EXIT_POINTS;
+        };
     }
 
     // ── Допоміжне ────────────────────────────────────────────────────────

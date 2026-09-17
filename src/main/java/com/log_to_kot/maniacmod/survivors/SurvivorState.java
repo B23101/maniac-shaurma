@@ -17,6 +17,17 @@ package com.log_to_kot.maniacmod.survivors;
  *                 піднімається іншим гравцем (утримання ПКМ ~15с,
  *                 швидкість підняття залежить від кількості
  *                 гравців, що піднімають: x2/x3/x4 — не лінійно)
+ *   ESCAPED     — гравець вибрався з карти. Термінальний стан:
+ *                 ніхто з нього назад не переводить.
+ *   ELIMINATED  — гравець остаточно вибув з матчу. Термінальний
+ *                 стан: ніхто з нього назад не переводить.
+ *
+ * ESCAPED і ELIMINATED додані зараз лише як словник станів для
+ * roster/tab-екрану (потрібно мати, ЩО показати). Яка саме подія
+ * матчу переводить гравця в кожен із них — окрема, ще не написана
+ * логіка (див. EscapeZoneArchetype і повторний удар по UNCONSCIOUS
+ * відповідно); цей enum її не реалізує і нічого автоматично не
+ * викликає.
  *
  * v3-еквівалент: SurvivorData мав лише прапор `bound` (true/false) —
  * ця машина станів набагато детальніша і замінює його.
@@ -26,7 +37,9 @@ public enum SurvivorState {
     HEALTHY,
     BROKEN_LEG,
     CRAWLING,
-    UNCONSCIOUS;
+    UNCONSCIOUS,
+    ESCAPED,
+    ELIMINATED;
 
     /** Чи може гравець у цьому стані бігати/стрибати нормально. */
     public boolean canSprint() {
@@ -41,5 +54,10 @@ public enum SurvivorState {
     /** Чи потребує допомоги іншого гравця, щоб вийти з цього стану. */
     public boolean requiresRescue() {
         return this == UNCONSCIOUS;
+    }
+
+    /** Термінальний стан матчу для цього гравця — втік або вибув, назад не повертається. */
+    public boolean isTerminal() {
+        return this == ESCAPED || this == ELIMINATED;
     }
 }

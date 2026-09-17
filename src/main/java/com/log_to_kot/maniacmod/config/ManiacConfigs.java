@@ -75,8 +75,8 @@ public final class ManiacConfigs {
     /** Завжди валідний: до init() це чисті дефолти, не null. */
     private static volatile Snapshot snapshot = Snapshot.defaults();
 
-    /** mtime файлу на момент останнього читання — база для автопідхоплення. */
-    private static volatile long lastSeenMtime = -1;
+    /** mtime кожного окремого конфігу — база для автопідхоплення. */
+    private static final Map<String, Long> lastSeenMtimes = new HashMap<>();
 
     private ManiacConfigs() {}
 
@@ -97,6 +97,11 @@ public final class ManiacConfigs {
         if (reloadBus == null) throw new IllegalStateException(
             "ConfigReloadBus недоступний до ManiacConfigs.init(...).");
         return reloadBus;
+    }
+
+    public static Path namespaceDirectory() {
+        if (tree == null) throw new IllegalStateException("Конфіг ще не ініціалізований.");
+        return tree.namespaceDir();
     }
 
     // ── Читання ──────────────────────────────────────────────────────────
@@ -133,16 +138,18 @@ public final class ManiacConfigs {
         ConfigDiagnostics diag = new ConfigDiagnostics();
         if (tree == null) return diag;
 
-        Path file = configFile();
-        Map<String, Object> jarDefaults = readJarDefaults();
+        Map<String, Map<String, Object>> roots = new LinkedHashMap<>();
+        for (ConfigBlock block : ConfigSchema.BLOCKS) {
+            Path file = configFile(block);
+            Map<String, Object> defaults = readJarDefaults(block);
+            heal(file, defaults, diag);
+            roots.put(block.id(), readSection(file, block.id()));
+            lastSeenMtimes.put(block.fileName(), mtimeOf(file));
+        }
 
-        heal(file, jarDefaults, diag);
-
-        Map<String, Object> root = readDisk(file);
-        Snapshot next = resolve(root, diag);
+        Snapshot next = resolve(roots, diag);
 
         snapshot = next;
-        lastSeenMtime = mtimeOf(file);
 
         report(reason, diag);
 
@@ -159,9 +166,13 @@ public final class ManiacConfigs {
      */
     public static void tickWatcher() {
         if (tree == null) return;
-        long mtime = mtimeOf(configFile());
-        if (mtime < 0 || mtime == lastSeenMtime) return;
-        reload("файл змінено на диску");
+        for (ConfigBlock block : ConfigSchema.BLOCKS) {
+            long mtime = mtimeOf(configFile(block));
+            if (mtime != lastSeenMtimes.getOrDefault(block.fileName(), -1L)) {
+                reload("файл " + block.fileName() + " змінено на диску");
+                return;
+            }
+        }
     }
 
     // ── Лікування ────────────────────────────────────────────────────────
@@ -173,51 +184,27 @@ public final class ManiacConfigs {
      * інакше з файлу зникли б коментарі адміна й порядок його правок.
      * Новий блок просто додається в кінець.
      */
-    private static void heal(Path file, Map<String, Object> jarDefaults, ConfigDiagnostics diag) {
-        Map<String, Object> onDisk = readDisk(file);
-        StringBuilder appended = new StringBuilder();
-
-        for (ConfigBlock block : ConfigSchema.BLOCKS) {
-            if (onDisk.containsKey(block.id())) continue; // блок є — всередину не лізем
-
-            Object defaults = jarDefaults.get(block.id());
-            if (defaults == null) {
-                diag.blockMissingEverywhere(block.id());
-                continue;
-            }
-
-            appended.append('\n')
-                    .append("# ").append(block.comment()).append('\n')
-                    .append(YAML.dump(Map.of(block.id(), defaults)));
-            diag.healedBlock(block.id());
-        }
-
-        if (appended.length() == 0) return;
-
+    private static void heal(Path file, Map<String, Object> defaults, ConfigDiagnostics diag) {
+        if (Files.exists(file)) return;
         try {
             Files.createDirectories(file.getParent());
-            if (Files.exists(file)) {
-                String existing = Files.readString(file, StandardCharsets.UTF_8);
-                Files.writeString(file, existing + appended, StandardCharsets.UTF_8);
-            } else {
-                Files.writeString(file, appended.toString().stripLeading(), StandardCharsets.UTF_8);
-            }
+            Files.writeString(file, YAML.dump(defaults), StandardCharsets.UTF_8);
             LOADER.invalidate(file);
+            diag.healedBlock(file.getFileName().toString());
         } catch (IOException e) {
-            ManiacMod.LOGGER.warn("[config] не вдалось дописати відсутні блоки: {}", e.getMessage());
+            ManiacMod.LOGGER.warn("[config] не вдалось створити {}: {}", file.getFileName(), e.getMessage());
         }
     }
 
     // ── Розбір ───────────────────────────────────────────────────────────
 
-    private static Snapshot resolve(Map<String, Object> root, ConfigDiagnostics diag) {
+    private static Snapshot resolve(Map<String, Map<String, Object>> roots,
+                                    ConfigDiagnostics diag) {
         Map<String, Object> values = new HashMap<>();
         Map<String, Object> dataBlocks = new LinkedHashMap<>();
 
         for (ConfigBlock block : ConfigSchema.BLOCKS) {
-            Object rawBlock = root.get(block.id());
-            Map<String, Object> section = rawBlock instanceof Map<?, ?> m
-                ? castMap(m) : Collections.emptyMap();
+            Map<String, Object> section = roots.getOrDefault(block.id(), Collections.emptyMap());
 
             if (block.kind() == ConfigBlock.Kind.DATA) {
                 dataBlocks.put(block.id(), section);
@@ -236,11 +223,6 @@ public final class ManiacConfigs {
             }
         }
 
-        // Блок у файлі, якого немає в схемі.
-        for (String present : root.keySet()) {
-            if (ConfigSchema.blockById(present) == null) diag.unknownBlock(present);
-        }
-
         return new Snapshot(values, dataBlocks);
     }
 
@@ -248,6 +230,10 @@ public final class ManiacConfigs {
 
     private static Path configFile() {
         return tree.namespaceDir().resolve(ConfigSchema.FILE_NAME);
+    }
+
+    private static Path configFile(ConfigBlock block) {
+        return tree.namespaceDir().resolve(block.fileName());
     }
 
     private static Map<String, Object> readDisk(Path file) {
@@ -264,6 +250,12 @@ public final class ManiacConfigs {
         }
     }
 
+    private static Map<String, Object> readSection(Path file, String blockId) {
+        Map<String, Object> root = readDisk(file);
+        Object legacy = root.get(blockId);
+        return legacy instanceof Map<?, ?> map ? castMap(map) : root;
+    }
+
     private static Map<String, Object> readJarDefaults() {
         try (InputStream in = ManiacMod.class.getResourceAsStream(ConfigSchema.DEFAULT_RESOURCE)) {
             if (in == null) return Map.of();
@@ -271,6 +263,18 @@ public final class ManiacConfigs {
             return root instanceof Map<?, ?> map ? castMap(map) : Map.of();
         } catch (IOException | RuntimeException e) {
             ManiacMod.LOGGER.warn("[config] дефолт у jar недоступний: {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private static Map<String, Object> readJarDefaults(ConfigBlock block) {
+        String resource = "/config/maniacmod/" + block.fileName();
+        try (InputStream in = ManiacMod.class.getResourceAsStream(resource)) {
+            if (in == null) return Map.of();
+            Object root = YAML.load(in);
+            return root instanceof Map<?, ?> map ? castMap(map) : Map.of();
+        } catch (IOException | RuntimeException e) {
+            ManiacMod.LOGGER.warn("[config] дефолт {} недоступний: {}", block.fileName(), e.getMessage());
             return Map.of();
         }
     }

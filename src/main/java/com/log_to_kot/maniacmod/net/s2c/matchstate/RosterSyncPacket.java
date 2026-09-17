@@ -20,16 +20,21 @@ import java.util.UUID;
  * власного пакета.
  *
  * ── Правило, яке цей пакет виконує технічно, а не лише текстом ──────
- * Тут НЕМАЄ hp/stamina/heartbeat. Ці числа для ВЛАСНИКА вже летять
- * через {@link com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket}.
- * Роль власника — через {@link RoleSyncPacket}. RosterEntry несе лише
- * посилання (UUID → роль/стан), а не дублікат чисел, які вже десь
- * летять. Якщо колись знадобиться додати число в RosterEntry — це
- * свідомий крок, а не "про всяк випадок", і супроводжується
- * коментарем "чому тут, а не у vitals" (див. roster/README.md).
+ * Тут НЕМАЄ stamina/heartbeat — ці числа мають сенс лише для
+ * ВЛАСНИКА і вже летять через
+ * {@link com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket}.
+ * Роль власника — через {@link RoleSyncPacket}. Дублювати їх тут не
+ * можна: два пакети з однаковими числами — два джерела правди.
  *
- * Надсилається на ПОДІЮ (хтось приєднався/вибув/змінив стан), а не
- * щотік — та сама логіка, що вже є в SurvivorVitalsPacket.
+ * hp/maxHp — виняток, доданий свідомо (не "про всяк випадок"): це
+ * єдине число, яке команді треба бачити ПРО ІНШИХ (tab-екран:
+ * "живі виживші бачать хп кожного тіммейта"), а vitals у принципі не
+ * може його нести — vitals показує лише показники власного гравця,
+ * а не чужі. Тому це не дублікат, а нові дані для нового глядача
+ * (командний огляд, а не власний HUD).
+ *
+ * Надсилається на ПОДІЮ (хтось приєднався/вибув/змінив стан чи хп), а
+ * не щотік — та сама логіка, що вже є в SurvivorVitalsPacket.
  *
  * @param entries усі гравці матчу станом на момент відправки
  */
@@ -40,9 +45,12 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
      * @param displayName ім'я для відображення в таб/скорборді
      * @param role        роль гравця (та сама емуляція, що й RoleSyncPacket.Role)
      * @param state       стан виживого; для маньяка/глядача — HEALTHY (не читається)
+     * @param hp          поточне хп; для маньяка/глядача — 0 (не читається)
+     * @param maxHp       максимум хп; для маньяка/глядача — 0 (не читається)
      */
     public record RosterEntry(UUID playerId, String displayName,
-                               RoleSyncPacket.Role role, SurvivorState state) {}
+                               RoleSyncPacket.Role role, SurvivorState state,
+                               int hp, int maxHp) {}
 
     public RosterSyncPacket(FriendlyByteBuf buf) {
         this(readEntries(buf));
@@ -56,7 +64,9 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
                 buf.readUUID(),
                 buf.readUtf(),
                 buf.readEnum(RoleSyncPacket.Role.class),
-                buf.readEnum(SurvivorState.class)));
+                buf.readEnum(SurvivorState.class),
+                buf.readVarInt(),
+                buf.readVarInt()));
         }
         return list;
     }
@@ -69,6 +79,8 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
             buf.writeUtf(e.displayName());
             buf.writeEnum(e.role());
             buf.writeEnum(e.state());
+            buf.writeVarInt(e.hp());
+            buf.writeVarInt(e.maxHp());
         }
     }
 

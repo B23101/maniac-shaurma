@@ -103,8 +103,7 @@ public final class ServerPacketHandler {
         // гаситься спам пробілом.
         if (match.survivorStateOf(player.getUUID()) != SurvivorState.CRAWLING) return;
 
-        // TODO(міграція survivors): накопичити натискання, підвести
-        // гравця й вирішити, чи ламається нога.
+        match.survivors().onStandUpAttempt(player);
     }
 
     public static void onRescueHold(ServerPlayer player, boolean holding) {
@@ -113,8 +112,6 @@ public final class ServerPacketHandler {
         if (!match.isSurvivor(player.getUUID())) return;
         if (!match.phases().allows(PhaseRule.RESCUE)) return;
 
-        // TODO(міграція survivors): почати/зупинити сесію підняття.
-        // Прогрес рахує сервер; кілька рятівників пришвидшують
-        // нелінійно (≈×1.2 за другого).
+        match.survivors().onRescueHold(player, holding);
     }
 }

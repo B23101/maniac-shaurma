@@ -34,32 +34,40 @@ public final class ConfigBlock {
     }
 
     private final String id;
+    private final String fileName;
     private final Kind kind;
     private final List<ConfigKey<?>> keys;
     private final String comment;
 
-    private ConfigBlock(String id, Kind kind, List<ConfigKey<?>> keys, String comment) {
+    private ConfigBlock(String id, String fileName, Kind kind, List<ConfigKey<?>> keys, String comment) {
         this.id = id;
+        this.fileName = fileName;
         this.kind = kind;
         this.keys = List.copyOf(keys);
         this.comment = comment;
     }
 
     public static ConfigBlock settings(String id, String comment, ConfigKey<?>... keys) {
+        return settings(id, id + ".yml", comment, keys);
+    }
+
+    public static ConfigBlock settings(String id, String fileName, String comment,
+                                       ConfigKey<?>... keys) {
         for (ConfigKey<?> key : keys) {
             if (!key.block().equals(id)) {
                 throw new IllegalArgumentException(
                     "Ключ " + key.path() + " оголошений у блоці " + id + " — шляхи розійшлися.");
             }
         }
-        return new ConfigBlock(id, Kind.SETTINGS, List.of(keys), comment);
+        return new ConfigBlock(id, fileName, Kind.SETTINGS, List.of(keys), comment);
     }
 
     public static ConfigBlock data(String id, String comment) {
-        return new ConfigBlock(id, Kind.DATA, List.of(), comment);
+        return new ConfigBlock(id, id + ".yml", Kind.DATA, List.of(), comment);
     }
 
     public String id()                 { return id; }
+    public String fileName()           { return fileName; }
     public Kind kind()                 { return kind; }
     public List<ConfigKey<?>> keys()   { return keys; }
     public String comment()            { return comment; }

@@ -1,0 +1,10 @@
+map:
+  sizeBlocks: 300
+  minSurvivorToManiacBlocks: 60
+  minSurvivorToPeerBlocks: 20
+  itemPointEngageRatio: 0.6
+  relaxationStep: 0.85
+  maxRelaxationPasses: 6
+loot:
+  pickupRangeBlocks: 2.0
+  fallMaxTicks: 200

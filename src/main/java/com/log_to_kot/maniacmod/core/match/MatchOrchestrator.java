@@ -2,11 +2,13 @@ package com.log_to_kot.maniacmod.core.match;
 
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
+import com.log_to_kot.maniacmod.config.MapPointConfigs;
 import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseManager;
 import com.log_to_kot.maniacmod.core.phase.Phases;
 import com.log_to_kot.maniacmod.map.GeneratorModule;
+import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.maniacs.ManiacCombatModule;
 import com.log_to_kot.maniacmod.spawn.SpawnPlanner;
@@ -74,6 +76,24 @@ public final class MatchOrchestrator {
     /** Удар маньяка. Тримається полем, бо хук AttackEntityEvent кличе його напряму. */
     private final ManiacCombatModule combat = new ManiacCombatModule(() -> this);
 
+    /**
+     * Хп, стаміна, падіння, підняття непритомних, HUD-показники.
+     * Тримається полем (а не лише зареєстрована через registerModule),
+     * бо LivingFallEvent-хук у ServerHooks і мережеві обробники
+     * (onStandUpAttempt, onRescueHold) звертаються до нього напряму —
+     * той самий патерн, що generators/combat вище.
+     */
+    private final com.log_to_kot.maniacmod.survivors.SurvivorModule survivors =
+        new com.log_to_kot.maniacmod.survivors.SurvivorModule(() -> this);
+
+    /**
+     * Слоти інвентаря обох ролей і лобі. Координаційна річ між
+     * survivors/ і maniacs/ (обидва мають свою кількість слотів), тому
+     * живе тут поруч з PhaseNetworkSync/MatchStartCoordinator, а не в
+     * одному з предметних пакетів.
+     */
+    private final InventoryAllocationModule inventoryAllocation = new InventoryAllocationModule(() -> this);
+
     public MatchOrchestrator() {
         Phases.bind(phases);
         // Синхронізація фази з клієнтами — теж звичайний модуль, а не
@@ -82,8 +102,10 @@ public final class MatchOrchestrator {
         // почнуть слати свої пакети для цієї фази.
         phases.register(new PhaseNetworkSync());
         phases.register(new MatchStartCoordinator());
+        phases.register(inventoryAllocation);
         phases.register(generators);
         phases.register(combat);
+        phases.register(survivors);
     }
 
     /** Модуль генераторів — для GeneratorBlock і ServerPacketHandler. */
@@ -94,6 +116,16 @@ public final class MatchOrchestrator {
     /** Модуль удару — для хука AttackEntityEvent. */
     public ManiacCombatModule combat() {
         return combat;
+    }
+
+    /** Модуль хп/стаміни/падіння/підняття — для ServerHooks і ServerPacketHandler. */
+    public com.log_to_kot.maniacmod.survivors.SurvivorModule survivors() {
+        return survivors;
+    }
+
+    /** Модуль слотів інвентаря — для ServerHooks (реконект). */
+    public InventoryAllocationModule inventoryAllocation() {
+        return inventoryAllocation;
     }
 
     /** Модуль, що розсилає фазу клієнтам. Нічого більше не робить. */
@@ -131,6 +163,30 @@ public final class MatchOrchestrator {
 
     public void setLobbySpawn(double x, double y, double z, float yaw) {
         this.lobbySpawn = new LobbySpawnPoint(x, y, z, yaw);
+    }
+
+    /** Loads persistent map markup into the lobby context. */
+    public void reloadConfiguredMap() {
+        MapPointConfigs.Snapshot configured = MapPointConfigs.snapshot();
+        setLobbySpawn(configured.lobbyX(), configured.lobbyY(),
+            configured.lobbyZ(), configured.lobbyYaw());
+        if (!phases.is(GamePhase.LOBBY)) return;
+
+        context.spawnPoints().clear();
+        context.map().clear();
+        addConfiguredPoints(SpawnPointKind.SURVIVOR, configured.survivorSpawns());
+        addConfiguredPoints(SpawnPointKind.MANIAC, configured.maniacSpawns());
+        addConfiguredPoints(SpawnPointKind.ITEM, configured.itemPoints());
+        addConfiguredPoints(SpawnPointKind.GENERATOR, configured.generatorPoints());
+        addConfiguredPoints(SpawnPointKind.EXIT, configured.exitPoints());
+    }
+
+    private void addConfiguredPoints(SpawnPointKind kind,
+                                     List<MapPointConfigs.PointData> points) {
+        for (MapPointConfigs.PointData point : points) {
+            context.addSpawnPoint(new com.log_to_kot.maniacmod.spawn.SpawnPoint(
+                point.pos(), point.yaw(), kind, point.ownerId()));
+        }
     }
 
     // ── Доступ ───────────────────────────────────────────────────────────
@@ -175,6 +231,25 @@ public final class MatchOrchestrator {
     }
 
     /**
+     * Змінює стан виживого. Викликає лише {@code SurvivorModule} —
+     * інші модулі не мають підстав напряму переставляти машину станів
+     * гравця (падіння/нога/непритомність — усе рахує один модуль).
+     */
+    public void setSurvivorState(UUID playerId, com.log_to_kot.maniacmod.survivors.SurvivorState state) {
+        context.setSurvivorState(playerId, state);
+    }
+
+    /** Поточне хп. -1, якщо гравець не виживий цього матчу. */
+    public int hpOf(UUID playerId) {
+        return context.hpOf(playerId);
+    }
+
+    /** Максимум хп за роллю. -1, якщо гравець не виживий. */
+    public int maxHpOf(UUID playerId) {
+        return context.maxHpOf(playerId);
+    }
+
+    /**
      * Лікує виживого. Повертає, скільки хп реально відновлено — 0,
      * якщо гравець не виживий або вже мав повне хп. Викликач (предмет)
      * саме за цим числом вирішує, чи витрачати себе.
@@ -191,6 +266,11 @@ public final class MatchOrchestrator {
     /** Скільки виживих ще в матчі (не рахує втеклих і вибулих). */
     public int aliveSurvivorCount() {
         return context.aliveSurvivorCount();
+    }
+
+    /** UUID усіх виживих цього матчу — лише для читання. */
+    public List<UUID> survivorIds() {
+        return context.survivorIds();
     }
 
     /** Хто вже втік цього матчу. */
@@ -254,6 +334,16 @@ public final class MatchOrchestrator {
     /** Сервер потрібен для аварійного очищення при RESET і shutdown. */
     public void attachServer(MinecraftServer server) {
         this.server = server;
+    }
+
+    /**
+     * Гравець за UUID серед реально онлайн зараз — null, якщо вийшов
+     * або сервер ще не прикріплений. Для модулів, яким потрібен
+     * ServerPlayer поза тіковим списком players (наприклад rescue-сесія,
+     * що завершується не в той самий тік, коли почалась).
+     */
+    public ServerPlayer onlinePlayer(UUID id) {
+        return server == null ? null : server.getPlayerList().getPlayer(id);
     }
 
     /** Реєструє будь-яку тимчасову сутність, створену ігровим модулем. */
@@ -484,10 +574,16 @@ public final class MatchOrchestrator {
     private void prepareSpawnPlan() {
         if (plannerReady) return;
 
+        // numManiacs = 1: зараз матч підтримує рівно одного маньяка
+        // (context.maniacUUID() — скаляр). Коли з'явиться підтримка
+        // двох маньяків одночасно, тут достатньо підставити реальну
+        // кількість — формула бонусних генераторів у SpawnPlanner уже
+        // готова, змінювати саму логіку розкидання не треба.
         pendingSpawnPlan = spawnPlanner.plan(
             context.spawnPoints(),
             context.maniacArchetype().id(),
-            context.survivorIds());
+            context.survivorIds(),
+            1);
         plannerReady = true;
     }
 
@@ -510,6 +606,10 @@ public final class MatchOrchestrator {
         }
 
         for (var point : pendingSpawnPlan.engagedItemPoints()) point.engage();
+        context.map().clear();
+        for (var point : pendingSpawnPlan.generatorPoints()) {
+            context.map().addGenerator(new GeneratorPoi(point.pos()));
+        }
         return true;
     }
 

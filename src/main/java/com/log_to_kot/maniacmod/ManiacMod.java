@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod;
 
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
+import com.log_to_kot.maniacmod.config.MapPointConfigs;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
 import com.log_to_kot.maniacmod.core.match.MatchBlockRegistry;
@@ -132,7 +133,14 @@ public class ManiacMod {
             // Слоти інвентаря: 4 у виживого, 0 у маньяка. Саме це
             // звільняє клавіші 1-4 маньяку і 5 виживому.
             .withInventorySlotAllocation()
-            .withStamina()
+            // Дефолт вимкнений (active=false): без ролі (лобі, глядач)
+            // стаміна нікому не потрібна взагалі. SurvivorModule
+            // вмикає її явно (StaminaService.setRules з active=true
+            // і реальними числами з survivors.yml) лише виживим на
+            // ROLE_REVEAL і вимикає назад на виході з ігрової фази.
+            .withStamina(dev.shaurmalib.forge.stamina.StaminaRules.builder()
+                .active(false)
+                .build())
             // Спостереження за живим гравцем після вибуття.
             .withSpectator()
             // Пози повзання й непритомності.
@@ -154,6 +162,8 @@ public class ManiacMod {
         // Конфіг піднімається одразу після lib: усе, що йде нижче,
         // вже читає справжні значення, а не дефолти.
         ManiacConfigs.init(lib.configModule());
+        MapPointConfigs.init(ManiacConfigs.namespaceDirectory());
+        match.reloadConfiguredMap();
 
         // Звуки описуються один раз — далі будь-де досить SoundCenter.play(...).
         ModSoundCues.register();
