@@ -72,6 +72,14 @@ public final class ModSoundCues {
         // ── Напруга ──────────────────────────────────────────────────────
         // Маньяк рухається, тому звук має слідувати за джерелом.
         cue(ModSounds.MANIAC_NEARBY, SoundStage.POSITIONAL_MOVING, AMBIENCE, 1.0f);
+
+        // Важке дихання без стаміни — звук ТІЛА гравця, тому позиційний
+        // (ExhaustedBreathClientHooks кличе SoundCenter.playAt з координатами
+        // mc.player, оновленими щовиклик) — на відміну від COUNTDOWN_BEEP,
+        // що лишається суто 2D-диктором. AMBIENCE, не WORLD: це особисте
+        // відчуття гравця (напруга/втома), а не подія світу на кшталт
+        // генератора чи пастки.
+        cue(ModSounds.EXHAUSTED_BREATH, SoundStage.POSITIONAL_FIXED, AMBIENCE, 1.0f);
     }
 
     private static void cue(RegistryObject<SoundEvent> sound, SoundStage stage,

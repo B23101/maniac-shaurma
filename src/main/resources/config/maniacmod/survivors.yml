@@ -6,5 +6,9 @@ rescueHelperBonus: 0.2
 staminaDrainPerTick: 0.008
 staminaRegenPerTick: 0.004
 fallKnockdownHeightBlocks: 4
-legBreakChance: 0.35
+legBreakMinHeightBlocks: 6
+legBreakChanceAtMinHeight: 0.2
+legBreakMaxHeightBlocks: 10
+legBreakChanceAtMaxHeight: 0.9
+standUpPresses: 10
 heartbeatRangeBlocks: 12

@@ -84,8 +84,16 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
         style.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, panelHeight, progress);
 
         int centerX = panelX + PANEL_WIDTH / 2;
+        // Заголовок — назва режиму мода ("МАНЬЯК"), не фаза матчу:
+        // у snipers_shaurma кожен окремий render*Tab-метод малював саме
+        // назву свого режиму (SC/SD/SCN) у titleKey, а "Powered by
+        // SHAURMA" (gui.snipers_shaurma.brand.sub — та сама фраза, той
+        // самий бренд-підпис) завжди йшов другим рядком як subtitleKey.
+        // Тут це було не перенесено: title показував лише "Лобі"/"Матч"
+        // (без назви режиму), а subtitleKey передавався як null — тому
+        // ні назва режиму, ні бренд-підпис узагалі не малювались.
         style.drawHeader(graphics, Minecraft.getInstance().font, centerX, panelY,
-            progress, titleKeyFor(ClientMatchState.phase()), null);
+            progress, "maniacmod.tab.title.mode", "maniacmod.tab.brand");
 
         int columnsY = panelY + TabListStyle.TITLE_H;
         int rowX = panelX + (PANEL_WIDTH - ROW_WIDTH) / 2;
@@ -155,10 +163,6 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
     }
 
     // ── Текст і колір ────────────────────────────────────────────────────
-
-    private String titleKeyFor(GamePhase phase) {
-        return phase == GamePhase.LOBBY ? "maniacmod.tab.title.lobby" : "maniacmod.tab.title.match";
-    }
 
     private int nameColor(RosterSyncPacket.RosterEntry e) {
         return switch (e.role()) {

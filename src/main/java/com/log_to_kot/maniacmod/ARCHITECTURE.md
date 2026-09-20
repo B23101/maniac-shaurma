@@ -52,6 +52,11 @@ v4 будує 6 незалежних модулів. Кожен має:
 - `network/`, `client/`, `sound/`, `blocks/`, `entity/ManiacEntity.java`,
   `entity/CorpseEntity.java`, `cinematic/`, `mixin/` — інфраструктура,
   не потребує реорганізації за цим запитом.
+- `loot/` — окремий модуль, доданий після цього кроку: предмети на
+  землі як власна сутність (`entity/GroundItemEntity`), а не ванільний
+  `ItemEntity`. `LootModule` розкладає `LootTables` по ITEM-точках
+  плану так само, як `map/zones/GeneratorPoi` — генератори; деталі й
+  межі — у `loot/README.md`.
 - shaurma-lib інтеграція (config/lifecycle/lobby/teleport/overlays) —
   вже виконана окремим кроком раніше, тут не дублюється.
 

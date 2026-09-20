@@ -18,10 +18,16 @@ import net.minecraft.network.FriendlyByteBuf;
  *
  * @param visible      false = сховати бар (гравець відпустив ПКМ)
  * @param stage        0 = ремонт, 1 = бензин
- * @param stagePercent прогрес поточної міні-гри / заливу, 0–100
- * @param minigamesDone скільки міні-ігор пройдено
- * @param minigamesTotal скільки треба всього
- * @param fuelPercent  залито бензину, 0–200
+ * @param stagePercent прогрес ПОТОЧНОЇ стадії, 0–100, нормалізований
+ *                     сервером: для REPAIR — відсоток ремонту, для FUEL —
+ *                     частка від {@code fuelRequiredPercent}. Бар клієнта
+ *                     малює саме його й нічого не ділить сам.
+ * @param minigamesDone скільки СТАДІЙ уже пройдено (0 під час ремонту,
+ *                      1 під час заливу) — поле зберегло стару назву заради
+ *                      сумісності формату пакета
+ * @param minigamesTotal скільки стадій усього (2); 0 ховає підпис «етапи»
+ * @param fuelPercent  залито бензину в сирих відсотках (0…fuelRequiredPercent) —
+ *                     лише для підпису, не для довжини бара
  */
 public record GeneratorProgressPacket(boolean visible, int stage, int stagePercent,
                                        int minigamesDone, int minigamesTotal,

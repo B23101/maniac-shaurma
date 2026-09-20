@@ -8,12 +8,38 @@ import net.minecraft.core.BlockPos;
  * Генератор. v3-еквівалент: game/GeneratorState.java, але модель
  * складніша — зі схеми "Генератори" генератор проходить ДВІ стадії:
  *
- *   Стадія 1 — REPAIR: лагодження. Складається з міні-ігор.
- *              Провалена міні-гра скидає прогрес ПОТОЧНОЇ міні-гри,
- *              але вже пройдені зберігаються (у v3 зрив скидав
- *              тільки поточний етап — поведінка збігається).
- *   Стадія 2 — FUEL: залив бензину. Треба залити 200% запасу,
- *              одна каністра дає 100%.
+ *   Стадія 1 — REPAIR: лагодження. Пряме утримання ПКМ дає прогрес
+ *              0-100% (див. {@link #addRepairProgress}). Відпустив —
+ *              прогрес НЕ скидається, просто чекає, поки продовжать.
+ *
+ *              Поверх цього прогресу час від часу (шанс на тік, окремо
+ *              для кожного гравця, що зараз лагодить) на КОНКРЕТНОГО
+ *              гравця випадає одна з двох міні-ігор —
+ *              {@link com.log_to_kot.maniacmod.map.minigame.RepairMinigameType#WIRES}
+ *              ("з'єднай кольорові дроти за 10 сек") або
+ *              {@link com.log_to_kot.maniacmod.map.minigame.RepairMinigameType#TARGET}
+ *              ("влуч у ціль повзунком, що бігає, 3 влучення без жодного
+ *              промаху"). Поки цей гравець не завершить міні-гру, ЙОГО
+ *              особистий внесок у прогрес призупинений — інші гравці,
+ *              що лагодять той самий генератор, тим часом продовжують
+ *              нормально. Провал будь-якої з двох ігор — це ВИБУХ
+ *              генератора (не знищення сутності): -10% (за
+ *              замовчуванням) від вже накопиченого СПІЛЬНОГО
+ *              REPAIR-прогресу, партикли вибуху й вогню на самому
+ *              генераторі та червона підсвітка на 5 секунд, яку
+ *              бачать УСІ гравці, включно з маньяком.
+ *              Бензин (FUEL) вибух не чіпає взагалі.
+ *              {@link #explode(int)} — єдина точка входу для обох
+ *              міні-ігор.
+ *   Стадія 2 — FUEL: залив бензину. Треба залити FUEL_REQUIRED_PERCENT
+ *              (за дизайном 200%) запасу. Бензин береться із заряду
+ *              каністри в руці гравця, 1 до 1: скільки відсотків
+ *              додалось генератору, стільки ж списалось із каністри
+ *              (див. {@code FuelCanisterItem} і
+ *              {@code GeneratorModule.tickFuel}). Каністра постійна й має
+ *              власний заряд 0-100%, тож скільки їх знадобиться —
+ *              залежить лише від заряду, що є в гравців; ця модель про
+ *              розмір каністри нічого не знає й знати не повинна.
  *
  * Генератор вважається завершеним лише після обох стадій.
  *
@@ -33,8 +59,19 @@ public class GeneratorPoi extends PointOfInterestArchetype {
 
     private Stage stage = Stage.REPAIR;
 
-    /** Скільки міні-ігор ремонту вже пройдено. */
-    private int minigamesPassed = 0;
+    /**
+     * Прогрес лагодження у ТІКАХ утримання (0 … {@link #repairTicksRequired()}).
+     *
+     * ── Чому тіки, а не цілі відсотки ─────────────────────────────
+     * Раніше прогрес був цілим відсотком, а швидкість рахувалась як
+     * {@code max(1, ceil(100 / (сек·20)))}. Для будь-яких налаштувань
+     * від 5 с і вище це давало 1%/тік, тобто рівно 100 тіків (5 с)
+     * незалежно від {@code repairSecondsPerStage}: 90 с у конфігу
+     * ніколи не діяли. Тік — найменша одиниця часу, яку взагалі можна
+     * «додати», тож облік у тіках точний за будь-якого значення, а
+     * відсоток лише виводиться ({@link #repairPercent()}).
+     */
+    private int repairTicks = 0;
 
     /** Залитий бензин у відсотках (0 … FUEL_REQUIRED_PERCENT). */
     private int fuelPercent = 0;
@@ -50,8 +87,10 @@ public class GeneratorPoi extends PointOfInterestArchetype {
 
     @Override
     protected int ticksNeeded() {
-        return ManiacConfigs.get(ConfigSchema.MINIGAMES_PER_GENERATOR)
-             * ManiacConfigs.get(ConfigSchema.MINIGAME_TICKS);
+        // Лишається для сумісності з PointOfInterestArchetype (ExitPoi
+        // теж читає ticksNeeded через прогрес-формулу) — GeneratorPoi
+        // рахує власний прогрес у repairTicks і цю формулу не використовує.
+        return 100;
     }
 
     /** Скільки відсотків треба залити. Читається з конфігу щоразу. */
@@ -62,39 +101,88 @@ public class GeneratorPoi extends PointOfInterestArchetype {
     // ── Стадії ───────────────────────────────────────────────────────────
 
     public Stage stage()                { return stage; }
-    public int minigamesPassed()        { return minigamesPassed; }
+    /** Прогрес лагодження, 0-100 (виводиться з тіків, округлення вниз). */
+    public int repairPercent() {
+        return (int) Math.min(100L, (long) repairTicks * 100L / repairTicksRequired());
+    }
     public int fuelPercent()            { return fuelPercent; }
     public VisualState visualState()    { return visualState; }
 
-    /** Успішно пройдена міні-гра ремонту. */
-    public void passMinigame() {
+    /**
+     * Скільки тіків суцільного утримання потрібно, щоб пройти REPAIR
+     * з 0% до 100%. Джерело правди — {@code repairSecondsPerStage}.
+     */
+    public static int repairTicksRequired() {
+        return Math.max(1, ManiacConfigs.get(ConfigSchema.REPAIR_SECONDS_PER_STAGE) * 20);
+    }
+
+    /**
+     * Один тік утримання Shift+ПКМ під час лагодження. Прогрес іде
+     * ЛИШЕ поки гравець тримає кнопку; відпустив — не скидається
+     * (лагодження, на відміну від міні-гри, не карає за паузу).
+     *
+     * @param ticks скільки тіків додати. Зараз завжди 1; параметр
+     *              лишається, щоб бонуси інструментів (викрутка)
+     *              могли множити внесок, не змінюючи цю модель.
+     */
+    public void addRepairProgress(int ticks) {
         if (stage != Stage.REPAIR) return;
-        minigamesPassed++;
-        visualState = VisualState.IN_PROGRESS;
-        if (minigamesPassed >= ManiacConfigs.get(ConfigSchema.MINIGAMES_PER_GENERATOR)) {
+        repairTicks = Math.min(repairTicksRequired(), repairTicks + Math.max(0, ticks));
+        // Червоний стан вибуху не затираємо, поки він триває: інші гравці
+        // можуть далі лагодити, і без цього FAILED зникав би за один тік.
+        if (failedFlashTicks == 0) visualState = VisualState.IN_PROGRESS;
+        if (repairTicks >= repairTicksRequired()) {
             stage = Stage.FUEL;
+            // FUEL — це наступна стадія, а не завершення: підсвітка
+            // лишається "в процесі", а не "готово", доки не заллють бак.
         }
     }
 
     /**
-     * Провалена міні-гра. За дизайном уже пройдені міні-ігри НЕ
-     * скидаються — втрачається лише поточна.
+     * ВИБУХ генератора — наслідок проваленої міні-гри ремонту (промах у
+     * «ціль», невірний дріт чи вихід за час у «дроти»). Знімає
+     * частину вже накопиченого СПІЛЬНОГО прогресу лагодження і вмикає
+     * червоний стан {@link VisualState#FAILED} на {@code failFlashTicks}
+     * (за замовчуванням 100 тіків = 5 с). Тут лише дані: партикли, звук,
+     * контур сутності й екранний маркер запускає {@code GeneratorModule}
+     * за {@link #explosionTicksLeft()}.
+     *
+     * Бензин (FUEL) вибух не чіпає: {@code fuelPercent} не змінюється.
+     * Вибухнути можна лише на стадії REPAIR — саме тоді існують
+     * міні-ігри.
+     *
+     * @param lossPercent скільки відсотків ПОВНОГО ремонту зняти
+     *                    (за замовчуванням 10 — MINIGAME_FAIL_LOSS_PERCENT).
+     * @return true, якщо вибух відбувся (стадія REPAIR).
      */
-    public void failMinigame() {
-        if (stage != Stage.REPAIR) return;
+    public boolean explode(int lossPercent) {
+        if (stage != Stage.REPAIR) return false;
+        int lossTicks = (int) ((long) repairTicksRequired() * Math.max(0, lossPercent) / 100L);
+        repairTicks = Math.max(0, repairTicks - lossTicks);
         visualState = VisualState.FAILED;
-        failedFlashTicks = ManiacConfigs.get(ConfigSchema.FAIL_FLASH_TICKS);
+        failedFlashTicks = Math.max(1, ManiacConfigs.get(ConfigSchema.FAIL_FLASH_TICKS));
+        return true;
     }
 
-    /** Залив однієї каністри. @return true якщо генератор щойно завершено. */
+    /**
+     * Додає {@code percent} відсотків бензину, затискаючи підсумок до
+     * {@link #fuelRequiredPercent()}. Скільки саме реально прийнято —
+     * викликач бачить як різницю {@link #fuelPercent()} до/після (саме
+     * так {@code GeneratorModule.tickFuel} вираховує, скільки списати із
+     * каністри).
+     *
+     * @return true якщо генератор щойно повністю завершено (обидві
+     *         стадії пройдено).
+     */
     public boolean addFuel(int percent) {
         if (stage != Stage.FUEL) return false;
         int required = fuelRequiredPercent();
         fuelPercent = Math.min(required, fuelPercent + percent);
-        visualState = VisualState.IN_PROGRESS;
+        if (failedFlashTicks == 0) visualState = VisualState.IN_PROGRESS;
         if (fuelPercent >= required) {
             stage = Stage.DONE;
             visualState = VisualState.DONE;
+            completed = true;
             return true;
         }
         return false;
@@ -105,16 +193,20 @@ public class GeneratorPoi extends PointOfInterestArchetype {
         return stage == Stage.DONE;
     }
 
-    /** Маньяк зламав генератор — скидає стадію заливу, ремонт лишається. */
-    public void sabotage() {
-        if (stage == Stage.DONE) return;
-        fuelPercent = 0;
-        visualState = VisualState.FAILED;
-    }
-
+    /**
+     * Раз на тік. Гасить червоний стан після вибуху; повертає
+     * {@link VisualState#IN_PROGRESS}, якщо в генератора вже є прогрес,
+     * інакше {@link VisualState#IDLE}.
+     */
     public void tick() {
         if (failedFlashTicks > 0 && --failedFlashTicks == 0 && stage != Stage.DONE) {
-            visualState = VisualState.IDLE;
+            boolean hasProgress = repairTicks > 0 || fuelPercent > 0 || stage == Stage.FUEL;
+            visualState = hasProgress ? VisualState.IN_PROGRESS : VisualState.IDLE;
         }
+    }
+
+    /** Скільки тіків ще триває червоний стан вибуху (0 — не вибухає). */
+    public int explosionTicksLeft() {
+        return failedFlashTicks;
     }
 }

@@ -8,6 +8,7 @@ import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseManager;
 import com.log_to_kot.maniacmod.core.phase.Phases;
+import com.log_to_kot.maniacmod.loot.LootModule;
 import com.log_to_kot.maniacmod.map.GeneratorModule;
 import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
@@ -67,6 +68,14 @@ public final class MatchOrchestrator {
     private MatchContext context = new MatchContext();
     private MinecraftServer server;
     private SpawnPlanner.SpawnPlan pendingSpawnPlan;
+    /**
+     * Чому останній {@link #start} не вдався, якщо причина — розмітка
+     * карти; інакше null. Потрібно, щоб команда старту казала адміну
+     * КОНКРЕТНО «потрібно 6 точок генераторів, а є 3», а не загальне
+     * «перевір розмітку» (див. ManiacCommand). Скидається на початку
+     * кожного start(), щоб стара причина не липла до нового невдалого.
+     */
+    private String lastStartFailure;
     private boolean plannerReady;
     private boolean scatterApplied;
     private boolean scatterFailed;
@@ -79,6 +88,14 @@ public final class MatchOrchestrator {
 
     /** Удар маньяка. Тримається полем, бо хук AttackEntityEvent кличе його напряму. */
     private final ManiacCombatModule combat = new ManiacCombatModule(() -> this);
+
+    /**
+     * Розкладає предмети по ITEM-точках. Не PhaseListener: спавн луту —
+     * частина {@link #applySpawnPlan} (як і спавн генераторів), у нього
+     * немає власного життєвого циклу. Прибирання лежачих предметів
+     * робить {@code MatchRuntimeRegistry.cleanup} у reset()/shutdown().
+     */
+    private final LootModule loot = new LootModule(rng);
 
     /**
      * Хп, стаміна, падіння, підняття непритомних, HUD-показники.
@@ -114,7 +131,7 @@ public final class MatchOrchestrator {
         phases.register(worldEnvironment);
     }
 
-    /** Модуль генераторів — для GeneratorBlock і ServerPacketHandler. */
+    /** Модуль генераторів — для GeneratorEntity і ServerPacketHandler. */
     public GeneratorModule generatorModule() {
         return generators;
     }
@@ -135,11 +152,36 @@ public final class MatchOrchestrator {
     }
 
     /** Модуль, що розсилає фазу клієнтам. Нічого більше не робить. */
-    private static final class PhaseNetworkSync implements PhaseListener {
+    private final class PhaseNetworkSync implements PhaseListener {
         @Override public String id() { return "phase-sync"; }
 
         @Override
         public void onPhaseEnter(GamePhase phase, java.util.List<ServerPlayer> players) {
+            // ПОРЯДОК ВАЖЛИВИЙ: роль йде РАНІШЕ за фазу.
+            //
+            // ClientMatchState.setPhase(LOBBY/RESET) викликає reset(), який
+            // скидає роль у SPECTATOR. Якщо слати фазу першою, а роль
+            // другою, для переходу в LOBBY порядок безпечний (роль потім
+            // теж буде SPECTATOR), але для ROLE_REVEAL/HUNT — навпаки:
+            // роль мусить бути на клієнті ДО того, як HUD вперше спитає
+            // "я виживий?" у ту ж мить, коли прийшла нова фаза.
+            //
+            // БАГ (шкала ХП/стаміни зникала після старту гри): RoleSyncPacket
+            // не надсилався ніде, крім входу на сервер (ServerHooks) і
+            // дебаг-morph (MatchOrchestrator.morph*). start() створює
+            // НОВИЙ MatchContext із новими ролями, але клієнт про це не
+            // дізнавався — лишався SPECTATOR, і SurvivorVitalsOverlay
+            // одразу виходив на isSurvivor(). У лобі шкала працювала лише
+            // тому, що /maniac morph survivor шле роль вручну.
+            //
+            // Ролі змінюються лише при старті матчу (context = fresh) і
+            // при скиданні — обидва випадки проходять через перехід фази,
+            // тож ОДНОГО місця тут достатньо; окремої розсилки в start()
+            // не потрібно (два джерела правди — саме те, чого забороняє
+            // AI_CODE_GUIDE).
+            for (ServerPlayer player : players) {
+                com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player, roleSyncFor(player));
+            }
             com.log_to_kot.maniacmod.server.ServerHooks.broadcastPhase(players, phase);
             // Ролі й стани щойно могли змінитись цілком (ROLE_REVEAL,
             // RESET) — таб має побачити новий склад одразу, не чекаючи
@@ -149,6 +191,27 @@ public final class MatchOrchestrator {
 
     }
 
+    /**
+     * Роль конкретного гравця для {@link RoleSyncPacket}. Єдине місце, де
+     * рішення "хто я" перетворюється на пакет — раніше ця логіка жила
+     * приватним статичним методом у {@code ServerHooks} (дубль правди
+     * поруч із самим MatchContext, до якого ServerHooks не має доступу).
+     */
+    public RoleSyncPacket roleSyncFor(ServerPlayer player) {
+        UUID id = player.getUUID();
+        if (isManiac(id)) {
+            ManiacArchetype archetype = maniacArchetype();
+            return new RoleSyncPacket(RoleSyncPacket.Role.MANIAC,
+                archetype == null ? "" : archetype.id());
+        }
+        if (isSurvivor(id)) {
+            var role = survivorRoleOf(id);
+            return new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR,
+                role == null ? "" : role.id());
+        }
+        return new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "");
+    }
+
     /** Узгоджує підготовку плану і фізичне застосування розкидання. */
     private final class MatchStartCoordinator implements PhaseListener {
         @Override public String id() { return "match-start"; }
@@ -156,7 +219,7 @@ public final class MatchOrchestrator {
         @Override
         public void onPhaseEnter(GamePhase phase, List<ServerPlayer> players) {
             if (phase == GamePhase.CINEMATIC) {
-                prepareSpawnPlan();
+                prepareSpawnPlan(players);
             } else if (phase == GamePhase.SCATTER) {
                 scatterApplied = applySpawnPlan(players);
                 scatterFailed = !scatterApplied;
@@ -245,6 +308,15 @@ public final class MatchOrchestrator {
     /** Чи цей гравець зараз маньяк цього матчу. */
     public boolean isManiac(UUID playerId) {
         return context.isManiac(playerId);
+    }
+
+    /**
+     * Усі гравці, що зараз на сервері (виживі, маньяк, глядачі). Для подій,
+     * які мають побачити ВСІ, — наприклад вибух генератора. Порожній
+     * список, якщо сервер ще не підключено (до старту або після скидання).
+     */
+    public List<ServerPlayer> onlinePlayers() {
+        return server == null ? List.of() : List.copyOf(server.getPlayerList().getPlayers());
     }
 
     /** Чи цей гравець зараз виживий цього матчу. */
@@ -479,19 +551,26 @@ public final class MatchOrchestrator {
 
     /**
      * Перетворити гравця на маньяка в лобі (дебаг-тестування).
-     * Надсилає RoleSyncPacket і застосовує 0 слотів хотбару.
+     * Надсилає RoleSyncPacket, застосовує 0 слотів хотбару, вимикає
+     * StaminaService, якщо гравець щойно був дебаг-виживим, і оновлює
+     * табло (RosterSyncPacket) для всіх — інакше Tab-екран показував
+     * би стару роль до наступної випадкової події.
      */
     public void morphManiac(ServerPlayer player, ManiacArchetype archetype) {
         if (!phases.is(GamePhase.LOBBY)) return;
+        survivors().onLobbyMorphAway(player);
         context.assignManiac(player.getUUID(), archetype);
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
             new RoleSyncPacket(RoleSyncPacket.Role.MANIAC, archetype == null ? "" : archetype.id()));
         inventoryAllocation().applyOnJoin(player);
+        broadcastRosterAround(player);
     }
 
     /**
      * Перетворити гравця на виживого в лобі (дебаг-тестування).
-     * Надсилає RoleSyncPacket і встановлює слоти виживого.
+     * Надсилає RoleSyncPacket, встановлює слоти виживого, вмикає
+     * StaminaService (той самий шлях, що ROLE_REVEAL), шле реальний
+     * vitals-знімок і оновлює табло для всіх гравців.
      */
     public void morphSurvivor(ServerPlayer player) {
         if (!phases.is(GamePhase.LOBBY)) return;
@@ -501,23 +580,39 @@ public final class MatchOrchestrator {
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
             new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR, ""));
         inventoryAllocation().applyOnJoin(player);
-        // Надіслати віталс, щоб HUD з'явився одразу
-        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
-            new com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket(
-                role.maxHp(), role.maxHp(), 1f,
-                com.log_to_kot.maniacmod.survivors.SurvivorState.HEALTHY, 0f));
+        // Вмикає StaminaService і шле реальний vitals-пакет (hp зі
+        // щойно виставленого role.maxHp(), стаміна = 100% бо щойно
+        // enableStamina() виставив повну шкалу).
+        survivors().onLobbyMorphToSurvivor(player);
+        broadcastRosterAround(player);
     }
 
     /**
      * Зняти роль і повернути гравця в SPECTATOR (дебаг-тестування).
-     * Очищає role на сервері й клієнті, скидає слоти до 0.
+     * Очищає role на сервері й клієнті, скидає слоти до 0, вимикає
+     * StaminaService і оновлює табло для всіх гравців.
      */
     public void unmorph(ServerPlayer player) {
         if (!phases.is(GamePhase.LOBBY)) return;
+        survivors().onLobbyMorphAway(player);
         context.clearRole(player.getUUID());
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
             new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, ""));
         inventoryAllocation().applyOnJoin(player);
+        broadcastRosterAround(player);
+    }
+
+    /**
+     * Табло читається з поточного {@code MatchContext}, тому досить
+     * розіслати всім онлайн — той самий список, що
+     * {@code /maniac morph} і так вимагає через requireMatch(LOBBY).
+     * player.getServer() тут завжди не-null: гравець-виконавець
+     * команди онлайн за визначенням.
+     */
+    private void broadcastRosterAround(ServerPlayer player) {
+        if (player.getServer() == null) return;
+        com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(
+            player.getServer().getPlayerList().getPlayers());
     }
 
     /** Гравці в режимі Spectator не беруть участі в наступному матчі. */
@@ -578,6 +673,7 @@ public final class MatchOrchestrator {
      */
     public boolean start(List<ServerPlayer> players, ServerPlayer maniacPlayer,
                          ManiacArchetype maniacArchetype) {
+        lastStartFailure = null;
         if (!phases.is(GamePhase.LOBBY)) return false;
         List<ServerPlayer> participants = eligiblePlayers(players);
 
@@ -616,6 +712,9 @@ public final class MatchOrchestrator {
             .getOrDefault(SpawnPointKind.SURVIVOR, 0);
         if (!DebugMode.enabled()
             && !fresh.spawnPoints().isEmpty() && survivorPoints < survivorIds.size()) {
+            lastStartFailure = "Точок для виживих " + survivorPoints
+                + ", а гравців " + survivorIds.size()
+                + ". Одна точка не може вмістити двох — додай ще точок.";
             return false;
         }
 
@@ -629,6 +728,10 @@ public final class MatchOrchestrator {
         try {
             advanceTo(GamePhase.CINEMATIC, players);
         } catch (SpawnPlanner.SpawnPlanFailure failure) {
+            // Раніше причина тут губилась: адмін бачив лише «не вдалося
+            // почати матч» і мусив вгадувати, чого не вистачає.
+            lastStartFailure = failure.getMessage();
+            ManiacMod.LOGGER.warn("[match] старт скасовано: {}", failure.getMessage());
             this.context = previous;
             pendingSpawnPlan = null;
             plannerReady = false;
@@ -638,6 +741,11 @@ public final class MatchOrchestrator {
             return false;
         }
         return true;
+    }
+
+    /** Причина останньої невдалої спроби {@link #start}, якщо це розмітка карти; інакше null. */
+    public String lastStartFailure() {
+        return lastStartFailure;
     }
 
     // ── Переходи ─────────────────────────────────────────────────────────
@@ -684,7 +792,7 @@ public final class MatchOrchestrator {
             // а тривалість повернеться до ConfigSchema (див. коментар там).
             if (!plannerReady) {
                 try {
-                    prepareSpawnPlan();
+                    prepareSpawnPlan(players);
                 } catch (SpawnPlanner.SpawnPlanFailure failure) {
                     reset(players);
                     return;
@@ -788,7 +896,7 @@ public final class MatchOrchestrator {
      * від таймера кінематики, тому пізніше виконання можна винести в
      * executor без зміни правил переходу фаз.
      */
-    private void prepareSpawnPlan() {
+    private void prepareSpawnPlan(List<ServerPlayer> players) {
         if (plannerReady) return;
         try {
             pendingSpawnPlan = buildSpawnPlan();
@@ -796,8 +904,16 @@ public final class MatchOrchestrator {
             if (!DebugMode.enabled()) throw failure;
             // Дебаг: карти може ще не бути взагалі. Матч усе одно стартує —
             // просто без телепорту й без генераторів (порожній план).
+            // Гравець мусить побачити ЦЕ повідомлення в чаті, а не лише
+            // в лог-файлі сервера: без нього виглядає так, ніби команда
+            // старту матчу "нічого не робить" (точки стоять, а телепорту
+            // немає), хоча насправді план просто мовчки пропущено.
             ManiacMod.LOGGER.warn("[debug] план розкидання не побудовано: {} — матч іде без нього (debugMode=true)",
                 failure.getMessage());
+            for (ServerPlayer player : players) {
+                player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
+                    "maniacmod.command.debug_scatter_skipped", failure.getMessage()));
+            }
             pendingSpawnPlan = SpawnPlanner.SpawnPlan.empty();
         }
         plannerReady = true;
@@ -850,10 +966,49 @@ public final class MatchOrchestrator {
 
         for (var point : pendingSpawnPlan.engagedItemPoints()) point.engage();
         context.map().clear();
+
+        // Рівень для спавну сутностей генераторів — беремо в першого-
+        // ліпшого відомого гравця матчу (усі вони на одному рівні гри),
+        // а не через MinecraftServer.overworld(): матч у принципі не
+        // прив'язаний саме до overworld.
+        ServerLevel generatorLevel = maniac != null ? maniac.serverLevel()
+            : players.isEmpty() ? null : players.get(0).serverLevel();
+
         for (var point : pendingSpawnPlan.generatorPoints()) {
-            context.map().addGenerator(new GeneratorPoi(point.pos()));
+            GeneratorPoi poi = new GeneratorPoi(point.pos());
+            context.map().addGenerator(poi);
+            spawnGeneratorEntity(generatorLevel, point.pos());
         }
+
+        // Предмети на задіяних ITEM-точках. Точки вже позначені engage()
+        // вище; рівень той самий, що й для генераторів.
+        loot.spawnOnPoints(generatorLevel, pendingSpawnPlan.engagedItemPoints());
         return true;
+    }
+
+    /**
+     * Спавнить сутність генератора в потрібній точці — заміна колишньої
+     * моделі, де {@code GeneratorBlock} мав бути заздалегідь поставлений
+     * картобудівником уручну на карті. Тепер розмітка (SpawnPoint типу
+     * GENERATOR) — єдине, що потрібно від карти; сама сутність з'являється
+     * при застосуванні плану, з випадковим поворотом по X (0 по Y), так
+     * само як {@link com.log_to_kot.maniacmod.entity.GroundItemEntity}.
+     *
+     * @param level може бути {@code null} лише в теоретичному випадку
+     *              порожнього списку гравців і відсутнього маньяка —
+     *              тоді спавн просто пропускається (генератор лишається
+     *              суто логічним записом {@link GeneratorPoi}, без
+     *              видимого тіла, доки не буде явного рівня для спавну).
+     * @param pos   позиція з розмітки картобудівника (SpawnPoint GENERATOR).
+     */
+    private void spawnGeneratorEntity(ServerLevel level, BlockPos pos) {
+        if (level == null) return;
+        float rotationX = rng.nextFloat() * 360f;
+        com.log_to_kot.maniacmod.entity.GeneratorEntity.spawn(
+            com.log_to_kot.maniacmod.registry.ModEntityTypes.GENERATOR.get(),
+            level,
+            pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
+            rotationX);
     }
 
     private static ServerPlayer findPlayer(List<ServerPlayer> players, UUID id) {
@@ -885,8 +1040,18 @@ public final class MatchOrchestrator {
      * виживі бігали б порожньою картою (у v3 матч просто зависав).
      */
     public void onPlayerLeft(ServerPlayer player) {
+        // Провал будь-якої відкритої міні-гри ремонту — незалежно від
+        // ролі/фази нижче: гравець фізично зник із сервером зв'язку,
+        // тож екран міні-гри (якщо був) уже нікому показувати.
+        generatorModule().onPlayerLeftDuringMinigame(player.getUUID());
+        // Лок руху, прогрес вставання, правила стаміни — усе за UUID.
+        survivors.onPlayerLeft(player);
+
         List<ServerPlayer> online = player.getServer().getPlayerList().getPlayers();
         if (context.isManiac(player.getUUID())) {
+            // Лок ATTACK і перезарядка прив'язані до UUID, а не до списку
+            // онлайн-гравців — знімаємо їх ДО можливого reset(...) нижче.
+            combat.onPlayerLeft(player);
             // Дебаг: вихід/перезахід не має скидати тобі матч наодинці.
             if (!DebugMode.enabled()
                 && !phases.is(GamePhase.LOBBY) && !phases.is(GamePhase.RESET)) reset(online);
@@ -930,6 +1095,17 @@ public final class MatchOrchestrator {
         advanceTo(GamePhase.RESET, players);
         this.context = new MatchContext();
         advanceTo(GamePhase.LOBBY, players);
+        // БАГ (точки є в points.yml, а генератори не з'являються з ДРУГОГО
+        // матчу): новий MatchContext порожній, а розмітку в нього
+        // підвантажували лише при старті сервера, командах і зміні
+        // файлу. Тобто після першого завершеного (чи скинутого) матчу
+        // SpawnPlanner бачив нуль точок — план не будувався, а точки в
+        // файлі лежали недоторкані. Тепер розмітка повертається щоразу,
+        // коли ми знову опиняємось у лобі.
+        //
+        // Після advanceTo(LOBBY), а не до: reloadConfiguredMap нічого не
+        // робить поза фазою LOBBY (не чіпає розмітку посеред матчу).
+        reloadConfiguredMap();
     }
 
     /** Зупинка сервера — знімаємо статичне посилання, щоб не текло. */

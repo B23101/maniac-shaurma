@@ -4,12 +4,19 @@ import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.client.chat.ManiacChatEntryRenderer;
 import com.log_to_kot.maniacmod.core.match.ManiacChatChannels;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay;
+import com.log_to_kot.maniacmod.client.overlay.hint.GeneratorHintOverlay;
+import com.log_to_kot.maniacmod.client.overlay.hint.GroundItemHintOverlay;
+import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorCompletedOverlay;
+import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacHotbarOverlay;
 import com.log_to_kot.maniacmod.client.overlay.roster.TabRosterOverlay;
 import com.log_to_kot.maniacmod.client.overlay.debug.DebugOverlay;
 import com.log_to_kot.maniacmod.client.overlay.vitals.SurvivorVitalsOverlay;
+import com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator;
 import com.log_to_kot.maniacmod.client.renderer.GroundItemRenderer;
+import com.log_to_kot.maniacmod.client.renderer.GeneratorRenderer;
 import com.log_to_kot.maniacmod.registry.ModEntityTypes;
+import com.log_to_kot.maniacmod.registry.ModItems;
 import dev.shaurmalib.forge.ShaurmaLib;
 import dev.shaurmalib.forge.chat.ChatEntryRendererRegistry;
 import dev.shaurmalib.forge.chat.ChatModule;
@@ -17,6 +24,7 @@ import dev.shaurmalib.forge.inventory.InventorySlotAllocationClientHooks;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.EntityRenderersEvent;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
+import net.minecraftforge.client.event.RegisterItemDecorationsEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
 import net.minecraftforge.common.MinecraftForge;
@@ -61,6 +69,19 @@ public final class ClientSetup {
         InventorySlotAllocationClientHooks.setCustomHotbarRenderer(new ManiacHotbarOverlay());
         ShaurmaLib.attachTabVisibility(new TabRosterOverlay());
 
+        // Бібліотека сама малює дефолтну шкалу стаміни по центру екрана
+        // (shaurma-lib StaminaClientHooks), поки withStamina() підключено —
+        // але цей режим уже має власний HUD показників виживого
+        // (SurvivorVitalsOverlay: медальйон + сегментована шкала стаміни
+        // зліва внизу). Два незалежні бари стаміни одночасно (різні
+        // позиції, різні джерела даних — StaminaSyncPacket проти
+        // SurvivorVitalsPacket) — це і є причина "стаміна тратиться, а
+        // візуально не видно": гравець дивиться на один HUD, поки
+        // насправді оновлюється інший. Порожній рендер тут вимикає
+        // дефолтний бар, лишаючи єдине джерело правди для гравця.
+        dev.shaurmalib.forge.stamina.StaminaClientHooks.setRenderer(
+            (graphics, minecraft, stamina, maxStamina, partialTick, width, height) -> { });
+
         // Чат: бібліотека піднімається на серверній події (ServerAboutToStart),
         // тому на ВИДІЛЕНОМУ сервері клієнт не отримує ані фіду спливаючих
         // повідомлень, ані звуку — їх треба підключити тут, у клієнтському
@@ -75,12 +96,45 @@ public final class ClientSetup {
         MinecraftForge.EVENT_BUS.addListener((ScreenEvent.Opening screenEvent) ->
             ShaurmaLib.attachChatScreenIntercept(screenEvent, () -> false, visible -> {
             }));
+
+        // Кнопка "⚙ Налаштування гри" у вікні чату — видима лише
+        // операторам (та сама межа прав, що вимагає корінь команди
+        // /maniac: hasPermissions(2)). Це лише КОСМЕТИЧНЕ приховування
+        // для гравців без прав — справжня перевірка на сервері, у
+        // ServerPacketHandler.onOpenSettingsMenuRequest, бо клієнт
+        // можна модифікувати. Натискання шле
+        // OpenSettingsMenuRequestPacket і чекає відповіді сервера
+        // (OpenSettingsMenuPacket), а не відкриває екран напряму —
+        // клієнт не має актуальних значень конфігу без запиту.
+        dev.shaurmalib.forge.chat.ChatScreenButtonRegistry.register(
+            dev.shaurmalib.forge.chat.ChatScreenButton.of(
+                "maniacmod_settings",
+                net.minecraft.network.chat.Component.translatable("maniacmod.chat.settings_button"),
+                net.minecraft.network.chat.Component.translatable("maniacmod.chat.settings_button_hover"),
+                () -> {
+                    var player = net.minecraft.client.Minecraft.getInstance().player;
+                    return player != null && player.hasPermissions(2);
+                },
+                screen -> com.log_to_kot.maniacmod.net.ModNetwork.toServer(
+                    new com.log_to_kot.maniacmod.net.c2s.settings.OpenSettingsMenuRequestPacket())));
     }
 
     @SubscribeEvent
     public static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {
         event.registerEntityRenderer(ModEntityTypes.GROUND_ITEM.get(), GroundItemRenderer::new);
+        event.registerEntityRenderer(ModEntityTypes.GENERATOR.get(), GeneratorRenderer::new);
         // TODO(міграція maniacs): рендерер маньяка додається сюди.
+    }
+
+    /**
+     * Число заряду на іконці каністри. Реєструється на mod-bus (цей клас
+     * вже підписаний на Bus.MOD, Dist.CLIENT), подія викликається один
+     * раз на старті клієнта, після реєстрації предметів — тому
+     * {@code ModItems.get(...).get()} уже повертає створений предмет.
+     */
+    @SubscribeEvent
+    public static void onRegisterItemDecorations(RegisterItemDecorationsEvent event) {
+        event.register(ModItems.get("fuel_canister").get(), new FuelCanisterChargeDecorator());
     }
 
     @SubscribeEvent
@@ -88,6 +142,18 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_progress",
             (gui, graphics, partialTick, width, height) ->
                 GeneratorProgressOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_hint",
+            (gui, graphics, partialTick, width, height) ->
+                GeneratorHintOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_ground_item_hint",
+            (gui, graphics, partialTick, width, height) ->
+                GroundItemHintOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_completed",
+            (gui, graphics, partialTick, width, height) ->
+                GeneratorCompletedOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_explosion",
+            (gui, graphics, partialTick, width, height) ->
+                GeneratorExplosionMarker.render(graphics));
         event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "maniac_survivor_vitals",
             (gui, graphics, partialTick, width, height) ->
                 SurvivorVitalsOverlay.render(graphics));

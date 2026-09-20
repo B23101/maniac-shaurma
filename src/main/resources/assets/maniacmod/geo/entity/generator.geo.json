@@ -1,0 +1,68 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.generator",
+        "texture_width": 64,
+        "texture_height": 64,
+        "visible_bounds_width": 3,
+        "visible_bounds_height": 2,
+        "visible_bounds_offset": [0, 0.6, 0]
+      },
+      "bones": [
+        {
+          "name": "root",
+          "pivot": [0, 0, 0],
+          "cubes": [
+            {
+              "comment": "Корпус — заглушка. 1.2x1.2 блока в плані (19.2px), 0.9 блока заввишки (14.4px). Художник замінює цю кістку своєю фінальною геометрією; ім'я 'root' і pivot [0,0,0] залишити для сумісності з рендерером/анімаціями нижче.",
+              "origin": [-9.6, 0, -9.6],
+              "size": [19.2, 14.4, 19.2],
+              "uv": [0, 0]
+            }
+          ]
+        },
+        {
+          "name": "panel",
+          "parent": "root",
+          "pivot": [0, 10, 9.6],
+          "cubes": [
+            {
+              "comment": "Передня панель керування — трохи виступає з корпусу, щоб було видно, де 'перед' генератора.",
+              "origin": [-6, 6, 9.6],
+              "size": [12, 8, 1],
+              "uv": [0, 40]
+            }
+          ]
+        },
+        {
+          "name": "pipe_left",
+          "parent": "root",
+          "pivot": [-6, 14.4, -6],
+          "cubes": [
+            {
+              "comment": "Лівий патрубок — імітація вихлопу/паливного штуцера.",
+              "origin": [-8, 14.4, -8],
+              "size": [4, 5, 4],
+              "uv": [0, 55]
+            }
+          ]
+        },
+        {
+          "name": "pipe_right",
+          "parent": "root",
+          "pivot": [6, 14.4, -6],
+          "cubes": [
+            {
+              "comment": "Правий патрубок — симетричний лівому.",
+              "origin": [4, 14.4, -8],
+              "size": [4, 5, 4],
+              "uv": [16, 55]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -40,6 +40,11 @@ public final class ClientMatchState {
     private static SurvivorState survivorState = SurvivorState.HEALTHY;
     private static float heartbeat = 0f;
 
+    // ── Прогрес вставання після падіння (StandUpProgressPacket) ──────────
+    // required == 0 означає "вставання не триває" — шкалу не малювати.
+    private static int standUpPresses = 0;
+    private static int standUpRequired = 0;
+
     // ── Кулдауни здібностей: id → тік клієнта, коли кулдаун завершиться ──
     private static final Map<String, Long> abilityReadyAt = new java.util.HashMap<>();
     private static final Map<String, Integer> abilityTotal = new java.util.HashMap<>();
@@ -50,6 +55,11 @@ public final class ClientMatchState {
 
     // ── Ростер (tab-екран) ───────────────────────────────────────────────
     private static List<RosterSyncPacket.RosterEntry> roster = List.of();
+
+    // ── Візуальні налаштування предметів на землі (loot.sparkleEnabled) ──
+    // НАВМИСНО поза reset(): це конфіг сервера, а не прогрес матчу; вихід
+    // у LOBBY/RESET не повинен вимикати блиск до наступного пакета.
+    private static boolean groundItemSparkleEnabled = true;
 
     private ClientMatchState() {}
 
@@ -76,6 +86,11 @@ public final class ClientMatchState {
         heartbeat = newHeartbeat;
     }
 
+    static void setStandUpProgress(int presses, int required) {
+        standUpPresses = Math.max(0, presses);
+        standUpRequired = Math.max(0, required);
+    }
+
     static void setAbilityCooldown(String abilityId, int totalTicks, long currentTick) {
         if (totalTicks <= 0) {
             abilityReadyAt.remove(abilityId);
@@ -96,6 +111,10 @@ public final class ClientMatchState {
         roster = List.copyOf(entries);
     }
 
+    static void setGroundItemSparkleEnabled(boolean enabled) {
+        groundItemSparkleEnabled = enabled;
+    }
+
     /** Повне скидання. Викликається при виході з матчу і при диконекті. */
     public static void reset() {
         role = RoleSyncPacket.Role.SPECTATOR;
@@ -105,12 +124,15 @@ public final class ClientMatchState {
         stamina = 1f;
         survivorState = SurvivorState.HEALTHY;
         heartbeat = 0f;
+        standUpPresses = 0;
+        standUpRequired = 0;
         abilityReadyAt.clear();
         abilityTotal.clear();
         highlight = List.of();
         highlightUntilTick = 0;
         roster = List.of();
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
+        com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.reset();
     }
 
     // ── Читання ──────────────────────────────────────────────────────────
@@ -129,6 +151,15 @@ public final class ClientMatchState {
     public static float stamina()              { return stamina; }
     public static SurvivorState survivorState() { return survivorState; }
     public static float heartbeat()            { return heartbeat; }
+
+    public static boolean groundItemSparkleEnabled() { return groundItemSparkleEnabled; }
+
+    /** Скільки натискань пробілу вже зараховано (0, якщо вставання не триває). */
+    public static int standUpPresses()         { return standUpPresses; }
+    /** Скільки натискань треба всього. 0 = вставання не триває, шкалу ховати. */
+    public static int standUpRequired()        { return standUpRequired; }
+    /** Чи гравець зараз намагається встати (шкалу треба малювати). */
+    public static boolean isStandingUp()       { return standUpRequired > 0; }
 
     /** Частка кулдауну, що лишилась: 1.0 щойно активовано, 0.0 готово. */
     public static float abilityCooldownFraction(String abilityId, long currentTick) {

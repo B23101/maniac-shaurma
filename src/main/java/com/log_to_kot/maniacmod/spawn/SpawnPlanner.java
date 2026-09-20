@@ -179,7 +179,7 @@ public final class SpawnPlanner {
     }
 
     /**
-     * Скільки точок генераторів реально заспавнити цього раунду.
+     * Обирає точки генераторів цього раунду.
      *
      * generatorsRequired — скільки треба ПОЛАГОДИТИ, це число не
      * залежить від кількості маньяків. Понад нього додається
@@ -188,14 +188,24 @@ public final class SpawnPlanner {
      * щоб виживі не могли впевнено закемпити відомий набір з
      * generatorsRequired точок. Чим більше маньяків, тим більше
      * бонусних точок і тим важче вгадати, які з них — справжні.
+     *
+     * ── Вибір максимально випадковий, але розподілений ─────────────
+     * Саме вибір підмножини (які з розмічених точок стануть
+     * генераторами) робить {@link GeneratorPointSelector}. Старий
+     * жадібний "найдальша від уже обраних" був майже детермінованим:
+     * на 14 точках із 3003 можливих наборів давав 9, а три точки
+     * потрапляли в кожен матч — гравці вчили карту напам'ять. Тепер
+     * усі допустимі набори досяжні й рівноймовірні, а відстані між
+     * генераторами та до маньяка (minGeneratorToGeneratorBlocks,
+     * minGeneratorToManiacBlocks) дотримуються, поки розмітка карти
+     * це дозволяє, і лише тоді послаблюються покроково.
      */
     private List<SpawnPoint> pickGeneratorPoints(List<SpawnPoint> allPoints,
                                                   SpawnPoint maniacPoint, int numManiacs) {
-        List<SpawnPoint> pool = new ArrayList<>(filter(allPoints, SpawnPointKind.GENERATOR, null));
+        List<SpawnPoint> pool = filter(allPoints, SpawnPointKind.GENERATOR, null);
         int required = ManiacConfigs.get(ConfigSchema.GENERATORS_REQUIRED);
         int bonusPerManiac = ManiacConfigs.get(ConfigSchema.BONUS_GENERATORS_PER_MANIAC);
         int desired = required + bonusPerManiac * Math.max(0, numManiacs);
-        Collections.shuffle(pool, rng);
         if (pool.size() < desired) {
             throw new SpawnPlanFailure("Потрібно щонайменше " + desired
                 + " точок генераторів (" + required + " на ремонт + "
@@ -203,29 +213,14 @@ public final class SpawnPlanner {
                 + pool.size() + ".");
         }
 
-        List<SpawnPoint> selected = new ArrayList<>();
-        selected.add(pool.remove(rng.nextInt(pool.size())));
-        while (selected.size() < desired) {
-            SpawnPoint best = null;
-            double bestDistance = -1;
-            for (SpawnPoint candidate : pool) {
-                // Точки маньяка може не бути взагалі (дебаг без маньяка) —
-                // тоді розносимо генератори лише відносно вже обраних.
-                double nearest = maniacPoint == null
-                    ? Double.MAX_VALUE
-                    : candidate.horizontalDistanceTo(maniacPoint);
-                for (SpawnPoint chosen : selected) {
-                    nearest = Math.min(nearest, candidate.horizontalDistanceTo(chosen));
-                }
-                if (nearest > bestDistance) {
-                    best = candidate;
-                    bestDistance = nearest;
-                }
-            }
-            selected.add(best);
-            pool.remove(best);
-        }
-        return selected;
+        return GeneratorPointSelector.select(
+            pool, desired, maniacPoint,
+            ManiacConfigs.get(ConfigSchema.MIN_GENERATOR_TO_PEER),
+            ManiacConfigs.get(ConfigSchema.MIN_GENERATOR_TO_MANIAC),
+            ManiacConfigs.get(ConfigSchema.RELAXATION_STEP),
+            ManiacConfigs.get(ConfigSchema.MAX_RELAXATION_PASSES),
+            SpawnPoint::horizontalDistanceTo,
+            rng);
     }
 
     /**

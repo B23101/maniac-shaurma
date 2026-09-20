@@ -34,13 +34,13 @@ public final class ItemRegistry {
     static {
         // ── Предмети виживих ────────────────────────────────────────────
         register("medkit", MedkitItem::new, Group.SURVIVOR);
+        register("splint", SplintItem::new, Group.SURVIVOR);  // Шина
+        register("fuel_canister", FuelCanisterItem::new, Group.SURVIVOR);  // Бензин
         // TODO(міграція items): у міру перенесення з v3 ItemImplementations
         //   register("flashlight",   FlashlightItem::new,   Group.SURVIVOR);
         //   register("crowbar",      CrowbarItem::new,      Group.SURVIVOR);
         //   register("bat",          BatItem::new,          Group.SURVIVOR);
-        //   register("splint",       SplintItem::new,       Group.SURVIVOR);  // Шина
         //   register("screwdriver",  ScrewdriverItem::new,  Group.SURVIVOR);
-        //   register("fuel_canister",FuelCanisterItem::new, Group.SURVIVOR);  // Бензин
         //   register("scissors",     ScissorsItem::new,     Group.SURVIVOR);
         //   register("adrenaline",   AdrenalineItem::new,   Group.SURVIVOR);
 

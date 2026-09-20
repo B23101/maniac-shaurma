@@ -74,13 +74,29 @@ public final class InventoryAllocationModule implements PhaseListener {
      * Викликається також при вході гравця в гру (реконект посеред
      * матчу) — інакше гравець, що перезайшов у фазі HUNT, отримав би
      * дефолтні 9 слотів hotbar до першого переходу фази.
+     *
+     * ── Виняток для лобі-morph ────────────────────────────────────────
+     * У фазі LOBBY гравці зазвичай без ролі (0 слотів), АЛЕ команда
+     * /maniac morph призначає роль (survivor/maniac) саме в LOBBY і
+     * одразу викликає цей метод. Раніше тут була безумовна lockToZero
+     * для LOBBY/RESET/CINEMATIC/SCATTER — вона стирала щойно видані
+     * 4 слоти виживого (маньяка це маскувало, бо в нього й так 0).
+     * Тому в LOBBY тепер теж дивимось, чи є в гравця роль у контексті
+     * матчу, і застосовуємо її розподіл; немає ролі — лишається 0.
      */
     public void applyOnJoin(ServerPlayer player) {
         applyCreativePolicy();
         MatchOrchestrator match = matchSupplier.get();
         GamePhase phase = match.phases().current();
-        if (phase == GamePhase.LOBBY || phase == GamePhase.RESET
-            || phase == GamePhase.CINEMATIC || phase == GamePhase.SCATTER) {
+        if (phase == GamePhase.LOBBY) {
+            if (match.isManiac(player.getUUID()) || match.isSurvivor(player.getUUID())) {
+                applyMatchAllocation(player, match);
+            } else {
+                lockToZero(player);
+            }
+            return;
+        }
+        if (phase == GamePhase.RESET || phase == GamePhase.CINEMATIC || phase == GamePhase.SCATTER) {
             lockToZero(player);
             return;
         }
@@ -100,6 +116,7 @@ public final class InventoryAllocationModule implements PhaseListener {
         if (match.isSurvivor(player.getUUID())) {
             int slots = ManiacConfigs.get(ConfigSchema.SURVIVOR_SLOTS);
             InventorySlotAllocation.setHotbarSlotCount(player, slots);
+            allowItemDrop(player);
             return;
         }
         // Глядач (реконект після вибуття/втечі, чи приєднався посеред
@@ -109,6 +126,26 @@ public final class InventoryAllocationModule implements PhaseListener {
 
     private void lockToZero(ServerPlayer player) {
         InventorySlotAllocation.setHotbarSlotCount(player, 0);
+    }
+
+    /**
+     * Дозволяє виживому кидати предмет клавішею Q.
+     *
+     * <p>Бібліотека за замовчуванням створює {@code Allocation} із
+     * {@code blockItemDrop = true}: клієнтський міксин
+     * ({@code MixinLocalPlayerInventoryDrop}) тоді гасить Q ще до
+     * відправки пакета. Кожен виклик {@code setHotbarSlotCount} будує
+     * НОВИЙ {@code Allocation} і скидає цей прапорець назад у
+     * {@code true} — тому знімати його треба СРАЗУ ПІСЛЯ кожного
+     * призначення слотів, і саме тут, де воно єдине для всіх шляхів
+     * (старт фази, реконект, лобі-morph). Окремий хук «не встиг би»:
+     * гонка з наступним {@code setHotbarSlotCount}.</p>
+     *
+     * <p>Маньяку й глядачу Q лишається заблокованою — у них 0 слотів,
+     * кидати нічого.</p>
+     */
+    private static void allowItemDrop(ServerPlayer player) {
+        InventorySlotAllocation.setItemDropBlocked(player, false);
     }
 
     /**

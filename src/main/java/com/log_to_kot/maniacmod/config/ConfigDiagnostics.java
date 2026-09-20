@@ -25,6 +25,22 @@ public final class ConfigDiagnostics {
             "блок '" + blockId + "' був відсутній — додано з дефолту"));
     }
 
+    /** У наявний файл дописано ключі, яких у ньому бракувало (мод оновився). */
+    public void healedKeys(String fileName, List<String> keys) {
+        entries.add(new Entry(Level.INFO,
+            "у " + fileName + " дописано нові налаштування з дефолту: " + String.join(", ", keys)));
+    }
+
+    /**
+     * Ключів бракує, але безпечно дописати їх не вдалось (вкладений
+     * блок не в кінці файлу). Значення читаються з дефолту в пам'яті.
+     */
+    public void keysNotWritten(String blockId, List<String> keys) {
+        entries.add(new Entry(Level.WARN,
+            "блок '" + blockId + "': бракує " + String.join(", ", keys)
+            + " — дописати автоматично не вдалось, додай вручну (зараз діє дефолт)"));
+    }
+
     /** Блока немає і в jar-дефолті теж. Це вже помилка збірки мода. */
     public void blockMissingEverywhere(String blockId) {
         entries.add(new Entry(Level.WARN,

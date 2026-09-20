@@ -1,5 +1,6 @@
 package com.log_to_kot.maniacmod.client;
 
+import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorCompletedOverlay;
 import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorProgressPacket;
@@ -43,9 +44,18 @@ public final class ClientPacketHandler {
         ClientMatchState.setRole(role, archetypeId);
     }
 
+    /** Конфіг блиску предметів на землі ({@code loot.sparkleEnabled}), синхронізований із сервера. */
+    public static void onGroundItemVisualSettings(boolean sparkleEnabled) {
+        ClientMatchState.setGroundItemSparkleEnabled(sparkleEnabled);
+    }
+
     public static void onVitals(int hp, int maxHp, float stamina,
                                 SurvivorState state, float heartbeat) {
         ClientMatchState.setVitals(hp, maxHp, stamina, state, heartbeat);
+    }
+
+    public static void onStandUpProgress(int presses, int required) {
+        ClientMatchState.setStandUpProgress(presses, required);
     }
 
     public static void onAbilityCooldown(String abilityId, int totalTicks) {
@@ -59,6 +69,49 @@ public final class ClientPacketHandler {
 
     public static void onGeneratorProgress(GeneratorProgressPacket packet) {
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.accept(packet);
+    }
+
+    // ── Міні-ігри ремонту ────────────────────────────────────────────────
+
+    public static void onTargetMinigameOpen(
+            com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket packet) {
+        ClientInputHandler.forceReleaseRepairHold();
+        Minecraft.getInstance().setScreen(new com.log_to_kot.maniacmod.client.screen.minigame.TargetMinigameScreen(
+            packet.seed(), packet.cursorSpeed(), packet.hitZoneWidth(),
+            packet.targetPosition(), packet.hitsRequired()));
+    }
+
+    public static void onWireMinigameOpen(
+            com.log_to_kot.maniacmod.net.s2c.minigame.WireMinigameOpenPacket packet) {
+        ClientInputHandler.forceReleaseRepairHold();
+        Minecraft.getInstance().setScreen(new com.log_to_kot.maniacmod.client.screen.minigame.WireMinigameScreen(
+            packet.initialRightSlotForLeft(), packet.timeLimitTicks()));
+    }
+
+    /**
+     * Часткове просування всередині вже відкритої міні-гри. Пакет один
+     * на обидві міні-ігри — розрізняємо за тим, який екран зараз
+     * відкрито, а не за вмістом пакета (див. клас-докстрінг пакета).
+     */
+    public static void onRepairMinigameProgress(
+            com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket packet) {
+        var screen = Minecraft.getInstance().screen;
+        if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.TargetMinigameScreen target) {
+            target.onHit(packet.hitsSoFar());
+        } else if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.WireMinigameScreen wires) {
+            wires.onWireConnected(packet.leftSlot(), packet.rightSlot());
+        }
+    }
+
+    /** Міні-гра завершена (успіх чи провал) — закриває який завгодно з двох екранів міні-ігор. */
+    public static void onRepairMinigameResult(
+            com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameResultPacket packet) {
+        var screen = Minecraft.getInstance().screen;
+        if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.TargetMinigameScreen target) {
+            target.onResult(packet.success());
+        } else if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.WireMinigameScreen wires) {
+            wires.onResult(packet.success());
+        }
     }
 
     /**
@@ -87,6 +140,35 @@ public final class ClientPacketHandler {
             return;
         }
         dev.shaurmalib.forge.overlay.AnimatedCountdownSystem.show(digit, accentArgb);
+    }
+
+    /** "Генератор N з M полагоджено" — див. {@link GeneratorCompletedOverlay}. */
+    public static void onGeneratorCompleted(int index, int total) {
+        GeneratorCompletedOverlay.show(index, total);
+    }
+
+    /** Генератор вибухнув — червоний маркер на екрані, див. {@code GeneratorExplosionMarker}. */
+    public static void onGeneratorExplosion(net.minecraft.core.BlockPos pos, int durationTicks) {
+        com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.show(pos, durationTicks);
+    }
+
+    // ── Меню налаштувань ─────────────────────────────────────────────────
+
+    /**
+     * Відкриває {@code SettingsMenuScreen}, або, якщо він уже відкритий
+     * (гравець щойно змінив поле й чекає на підтверджене значення),
+     * оновлює його на місці замість пересоздання — щоб скрол і фокус
+     * поля не скидались при кожній зміні.
+     */
+    public static void onOpenSettingsMenu(
+            com.log_to_kot.maniacmod.net.s2c.settings.OpenSettingsMenuPacket packet) {
+        var screen = Minecraft.getInstance().screen;
+        if (screen instanceof com.log_to_kot.maniacmod.client.screen.settings.SettingsMenuScreen settings) {
+            settings.onValuesUpdated(packet.values());
+        } else {
+            Minecraft.getInstance().setScreen(
+                new com.log_to_kot.maniacmod.client.screen.settings.SettingsMenuScreen(packet.values()));
+        }
     }
 
     /** Лічильник клієнтських тіків — база для локального відліку кулдаунів. */

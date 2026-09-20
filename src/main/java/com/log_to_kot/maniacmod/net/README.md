@@ -29,8 +29,20 @@ UI" — так з'являється дублювання одних і тих �
 | `identity/` | хто я (роль/архетип) | раз на матч | `RoleSyncPacket` |
 | `matchstate/` | стан, спільний для всіх гравців | на подію матчу | `PhaseSyncPacket`, `RosterSyncPacket` |
 | `vitals/` | показники ВЛАСНОГО гравця | часто (по зміні) | `SurvivorVitalsPacket` |
-| `actionprogress/` | прогрес дії, що триває зараз | по дії | `GeneratorProgressPacket`, `GeneratorHighlightPacket`, `AbilityCooldownPacket` |
+| `actionprogress/` | прогрес дії, що триває зараз | по дії | `GeneratorProgressPacket`, `GeneratorHighlightPacket`, `AbilityCooldownPacket`, `StandUpProgressPacket` |
 | `notify/` | одноразова подія, не стан | на подію | `ActionBarPacket`, `CountdownPacket` |
+
+`StandUpProgressPacket` лежить у `actionprogress/`, а не полем у
+`SurvivorVitalsPacket`: vitals летять на кожну зміну стаміни (майже
+щотік під час бігу), а прогрес вставання міняється лише на натискання
+пробілу — дві різні частоти змін, два пакети. `required == 0` означає
+«вставання не триває, шкалу сховати».
+
+**Роль клієнту** (`RoleSyncPacket`) шлеться не лише на вході, а й на
+КОЖЕН перехід фази (`MatchOrchestrator.PhaseNetworkSync`), причому ДО
+`PhaseSyncPacket`. `start()` створює новий `MatchContext` із новими
+ролями, і без цього клієнт лишався `SPECTATOR` (HUD виживого зникав
+після старту гри).
 
 `RosterSyncPacket` (зведення по ВСІХ гравцях, таб-екран) лежить у
 `matchstate/`, а не в окремій `roster/`: це проєкція вже наявного

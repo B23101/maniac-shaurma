@@ -3,15 +3,29 @@ package com.log_to_kot.maniacmod.net;
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.net.c2s.intent.AbilityActivatePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.HighlightTogglePacket;
+import com.log_to_kot.maniacmod.net.c2s.minigame.TargetMinigameClickPacket;
+import com.log_to_kot.maniacmod.net.c2s.minigame.WireMinigameDropPacket;
+import com.log_to_kot.maniacmod.net.c2s.settings.SettingsChangePacket;
+import com.log_to_kot.maniacmod.net.c2s.settings.OpenSettingsMenuRequestPacket;
 import com.log_to_kot.maniacmod.net.c2s.selection.ManiacSelectPacket;
 import com.log_to_kot.maniacmod.net.c2s.hold.RescueHoldPacket;
+import com.log_to_kot.maniacmod.net.c2s.hold.GeneratorRepairHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.StandUpPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.TrapPlacePacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameResultPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.WireMinigameOpenPacket;
+import com.log_to_kot.maniacmod.net.s2c.settings.OpenSettingsMenuPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.CountdownPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorExplosionPacket;
+import com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorProgressPacket;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.StandUpProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.PhaseSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
@@ -52,7 +66,7 @@ public final class ModNetwork {
      * з різними версіями просто не з'єднаються — це краще, ніж
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
      */
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "4";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -75,14 +89,28 @@ public final class ModNetwork {
         s2c(ActionBarPacket.class,          ActionBarPacket::new);
         s2c(CountdownPacket.class,          CountdownPacket::new);
         s2c(RosterSyncPacket.class,         RosterSyncPacket::new);
+        s2c(TargetMinigameOpenPacket.class, TargetMinigameOpenPacket::new);
+        s2c(WireMinigameOpenPacket.class,   WireMinigameOpenPacket::new);
+        s2c(RepairMinigameProgressPacket.class, RepairMinigameProgressPacket::new);
+        s2c(RepairMinigameResultPacket.class,   RepairMinigameResultPacket::new);
+        s2c(OpenSettingsMenuPacket.class,       OpenSettingsMenuPacket::new);
+        s2c(StandUpProgressPacket.class,        StandUpProgressPacket::new);
+        s2c(GeneratorCompletedPacket.class,     GeneratorCompletedPacket::new);
+        s2c(GeneratorExplosionPacket.class,     GeneratorExplosionPacket::new);
+        s2c(GroundItemVisualSettingsPacket.class, GroundItemVisualSettingsPacket::new);
 
         // ── Клієнт → сервер ─────────────────────────────────────────────
         c2s(AbilityActivatePacket.class,    AbilityActivatePacket::new);
         c2s(HighlightTogglePacket.class,    HighlightTogglePacket::new);
         c2s(StandUpPacket.class,            StandUpPacket::new);
         c2s(RescueHoldPacket.class,         RescueHoldPacket::new);
+        c2s(GeneratorRepairHoldPacket.class, GeneratorRepairHoldPacket::new);
         c2s(ManiacSelectPacket.class,       ManiacSelectPacket::new);
         c2s(TrapPlacePacket.class,          TrapPlacePacket::new);
+        c2s(TargetMinigameClickPacket.class, TargetMinigameClickPacket::new);
+        c2s(WireMinigameDropPacket.class,    WireMinigameDropPacket::new);
+        c2s(SettingsChangePacket.class,      SettingsChangePacket::new);
+        c2s(OpenSettingsMenuRequestPacket.class, OpenSettingsMenuRequestPacket::new);
 
         // Нові пакети — ТІЛЬКИ в кінець свого блоку.
     }

@@ -1,6 +1,7 @@
 package com.log_to_kot.maniacmod.registry;
 
 import com.log_to_kot.maniacmod.ManiacMod;
+import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
@@ -21,6 +22,12 @@ import net.minecraftforge.registries.RegistryObject;
  * Додано GROUND_ITEM: предмети на землі — власні сутності з
  * geo-моделлю, а не ванільний ItemEntity.
  *
+ * Додано GENERATOR: генератор тепер сутність, а не блок
+ * (GeneratorBlock), що картобудівник ставив руками на карті — сутність
+ * сама спавниться при застосуванні плану ({@code MatchOrchestrator.applySpawnPlan}).
+ * Хітбокс 1.2×1.2 — квадрат, трохи більший за стандартний блок, щоб
+ * узгодити зону взаємодії з фізичним розміром geo-моделі.
+ *
  * MANIAC-сутність з'явиться тут, коли буде перенесено модуль maniacs.
  */
 public final class ModEntityTypes {
@@ -32,11 +39,33 @@ public final class ModEntityTypes {
         ENTITY_TYPES.register("ground_item", () ->
             EntityType.Builder.<GroundItemEntity>of(GroundItemEntity::new, MobCategory.MISC)
                 .sized(0.5f, 0.3f)
-                .clientTrackingRange(8)
-                .updateInterval(20)   // предмет лежить нерухомо — часті апдейти не потрібні
+                // 6 чанків = 96 блоків. Предмети малі й сервер усе одно
+                // обрізає це до власного view-distance; далі за
+                // shouldRenderAtSqrDistance (48 блоків) їх не малюють,
+                // тож більше значення лише марно слало б пакети.
+                .clientTrackingRange(6)
+                // 3 тіки: предмет, що падає чи котиться, має виглядати
+                // плавно. Було 20 — це годилось для «лежить назавжди», але
+                // тепер сутність має живу фізику, і 20 тіків давали б
+                // ривки по секунді. Спляча сутність стоїть на місці, тож
+                // трекер однаково нічого не шле, доки позиція не зміниться.
+                .updateInterval(3)
                 .noSummon()
                 .fireImmune()
                 .build("ground_item"));
+
+    public static final RegistryObject<EntityType<GeneratorEntity>> GENERATOR =
+        ENTITY_TYPES.register("generator", () ->
+            EntityType.Builder.<GeneratorEntity>of(GeneratorEntity::new, MobCategory.MISC)
+                .sized(1.2f, 1.2f)
+                // 64 чанки = 1024 блоки. Сервер все одно обрізає це до
+                // власного view-distance, тож реально видно так далеко,
+                // як налаштовано сервер; далі працює екранний маркер вибуху.
+                .clientTrackingRange(64)
+                .updateInterval(10)   // ACTIVE перемикається нечасто, але не "ніколи"
+                .noSummon()
+                .fireImmune()
+                .build("generator"));
 
     // TODO(міграція maniacs): MANIAC EntityType переїжджає сюди разом
     // з модулем маньяків.

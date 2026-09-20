@@ -53,5 +53,12 @@
     "sounds": [
       { "name": "maniacmod:wire_zap", "stream": false }
     ]
+  },
+  "exhausted_breath": {
+    "sounds": [
+      { "name": "maniacmod:exhausted_breath_1", "stream": false },
+      { "name": "maniacmod:exhausted_breath_2", "stream": false },
+      { "name": "maniacmod:exhausted_breath_3", "stream": false }
+    ]
   }
 }

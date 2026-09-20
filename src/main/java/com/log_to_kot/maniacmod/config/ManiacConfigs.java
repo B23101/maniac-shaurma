@@ -142,7 +142,7 @@ public final class ManiacConfigs {
         for (ConfigBlock block : ConfigSchema.BLOCKS) {
             Path file = configFile(block);
             Map<String, Object> defaults = readJarDefaults(block);
-            heal(file, defaults, diag);
+            heal(block, file, defaults, diag);
             roots.put(block.id(), readSection(file, block.id()));
             lastSeenMtimes.put(block.fileName(), mtimeOf(file));
         }
@@ -178,22 +178,190 @@ public final class ManiacConfigs {
     // ── Лікування ────────────────────────────────────────────────────────
 
     /**
-     * Дописує відсутні блоки з дефолту в jar.
+     * Лікування файлу, на двох рівнях.
+     *
+     * ── Рівень 1: файлу немає взагалі ────────────────────────────────
+     * Створюється повністю з дефолту в jar.
+     *
+     * ── Рівень 2: файл є, але в ньому бракує ключів схеми ────────────
+     * Тільки для {@link ConfigBlock.Kind#SETTINGS}. Це той випадок, коли
+     * мод оновився й отримав нове налаштування: без дописування адмін
+     * ніколи б не побачив його у файлі й не знав би, що його можна
+     * змінити (значення жило б лише в пам'яті як дефолт). Відсутні ключі
+     * ДОПИСУЮТЬСЯ В КІНЕЦЬ файлу зі значенням із jar-дефолту.
+     *
+     * Що НЕ чіпається ніколи: значення, які адмін уже має; його
+     * коментарі; порядок; ключі, яких нема в схемі. Тобто адмін, який
+     * поправив число, не побачить, що воно повернулось, — дописується
+     * лише те, чого у файлі немає взагалі.
+     *
+     * ── Чому це не суперечить "не відновлювати вміст блока" ──────────
+     * Той принцип стосується {@code DATA}-блоків (списки точок, зон):
+     * там склад ключів вільний, і видалений адміном елемент не має
+     * повертатись щостарту. У {@code SETTINGS} склад ключів ФІКСОВАНИЙ
+     * схемою, тож "адмін навмисно видалив ключ" не має сенсу — видалити
+     * скалярне налаштування означало б лише повернути йому дефолт, що
+     * дописування й робить, тільки тепер явно й видимо.
      *
      * Працює з ТЕКСТОМ файлу, а не з перезаписом розпарсеного дерева:
      * інакше з файлу зникли б коментарі адміна й порядок його правок.
-     * Новий блок просто додається в кінець.
      */
-    private static void heal(Path file, Map<String, Object> defaults, ConfigDiagnostics diag) {
-        if (Files.exists(file)) return;
-        try {
-            Files.createDirectories(file.getParent());
-            Files.writeString(file, YAML.dump(defaults), StandardCharsets.UTF_8);
-            LOADER.invalidate(file);
-            diag.healedBlock(file.getFileName().toString());
-        } catch (IOException e) {
-            ManiacMod.LOGGER.warn("[config] не вдалось створити {}: {}", file.getFileName(), e.getMessage());
+    private static void heal(ConfigBlock block, Path file, Map<String, Object> defaults,
+                             ConfigDiagnostics diag) {
+        if (!Files.exists(file)) {
+            try {
+                Files.createDirectories(file.getParent());
+                Files.writeString(file, YAML.dump(defaults), StandardCharsets.UTF_8);
+                LOADER.invalidate(file);
+                diag.healedBlock(file.getFileName().toString());
+            } catch (IOException e) {
+                ManiacMod.LOGGER.warn("[config] не вдалось створити {}: {}", file.getFileName(), e.getMessage());
+            }
+            return;
         }
+        if (block.kind() != ConfigBlock.Kind.SETTINGS) return;
+        healMissingKeys(block, file, defaults, diag);
+    }
+
+    /**
+     * Дописує в кінець наявного файлу ключі схеми, яких у ньому немає.
+     *
+     * Розташування ключа у файлі залежить від формату, який уже
+     * використовує адмін (ці два формати співіснують у проєкті):
+     *   • ПЛОСКИЙ ({@code generators.yml}: ключі в корені) — новий
+     *     рядок {@code name: value} у кінець файлу;
+     *   • ВКЛАДЕНИЙ ({@code maniacs.yml}: {@code maniac:} а під ним
+     *     відступ і ключі) — рядок з відступом дописується в кінець
+     *     саме цього блока, а не файлу, інакше він потрапив би не в
+     *     той розділ.
+     * Формат визначається за розпарсеним файлом: якщо в корені є мапа
+     * під ключем {@code block.id()} — вкладений, інакше плоский.
+     *
+     * Вкладений блок доповнюється ВСЕРЕДИНІ себе — див.
+     * {@link #insertIntoNestedBlock}; файл із кількома блоками (як
+     * {@code maniacs.yml}) від цього не страждає. Якщо блок записаний
+     * у формі, яку текстом безпечно не доповнити, ключі не дописуються
+     * (лише WARN у лог, значення діють з дефолту в пам'яті).
+     */
+    private static void healMissingKeys(ConfigBlock block, Path file,
+                                        Map<String, Object> defaults, ConfigDiagnostics diag) {
+        Map<String, Object> root = readDisk(file);
+        Object nested = root.get(block.id());
+        boolean isNested = nested instanceof Map<?, ?>;
+        Map<String, Object> present = isNested ? castMap((Map<?, ?>) nested) : root;
+
+        Map<String, Object> defaultSection = defaults.get(block.id()) instanceof Map<?, ?> dm
+            ? castMap(dm) : defaults;
+
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        java.util.List<String> added = new java.util.ArrayList<>();
+        String indent = isNested ? "  " : "";
+        for (ConfigKey<?> key : block.keys()) {
+            if (present.containsKey(key.name())) continue;
+            // Значення з jar-дефолту, а якщо там нема — з дефолту схеми:
+            // так ключ, якого ще не встигли додати в yml у ресурсах,
+            // усе одно потрапить у файл.
+            Object value = defaultSection.containsKey(key.name())
+                ? defaultSection.get(key.name()) : key.defaultValue();
+            lines.add(indent + key.name() + ": " + scalarToYaml(value));
+            added.add(key.name());
+        }
+        if (lines.isEmpty()) return;
+
+        try {
+            String text = Files.readString(file, StandardCharsets.UTF_8);
+            String eol = text.contains("\r\n") ? "\r\n" : "\n";
+
+            String updated;
+            if (isNested) {
+                updated = insertIntoNestedBlock(text, block.id(), lines, eol);
+                if (updated == null) {
+                    diag.keysNotWritten(block.id(), added);
+                    return;
+                }
+            } else {
+                StringBuilder out = new StringBuilder(text);
+                if (!text.isEmpty() && !text.endsWith("\n")) out.append(eol);
+                for (String line : lines) out.append(line).append(eol);
+                updated = out.toString();
+            }
+
+            Files.writeString(file, updated, StandardCharsets.UTF_8);
+            LOADER.invalidate(file);
+            diag.healedKeys(file.getFileName().toString(), added);
+        } catch (IOException e) {
+            ManiacMod.LOGGER.warn("[config] не вдалось доповнити {}: {}", file.getFileName(), e.getMessage());
+        }
+    }
+
+    /**
+     * Вставляє рядки в кінець вкладеного блока {@code id:} і повертає
+     * новий текст файлу; {@code null}, якщо безпечно це зробити не
+     * вдалось.
+     *
+     * Кілька блоків живуть в одному файлі ({@code maniacs.yml}:
+     * {@code maniac:} і {@code maniac_selection:}; {@code points.yml}:
+     * {@code map:}, {@code loot:} і DATA-ключі), тож дописати в кінець
+     * ФАЙЛУ означало б покласти ключ під чужий блок. Замість цього
+     * знаходимо рядок {@code id:} у корені, читаємо тіло вниз до
+     * наступного кореневого ключа (рядка без відступу, що не коментар),
+     * і вставляємо після ОСТАННЬОГО значущого (не порожнього і не
+     * коментаря) рядка тіла — так нові ключі стоять разом зі своїми
+     * сусідами, а порожні рядки й коментарі між блоками лишаються на
+     * місці.
+     *
+     * {@code null}: рядок {@code id:} не знайдено у вигляді «id:» без
+     * значення в тому ж рядку (наприклад, адмін записав блок у
+     * flow-стилі {@code id: {a: 1}}) — такий формат текстом не
+     * доповнити, тому чесно відмовляємось і лишаємо файл без змін.
+     */
+    private static String insertIntoNestedBlock(String text, String id, java.util.List<String> lines,
+                                                String eol) {
+        String[] rows = text.split("\r?\n", -1);
+        int header = -1;
+        for (int i = 0; i < rows.length; i++) {
+            String r = rows[i];
+            if (r.isEmpty()) continue;
+            char c = r.charAt(0);
+            if (c == ' ' || c == '\t' || c == '#') continue;
+            if (r.stripTrailing().equals(id + ":")) { header = i; break; }
+        }
+        if (header < 0) return null;
+
+        // Кінець тіла: останній значущий рядок ДО наступного кореневого ключа.
+        int lastBody = header;
+        for (int i = header + 1; i < rows.length; i++) {
+            String r = rows[i];
+            if (r.isBlank()) continue;
+            char c = r.charAt(0);
+            if (c == '#') continue;                       // коментар не завершує тіло й не є його частиною
+            if (c != ' ' && c != '\t') break;             // наступний кореневий ключ
+            lastBody = i;
+        }
+
+        java.util.List<String> result = new java.util.ArrayList<>(java.util.Arrays.asList(rows));
+        result.addAll(lastBody + 1, lines);
+        return String.join(eol, result);
+    }
+
+    /**
+     * Скаляр (число/bool/рядок) у вигляді, безпечному для ОДНОГО рядка
+     * YAML.
+     *
+     * ── Чому не {@code YAML.dump(value)} для рядків ──────────────────
+     * Дампер серіалізує голий скаляр верхнього рівня як окремий документ
+     * і може дописати маркер кінця документа ({@code RANDOM\n...}); після
+     * {@code trim()} у файл потрапило б {@code playerMode: RANDOM\n...} —
+     * зламаний YAML. Тому рядок беремо в одинарні лапки самі (єдине
+     * екранування, яке потрібне: {@code '} → {@code ''}). Лапки завжди,
+     * навіть де вони не обов'язкові, — так порожній рядок лишається
+     * {@code ''} (а не {@code null}), а значення на кшталт {@code yes},
+     * {@code 123} чи {@code a: b} не перетворюються на інший тип.
+     */
+    private static String scalarToYaml(Object value) {
+        if (value instanceof Number || value instanceof Boolean) return String.valueOf(value);
+        if (value == null) return "''";
+        return "'" + String.valueOf(value).replace("'", "''") + "'";
     }
 
     // ── Розбір ───────────────────────────────────────────────────────────
@@ -224,6 +392,95 @@ public final class ManiacConfigs {
         }
 
         return new Snapshot(values, dataBlocks);
+    }
+
+    // ── Запис (з GUI-меню налаштувань) ──────────────────────────────────
+
+    /**
+     * Пише ОДНЕ значення в YAML-файл на диску й одразу перезавантажує
+     * снапшот. Викликається лише з обробника {@code SettingsChangePacket}
+     * (сервер, права оператора вже перевірені раніше в ланцюжку).
+     *
+     * ── Чому текстом мапи, а не point-fix у файлі ────────────────────
+     * На відміну від {@link #heal}, який лише ДОПИСУЄ відсутній блок і
+     * ніколи не чіпає наявний вміст (щоб не стерти коментарі й порядок
+     * адмінських правок), запис із GUI — це навпаки, свідома зміна
+     * ІСНУЮЧОГО значення на бажання адміна. Тут файл перечитується як
+     * мапа, один ключ у ній підмінюється, і мапа переписується цілком
+     * через {@link #YAML}. Коментарі в файлі (якщо адмін їх туди
+     * дописав руками) цим перезаписом губляться — це усвідомлений
+     * компроміс: GUI не вміє редагувати текст, лише значення, тому не
+     * може їх зберегти. Хто хоче зберегти власні коментарі — редагує
+     * yml руками і чекає на автопідхоплення ({@link #tickWatcher()}),
+     * а не тисне кнопки в меню.
+     *
+     * @return null при успіху; людський опис помилки, якщо ключ
+     *         невідомий або значення не проходить валідацію ключа.
+     */
+    public static synchronized String set(String blockId, String keyName, String rawValue) {
+        if (tree == null) return "Конфіг ще не ініціалізований.";
+        ConfigBlock block = ConfigSchema.blockById(blockId);
+        if (block == null || block.kind() != ConfigBlock.Kind.SETTINGS) {
+            return "Невідомий блок налаштувань: " + blockId;
+        }
+        ConfigKey<?> key = block.keys().stream()
+            .filter(k -> k.name().equals(keyName))
+            .findFirst().orElse(null);
+        if (key == null) {
+            return "Невідомий ключ " + keyName + " у блоці " + blockId;
+        }
+
+        Object parsedRaw;
+        try {
+            parsedRaw = parseForKey(key, rawValue);
+        } catch (RuntimeException e) {
+            return "Значення '" + rawValue + "' не підходить для " + key.path()
+                + " (очікується " + key.describeRange() + ")";
+        }
+
+        // resolve() і лікує (clamp/fallback), і валідує одночасно — та
+        // сама логіка, що при читанні файлу, тому GUI не може записати
+        // те, чого reload() потім сам би виправив мовчки.
+        ConfigDiagnostics probe = new ConfigDiagnostics();
+        Object corrected = key.resolve(parsedRaw, probe);
+
+        Path file = tree.namespaceDir().resolve(block.fileName());
+        // Копія, а не пряма мутація: readDisk() може повернути мапу з
+        // внутрішнього кешу CachedYamlLoader (LOADER.readYamlCached) —
+        // писати в неї напряму означає псувати чужий кеш-запис до того,
+        // як invalidate() встигне його прибрати.
+        Map<String, Object> section = new LinkedHashMap<>(readDisk(file));
+        Object legacy = section.get(block.id());
+        Map<String, Object> target = legacy instanceof Map<?, ?> m
+            ? new LinkedHashMap<>(castMap(m))
+            : section;
+        target.put(key.name(), corrected);
+        if (legacy instanceof Map<?, ?>) section.put(block.id(), target);
+
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, YAML.dump(section), StandardCharsets.UTF_8);
+            LOADER.invalidate(file);
+        } catch (IOException e) {
+            return "Не вдалось записати " + block.fileName() + ": " + e.getMessage();
+        }
+
+        reload("GUI-меню налаштувань: " + key.path());
+        return null;
+    }
+
+    /**
+     * Сире текстове поле з GUI → тип, який очікує {@link ConfigKey#resolve}
+     * (Number для integer/decimal, Boolean для bool, String інакше).
+     * Сам {@code resolve} потім ще й клемпить/валідує — тут лише
+     * переклад рядка в правильний Java-тип без домішки range-логіки.
+     */
+    private static Object parseForKey(ConfigKey<?> key, String rawValue) {
+        Object def = key.defaultValue();
+        if (def instanceof Integer) return Integer.parseInt(rawValue.trim());
+        if (def instanceof Double) return Double.parseDouble(rawValue.trim());
+        if (def instanceof Boolean) return Boolean.parseBoolean(rawValue.trim());
+        return rawValue.trim();
     }
 
     // ── Введення-виведення ───────────────────────────────────────────────

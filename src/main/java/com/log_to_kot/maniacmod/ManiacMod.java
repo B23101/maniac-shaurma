@@ -14,6 +14,7 @@ import com.log_to_kot.maniacmod.registry.ModEntityTypes;
 import com.log_to_kot.maniacmod.registry.ModItems;
 import com.log_to_kot.maniacmod.registry.ModSoundCues;
 import com.log_to_kot.maniacmod.registry.ModSounds;
+import com.log_to_kot.maniacmod.server.GroundItemHooks;
 import com.log_to_kot.maniacmod.server.ServerHooks;
 import dev.shaurmalib.common.damage.DamageInterceptorRegistry;
 import dev.shaurmalib.common.lifecycle.DisconnectPolicy;
@@ -99,6 +100,7 @@ public class ManiacMod {
         MinecraftForge.EVENT_BUS.addListener(this::onServerAboutToStart);
         MinecraftForge.EVENT_BUS.addListener(this::onServerStopping);
         MinecraftForge.EVENT_BUS.register(new ServerHooks());
+        MinecraftForge.EVENT_BUS.register(new GroundItemHooks());
 
         GeckoLib.initialize();
     }
@@ -189,29 +191,44 @@ public class ManiacMod {
         // Звуки описуються один раз — далі будь-де досить SoundCenter.play(...).
         ModSoundCues.register();
 
-        // Ванільний урон вимкнено НА ВЕСЬ ЧАС, коли фаза матчу цього не
-        // дозволяє (PhaseRule.DAMAGE) — тобто LOBBY, CINEMATIC, SCATTER,
-        // ROLE_REVEAL, ENDING, RESET. Шкоду в ігрових фазах (HUNT/POWERED/
-        // FINALE) наносить лише удар маньяка через власний модуль, а HP
-        // виживих рахує MatchContext.
+        // ── Політика ванільного урону по гравцях ────────────────────────
+        // Реєстр працює за принципом "OR": урон блокується, щойно ХОЧ
+        // ОДИН інтерцептор каже "блокувати". Тому тут ОДНА причина зі
+        // складною умовою, а не кілька — так видно всю політику разом.
         //
-        // Раніше тут стояла лямбда (victim, source, amount, ctx) -> true,
-        // яка мала блокувати урон АБСОЛЮТНО ЗАВЖДИ, включно з ігровими
-        // фазами — тобто de facto взагалі не мала стосунку до фази і не
-        // допомагала діагностувати, чому гравці отримували "урон від
-        // усього" і в лобі, і при заході на сервер: причина завжди
-        // повертала true, тож якщо шкода все одно проходила — це значило,
-        // що сам interceptor або взагалі не викликається (стара збірка,
-        // не підключений withDamageGuard/DamageGuardHooks), або шлях
-        // урону не йде через LivingHurtEvent. Явна перевірка фази тут не
-        // усуває той шлях сама по собі, але робить умову однозначною й
-        // легкою для перевірки логами/дебагом (Phases.current() видно
-        // одразу), а не бланкетним true, з яким неможливо відрізнити
-        // "спрацювало" від "взагалі не викликалось".
+        // 1) Фаза не дозволяє шкоду (LOBBY/CINEMATIC/SCATTER/ROLE_REVEAL/
+        //    ENDING/RESET) → блокуємо ВСЕ: у технічних фазах гравці
+        //    безсмертні, ніхто нікого не б'є.
+        //
+        // 2) Фаза ігрова, жертва — ВИЖИВИЙ → блокуємо ВАНІЛЬНИЙ урон
+        //    ЗАВЖДИ. HP виживих рахує MatchContext, а справжня шкода
+        //    приходить лише двома власними шляхами, які цей
+        //    інтерцептор НЕ бачить (вони не викликають ванільний hurt):
+        //      • удар маньяка → ManiacCombatModule.onAttack
+        //        (damageSurvivor → непритомність);
+        //      • падіння → SurvivorModule.onFall (лежання/нога, БЕЗ
+        //        втрати HP).
+        //    Усе інше — PvP виживих, снаряди, вибухи, вогонь, моби,
+        //    провалювання у порожнечу — це ванільне HP, якого гра не
+        //    показує й не лікує, і воно лише могло б вбити гравця
+        //    "по-справжньому" поза системою станів. Тому блокується.
+        //
+        // 3) Фаза ігрова, жертва — МАНЬЯК або глядач → не чіпаємо:
+        //    маньяк не має HP-системи, а глядач із ванільною поведінкою
+        //    (SPECTATOR/креатив) сам захищений режимом гри.
+        //
+        // ⚠ Порядок умов — навмисний: спершу "фаза", тоді "роль". Роль
+        // читаємо з матчу лише в ігровій фазі, де матч гарантовано
+        // існує й ролі призначено.
         DamageInterceptorRegistry.register(MOD_ID + ":match_damage",
-            (victim, source, amount, ctx) ->
-                !com.log_to_kot.maniacmod.core.phase.Phases.allows(
-                    com.log_to_kot.maniacmod.core.phase.PhaseRule.DAMAGE));
+            (victim, source, amount, ctx) -> {
+                if (!com.log_to_kot.maniacmod.core.phase.Phases.allows(
+                        com.log_to_kot.maniacmod.core.phase.PhaseRule.DAMAGE)) {
+                    return true;
+                }
+                MatchOrchestrator current = match;
+                return current != null && current.isSurvivor(victim.getUUID());
+            });
 
         // Фази дзеркаляться в грубий стан бібліотеки одним місцем.
         // v3 тримав для цього окремий enum GameState і switch — тепер

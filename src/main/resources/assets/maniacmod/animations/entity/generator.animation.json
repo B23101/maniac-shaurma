@@ -1,0 +1,47 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.generator.idle": {
+      "loop": true,
+      "animation_length": 2.0,
+      "comment": "Заглушка: генератор не полагоджений (стадії REPAIR/FUEL). Нерухомий каркас із мінімальним 'диханням' панелі, щоб було видно, що модель жива, а не застигла. Художник замінює на свою анімацію, ім'я 'animation.generator.idle' лишити незмінним — саме його читає GeneratorEntity.registerControllers через RawAnimation.begin().thenLoop(\"idle\").",
+      "bones": {
+        "panel": {
+          "position": {
+            "0.0": { "vector": [0, 0, 0] },
+            "1.0": { "vector": [0, 0.15, 0] },
+            "2.0": { "vector": [0, 0, 0] }
+          }
+        }
+      }
+    },
+    "animation.generator.active": {
+      "loop": true,
+      "animation_length": 1.5,
+      "comment": "Заглушка: обидві стадії (REPAIR і FUEL) пройдено, generator.isCompleted()==true. Патрубки обертаються, панель яскраво пульсує швидше за idle. Ім'я 'animation.generator.active' лишити незмінним — читає GeneratorEntity.registerControllers через RawAnimation.begin().thenLoop(\"active\").",
+      "bones": {
+        "pipe_left": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, 0] },
+            "1.5": { "vector": [0, 360, 0] }
+          }
+        },
+        "pipe_right": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, 0] },
+            "1.5": { "vector": [0, -360, 0] }
+          }
+        },
+        "panel": {
+          "position": {
+            "0.0": { "vector": [0, 0, 0] },
+            "0.375": { "vector": [0, 0.3, 0] },
+            "0.75": { "vector": [0, 0, 0] },
+            "1.125": { "vector": [0, 0.3, 0] },
+            "1.5": { "vector": [0, 0, 0] }
+          }
+        }
+      }
+    }
+  }
+}

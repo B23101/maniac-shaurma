@@ -7,7 +7,6 @@ import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.maniacs.ManiacCombatModule;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.PhaseSyncPacket;
-import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
 import dev.shaurmalib.forge.chat.ChatModule;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.event.RegisterCommandsEvent;
@@ -92,9 +91,23 @@ public final class ServerHooks {
     }
 
     /**
-     * Удар ЛКМ. Ванільна подія скасовується завжди, коли б'є маньяк:
-     * шкоду рахує модуль удару за дальністю архетипу, а не ванільний
-     * розрахунок за довжиною руки гравця.
+     * Удар ЛКМ по будь-якій сутності. Тут вирішується, ХТО кого може бити.
+     *
+     * ── Правила (у порядку перевірки) ────────────────────────────────
+     * 1. Б'є МАНЬЯК → ванільний удар скасовується завжди: шкоду рахує
+     *    модуль удару за дальністю архетипу ({@code combat.onAttack}), а
+     *    не ванільний розрахунок за довжиною руки гравця. Чи фаза
+     *    дозволяє бити — перевіряється всередині ({@code damageAllowed}).
+     * 2. Б'є ВИЖИВИЙ по ГРАВЦЮ (виживий, маньяк чи будь-хто) →
+     *    скасовується без винятків: PvP між тими, хто виживає, вимкнено.
+     *    Раніше цього ніде не було — скасовувався лише удар маньяка, тож
+     *    виживі спокійно били один одного ванільним {@code Player.attack}.
+     * 3. Решта (виживий б'є генератор, предмет, мобів) — не наша справа,
+     *    подію не чіпаємо.
+     *
+     * Це ПЕРШИЙ шар захисту від PvP. Другий — інтерцептор у
+     * {@code ManiacMod} ({@code LivingHurtEvent}), який ловить шкоду, що
+     * прийшла не через ЛКМ (снаряд, вибух, чужий мод).
      */
     @SubscribeEvent
     public void onAttackEntity(AttackEntityEvent event) {
@@ -102,12 +115,22 @@ public final class ServerHooks {
 
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return;
-        if (!match.isManiac(attacker.getUUID())) return;
 
-        event.setCanceled(true);
-        if (!ManiacCombatModule.damageAllowed()) return;
+        if (match.isManiac(attacker.getUUID())) {
+            event.setCanceled(true);
+            if (!ManiacCombatModule.damageAllowed()) return;
 
-        match.combat().onAttack(attacker, event.getTarget());
+            match.combat().onAttack(attacker, event.getTarget());
+            return;
+        }
+
+        // Не маньяк. Якщо ціль — гравець, це PvP: у грі його немає.
+        // Перевіряємо роль ЦІЛІ, а не лише фазу: у лобі (де ролей ще
+        // немає) звичайне ванільне поводження лишається на інтерцептору
+        // і гейммоду ADVENTURE, який ставить sendToLobby.
+        if (event.getTarget() instanceof ServerPlayer && match.isSurvivor(attacker.getUUID())) {
+            event.setCanceled(true);
+        }
     }
 
     /**
@@ -162,10 +185,14 @@ public final class ServerHooks {
         lib.lobbyModule().hideNameTag(player);
 
         ModNetwork.toPlayer(player, new PhaseSyncPacket(match.phases().current()));
-        ModNetwork.toPlayer(player, roleOf(match, player));
+        ModNetwork.toPlayer(player, match.roleSyncFor(player));
+        ModNetwork.toPlayer(player, new com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket(
+            com.log_to_kot.maniacmod.config.ManiacConfigs.get(
+                com.log_to_kot.maniacmod.config.ConfigSchema.GROUND_ITEM_SPARKLE_ENABLED)));
         // Кнопки каналів у чаті залежать від ролі/фази — надсилаємо одразу,
         // щоб гравець, що зайшов посеред матчу, не чекав наступного переходу.
         ChatModule.syncChannels(player);
+        sendSettingsButtonIfOperator(player);
         match.inventoryAllocation().applyOnJoin(player);
         // Новий гравець у таб-екрані для всіх, і всі вже присутні —
         // у табі гравця, що щойно зайшов.
@@ -240,7 +267,7 @@ public final class ServerHooks {
 
     /**
      * Падіння з висоти. SurvivorModule сам вирішує, чи висота достатня
-     * (fallKnockdownHeightBlocks) і чи ламається нога (legBreakChance);
+     * (fallKnockdownHeightBlocks) і чи ламається нога (legBreakChanceFor — за висотою);
      * тут лише переадресація й скасування ванільного урону від
      * падіння, коли модуль підтвердив, що обробив його сам.
      *
@@ -264,18 +291,31 @@ public final class ServerHooks {
 
     // ── Допоміжне ────────────────────────────────────────────────────────
 
-    private static RoleSyncPacket roleOf(MatchOrchestrator match, ServerPlayer player) {
-        if (match.isManiac(player.getUUID())) {
-            var archetype = match.maniacArchetype();
-            return new RoleSyncPacket(RoleSyncPacket.Role.MANIAC,
-                archetype == null ? "" : archetype.id());
-        }
-        if (match.isSurvivor(player.getUUID())) {
-            var role = match.survivorRoleOf(player.getUUID());
-            return new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR,
-                role == null ? "" : role.id());
-        }
-        return new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "");
+    /**
+     * Кнопка "⚙ Налаштування" у ВАНІЛЬНОМУ системному чаті (не через
+     * власний {@code ChatModule}/{@code ManiacChatEntryRenderer}, який
+     * малює лише текст лінії без clickEvent-ів — див. окремий
+     * докстрінг-нотатку в {@code SettingsMenuScreen}). Надсилається
+     * лише оператору ({@code hasPermissions(2)} — той самий рівень, що
+     * корінь команди {@code /maniac} і {@link ManiacCommand#openSettings}),
+     * один раз при вході, а не щоразу — гравець сам вирішує, коли
+     * натиснути, кнопка не набридає повторним нагадуванням.
+     */
+    private static void sendSettingsButtonIfOperator(ServerPlayer player) {
+        if (!player.hasPermissions(2)) return;
+
+        net.minecraft.network.chat.MutableComponent button =
+            net.minecraft.network.chat.Component.translatable("maniacmod.chat.settings_button")
+                .withStyle(style -> style
+                    .withColor(net.minecraft.ChatFormatting.GOLD)
+                    .withUnderlined(true)
+                    .withClickEvent(new net.minecraft.network.chat.ClickEvent(
+                        net.minecraft.network.chat.ClickEvent.Action.RUN_COMMAND, "/maniac settings"))
+                    .withHoverEvent(new net.minecraft.network.chat.HoverEvent(
+                        net.minecraft.network.chat.HoverEvent.Action.SHOW_TEXT,
+                        net.minecraft.network.chat.Component.translatable("maniacmod.chat.settings_button_hover"))));
+
+        player.sendSystemMessage(button);
     }
 
     /** Розсилає фазу всім — викликається матчем при кожному переході. */

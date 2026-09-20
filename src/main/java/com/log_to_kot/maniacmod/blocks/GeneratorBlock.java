@@ -69,17 +69,7 @@ public class GeneratorBlock extends Block {
         if (match == null) return InteractionResult.PASS;
         if (!match.phases().allows(PhaseRule.GENERATOR_REPAIR)) return InteractionResult.PASS;
 
-        // Маньяк ламає готовий генератор.
-        if (match.isManiac(sp.getUUID())) {
-            if (!state.getValue(ACTIVE)) {
-                sp.sendSystemMessage(Component.translatable("maniacmod.generator.not_active"));
-                return InteractionResult.SUCCESS;
-            }
-            level.setBlock(pos, state.setValue(ACTIVE, false), 3);
-            match.generatorModule().sabotage(pos);
-            sp.sendSystemMessage(Component.translatable("maniacmod.generator.broken"));
-            return InteractionResult.SUCCESS;
-        }
+
 
         // Виживий працює над генератором. use() приходить повторно,
         // поки тримається ПКМ — модуль сам розуміє, коли відпустили.

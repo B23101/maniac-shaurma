@@ -42,10 +42,19 @@ public final class ModSounds {
     public static final RegistryObject<SoundEvent> TRAP_SNAP = register("trap_snap");
     public static final RegistryObject<SoundEvent> WIRE_ZAP  = register("wire_zap");
 
+    // ── Стаміна ──────────────────────────────────────────────────────────
+    // 3 варіації важкого дихання, коли стаміна на нулі — sounds.json
+    // сам випадково обирає одну з трьох при кожному відтворенні цієї
+    // події (Minecraft-механіка "sounds": [...] у визначенні події), тому
+    // тут реєструється ОДИН SoundEvent на подію "exhausted_breath", а не
+    // три окремих — так само, як maniac_nearby чи будь-яка інша подія
+    // вище: клас-константа = одна подія в sounds.json, не один файл.
+    public static final RegistryObject<SoundEvent> EXHAUSTED_BREATH = register("exhausted_breath");
+
     // TODO(асети): за дизайном ще потрібні — серцебиття (heartbeat),
-    // важке дихання без стаміни (exhausted_breath), хруст ноги
-    // (leg_break), провал міні-гри генератора (minigame_fail),
-    // залив бензину (fuel_pour). Реєструвати після додавання .ogg.
+    // хруст ноги (leg_break), провал міні-гри генератора
+    // (minigame_fail), залив бензину (fuel_pour). Реєструвати після
+    // додавання .ogg.
 
     private static RegistryObject<SoundEvent> register(String name) {
         return SOUNDS.register(name, () -> SoundEvent.createVariableRangeEvent(

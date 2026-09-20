@@ -35,10 +35,19 @@ public final class ConfigKey<T> {
     private final Function<T, T> corrector;
     private final OnInvalid onInvalid;
     private final String describeRange;
+    private final Double numericMin;
+    private final Double numericMax;
 
     private ConfigKey(String block, String name, T defaultValue,
                       Function<Object, T> parser, Function<T, T> corrector,
                       OnInvalid onInvalid, String describeRange) {
+        this(block, name, defaultValue, parser, corrector, onInvalid, describeRange, null, null);
+    }
+
+    private ConfigKey(String block, String name, T defaultValue,
+                      Function<Object, T> parser, Function<T, T> corrector,
+                      OnInvalid onInvalid, String describeRange,
+                      Double numericMin, Double numericMax) {
         this.block = block;
         this.name = name;
         this.defaultValue = defaultValue;
@@ -46,6 +55,8 @@ public final class ConfigKey<T> {
         this.corrector = corrector;
         this.onInvalid = onInvalid;
         this.describeRange = describeRange;
+        this.numericMin = numericMin;
+        this.numericMax = numericMax;
     }
 
     public String block()          { return block; }
@@ -54,6 +65,27 @@ public final class ConfigKey<T> {
     public T defaultValue()        { return defaultValue; }
     public OnInvalid onInvalid()   { return onInvalid; }
     public String describeRange()  { return describeRange; }
+
+    /**
+     * Нижня/верхня межа для {@code integer}/{@code decimal} ключів,
+     * {@code null} для {@code bool}/{@code option}/{@code freeText}.
+     *
+     * ── Навіщо окремо від {@link #describeRange()} ───────────────────
+     * {@code describeRange()} — текст для ЛЮДИНИ (повідомлення про
+     * помилку, підказка в меню): для одних ключів це "0.0…1.0", для
+     * інших — довільний hint (напр. freeText: "id з ManiacRegistry").
+     * Парсити межі з цього рядка в GUI (щоб намалювати повзунок) —
+     * крихко: формат hint-а ніде не гарантується. Ці два поля — типізовані
+     * числа спеціально ДЛЯ повзунка {@code SettingsMenuScreen}, а не ще
+     * один спосіб показати те саме, що вже показує describeRange().
+     */
+    public Double numericMin()     { return numericMin; }
+    public Double numericMax()     { return numericMax; }
+
+    /** Чи має цей ключ числові межі (тобто це integer/decimal, придатний для повзунка). */
+    public boolean hasNumericRange() {
+        return numericMin != null && numericMax != null;
+    }
 
     /**
      * Перетворює сире значення з YAML у типізоване й виправляє
@@ -83,9 +115,10 @@ public final class ConfigKey<T> {
     public static ConfigKey<Integer> integer(String block, String name, int def, int min, int max) {
         requireWithin(name, def, min, max);
         return new ConfigKey<>(block, name, def,
-            raw -> ((Number) raw).intValue(),
-            value -> Math.max(min, Math.min(max, value)),
-            OnInvalid.CLAMP, min + "…" + max);
+                raw -> ((Number) raw).intValue(),
+                value -> Math.max(min, Math.min(max, value)),
+                OnInvalid.CLAMP, min + "…" + max,
+                (double) min, (double) max);
     }
 
     public static ConfigKey<Double> decimal(String block, String name, double def, double min, double max) {
@@ -93,16 +126,17 @@ public final class ConfigKey<T> {
             throw new IllegalArgumentException("Дефолт '" + name + "' поза власним діапазоном.");
         }
         return new ConfigKey<>(block, name, def,
-            raw -> ((Number) raw).doubleValue(),
-            value -> Math.max(min, Math.min(max, value)),
-            OnInvalid.CLAMP, min + "…" + max);
+                raw -> ((Number) raw).doubleValue(),
+                value -> Math.max(min, Math.min(max, value)),
+                OnInvalid.CLAMP, min + "…" + max,
+                min, max);
     }
 
     public static ConfigKey<Boolean> bool(String block, String name, boolean def) {
         return new ConfigKey<>(block, name, def,
-            raw -> raw instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(raw)),
-            value -> value,
-            OnInvalid.FALLBACK, "true/false");
+                raw -> raw instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(raw)),
+                value -> value,
+                OnInvalid.FALLBACK, "true/false");
     }
 
     /**
@@ -114,9 +148,9 @@ public final class ConfigKey<T> {
             throw new IllegalArgumentException("Дефолт '" + def + "' відсутній у переліку ключа " + name);
         }
         return new ConfigKey<>(block, name, def,
-            raw -> String.valueOf(raw).trim(),
-            value -> allowed.contains(value) ? value : def,
-            OnInvalid.FALLBACK, String.join(" | ", allowed));
+                raw -> String.valueOf(raw).trim(),
+                value -> allowed.contains(value) ? value : def,
+                OnInvalid.FALLBACK, String.join(" | ", allowed));
     }
 
     /**
@@ -127,9 +161,9 @@ public final class ConfigKey<T> {
      */
     public static ConfigKey<String> freeText(String block, String name, String def, String hint) {
         return new ConfigKey<>(block, name, def,
-            raw -> String.valueOf(raw).trim(),
-            value -> value.isEmpty() ? def : value,
-            OnInvalid.FALLBACK, hint);
+                raw -> String.valueOf(raw).trim(),
+                value -> value.isEmpty() ? def : value,
+                OnInvalid.FALLBACK, hint);
     }
 
     private static void requireWithin(String name, int def, int min, int max) {

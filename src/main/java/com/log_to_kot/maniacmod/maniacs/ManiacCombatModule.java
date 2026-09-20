@@ -60,9 +60,49 @@ public final class ManiacCombatModule implements PhaseListener {
         return "maniac-combat";
     }
 
+    /**
+     * Свіжий матч ніколи не успадковує перезарядку чи лок попереднього.
+     *
+     * ── Чому не лише {@link #onPhaseExit} ────────────────────────────
+     * Лок {@code ATTACK} ставиться після удару й знімається, коли
+     * {@code cooldownTicks} дотікає до нуля в {@link #onPhaseTick}. Але
+     * якщо маньяк вийшов із сервера посеред перезарядки (тоді
+     * {@code maniacOf} повертає null і {@code unlock} не викликається),
+     * або матч урвано командою в технічній фазі, лок лишався в
+     * статичному реєстрі бібліотеки НАЗАВЖДИ — і наступний матч маньяк
+     * відкривав із забороненою атакою: клік проходив, замах був, а
+     * сервер мовчки скасовував удар.
+     *
+     * Скидаємо на ВХОДІ в кожну ігрову фазу теж, а не лише на виході.
+     */
+    @Override
+    public void onPhaseEnter(GamePhase phase, List<ServerPlayer> players) {
+        if (phase != GamePhase.HUNT) return;
+        resetCooldownAndLocks(players);
+    }
+
     @Override
     public void onPhaseExit(GamePhase phase, List<ServerPlayer> players) {
-        if (!phase.isGameplay()) return;
+        // Будь-який вихід, не лише з ігрової фази: перезарядка й лок
+        // не мають переживати перехід, після якого удар уже неможливий.
+        resetCooldownAndLocks(players);
+    }
+
+    /**
+     * Гравець вийшов із сервера — знімаємо його лок ЗА UUID.
+     *
+     * Списки {@code players} у {@link #onPhaseExit} містять лише тих,
+     * хто онлайн, тож для вже відключеного маньяка {@code unlock} там не
+     * викликається, а запис у статичному реєстрі lib лишається для UUID,
+     * якого вже немає. Якщо цей же гравець зайде знову — він стартує з
+     * чужим замком, якого сам не ставив.
+     */
+    public void onPlayerLeft(ServerPlayer player) {
+        cooldownTicks = 0;
+        unlock(player);
+    }
+
+    private void resetCooldownAndLocks(List<ServerPlayer> players) {
         cooldownTicks = 0;
         for (ServerPlayer player : players) unlock(player);
     }

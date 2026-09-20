@@ -1,15 +1,23 @@
 package com.log_to_kot.maniacmod.registry;
 
 import com.log_to_kot.maniacmod.ManiacMod;
-import com.log_to_kot.maniacmod.blocks.GeneratorBlock;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraftforge.registries.DeferredRegister;
 import net.minecraftforge.registries.ForgeRegistries;
-import net.minecraftforge.registries.RegistryObject;
 
-/** Блоки мода. Перенесено з v3 blocks/ModBlocks.java без змін по суті. */
+/**
+ * Блоки мода.
+ *
+ * ── Генератор більше не блок ─────────────────────────────────────────
+ * Раніше тут реєструвався {@code GeneratorBlock} — блок, який
+ * картобудівник мусив ставити руками на кожній карті заздалегідь. Тепер
+ * генератор — сутність ({@link com.log_to_kot.maniacmod.entity.GeneratorEntity},
+ * реєстрація в {@link ModEntityTypes#GENERATOR}), яка сама з'являється
+ * при застосуванні плану спавну — див. {@code MatchOrchestrator.spawnGeneratorEntity}.
+ * Реєстри тут лишаються порожніми заготовками під майбутні звичайні
+ * блоки мода (не всі елементи карти доречно робити сутностями).
+ */
 public final class ModBlocks {
 
     public static final DeferredRegister<Block> BLOCKS =
@@ -17,13 +25,6 @@ public final class ModBlocks {
 
     public static final DeferredRegister<Item> BLOCK_ITEMS =
         DeferredRegister.create(ForgeRegistries.ITEMS, ManiacMod.MOD_ID);
-
-    public static final RegistryObject<Block> GENERATOR =
-        BLOCKS.register("generator", GeneratorBlock::new);
-
-    public static final RegistryObject<Item> GENERATOR_ITEM =
-        BLOCK_ITEMS.register("generator",
-            () -> new BlockItem(GENERATOR.get(), new Item.Properties()));
 
     private ModBlocks() {}
 }

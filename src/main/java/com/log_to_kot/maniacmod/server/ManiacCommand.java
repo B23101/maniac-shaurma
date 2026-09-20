@@ -8,6 +8,7 @@ import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
 import com.log_to_kot.maniacmod.core.match.DebugMode;
+import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
 import com.log_to_kot.maniacmod.maniacs.ManiacSelection;
@@ -33,6 +34,7 @@ import java.util.Map;
  *   /maniac start [маньяк]        — старт матчу
  *   /maniac stop                  — примусове завершення
  *   /maniac debug                 — увімкнути/вимкнути дебаг-режим
+ *   /maniac debug role <auto|maniac|survivor> — роль для дебаг-старту
  *   /maniac morph <maniac|survivor|reset> — дебаг-перетворення в лобі
  *   /maniac phase <фаза>          — ручний перехід (налагодження)
  *   /maniac status                — хто в якій ролі, яка фаза, чи готова карта
@@ -71,8 +73,21 @@ public final class ManiacCommand {
         root.then(Commands.literal("reload")
             .executes(ctx -> reloadConfig(ctx.getSource())));
 
+        root.then(Commands.literal("settings")
+            .executes(ctx -> openSettings(ctx.getSource())));
+
         root.then(Commands.literal("debug")
-            .executes(ctx -> toggleDebug(ctx.getSource())));
+            .executes(ctx -> toggleDebug(ctx.getSource()))
+            .then(Commands.literal("role")
+                .then(Commands.argument("role", StringArgumentType.word())
+                    .suggests((ctx, builder) -> {
+                        for (DebugMode.Role role : DebugMode.Role.values()) {
+                            builder.suggest(role.name().toLowerCase());
+                        }
+                        return builder.buildFuture();
+                    })
+                    .executes(ctx -> setDebugRole(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "role"))))));
 
         root.then(Commands.literal("morph")
             .then(Commands.literal("maniac")
@@ -87,6 +102,14 @@ public final class ManiacCommand {
 
         root.then(Commands.literal("status")
             .executes(ctx -> status(ctx.getSource())));
+
+        // /maniac hp                — хп/стан УСІХ виживих
+        // /maniac hp <гравець>      — хп/стан ОДНОГО виживого
+        root.then(Commands.literal("hp")
+            .executes(ctx -> hp(ctx.getSource(), null))
+            .then(Commands.argument("survivor", EntityArgument.player())
+                .executes(ctx -> hp(ctx.getSource(),
+                    EntityArgument.getPlayer(ctx, "survivor")))));
 
         root.then(Commands.literal("phase")
             .then(Commands.argument("phase", StringArgumentType.word())
@@ -182,7 +205,7 @@ public final class ManiacCommand {
         // маньяка (слоти, стаміна, генератори, лут).
         if (debug && DebugMode.role() == DebugMode.Role.SURVIVOR) {
             if (!match.start(players, null, null)) {
-                source.sendFailure(Component.translatable("maniacmod.command.start_failed"));
+                sendStartFailed(source, match);
                 return 0;
             }
             source.sendSuccess(() -> Component.translatable("maniacmod.command.started_debug_survivor"), true);
@@ -213,7 +236,7 @@ public final class ManiacCommand {
             if (debugChoice != null && debugChoice.needsMenu()) archetype = null;
 
             if (!match.start(players, maniac, archetype)) {
-                source.sendFailure(Component.translatable("maniacmod.command.start_failed"));
+                sendStartFailed(source, match);
                 return 0;
             }
             source.sendSuccess(() -> Component.translatable("maniacmod.command.started",
@@ -230,13 +253,25 @@ public final class ManiacCommand {
 
         // Режим MENU: архетип null — гравець обере сам у фазі ROLE_REVEAL.
         if (!match.start(players, choice.player(), choice.archetype())) {
-            source.sendFailure(Component.translatable("maniacmod.command.start_failed"));
+            sendStartFailed(source, match);
             return 0;
         }
 
         source.sendSuccess(() -> Component.translatable("maniacmod.command.started",
             choice.player().getName().getString()), true);
         return 1;
+    }
+
+    /**
+     * «Не вдалося почати матч» + конкретна причина, якщо це розмітка карти
+     * (нестача точок, надто мало точок генераторів тощо).
+     */
+    private static void sendStartFailed(CommandSourceStack source, MatchOrchestrator match) {
+        source.sendFailure(Component.translatable("maniacmod.command.start_failed"));
+        String reason = match.lastStartFailure();
+        if (reason != null) {
+            source.sendFailure(Component.translatable("maniacmod.command.start_failed_reason", reason));
+        }
     }
 
     /**
@@ -249,6 +284,12 @@ public final class ManiacCommand {
         MapPointConfigs.reload();
         MatchOrchestrator match = ManiacMod.match();
         if (match != null) match.reloadConfiguredMap();
+
+        // loot.sparkleEnabled читає клієнт із пакета, не з файлу — без
+        // цього /maniac reload міняв би блиск лише для тих, хто перезайде.
+        ModNetwork.toPlayers(source.getServer().getPlayerList().getPlayers(),
+            new com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket(
+                ManiacConfigs.get(ConfigSchema.GROUND_ITEM_SPARKLE_ENABLED)));
 
         if (diag.isEmpty()) {
             source.sendSuccess(() -> Component.translatable("maniacmod.command.reload_clean"), true);
@@ -265,10 +306,51 @@ public final class ManiacCommand {
         return 1;
     }
 
+    /**
+     * {@code /maniac settings} — відкриває {@link
+     * com.log_to_kot.maniacmod.client.screen.settings.SettingsMenuScreen}
+     * виконавцю команди. Консольний виконавець (немає ServerPlayer)
+     * отримує зрозумілу відмову — екран нема кому показати.
+     */
+    private static int openSettings(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.translatable("maniacmod.command.settings_players_only"));
+            return 0;
+        }
+        // Той самий шлях, що кнопка "⚙ Налаштування гри" у чаті —
+        // ServerPacketHandler.onOpenSettingsMenuRequest сам перевіряє
+        // hasPermissions(2) (тут вона й так гарантована коренем /maniac,
+        // але дублювати перевірку в двох місцях — саме той витік,
+        // якого AI_CODE_GUIDE.md просить уникати).
+        com.log_to_kot.maniacmod.server.ServerPacketHandler.onOpenSettingsMenuRequest(player);
+        return 1;
+    }
+
     private static int toggleDebug(CommandSourceStack source) {
         boolean nowOn = DebugMode.toggleRuntime();
         source.sendSuccess(() -> Component.translatable(
             nowOn ? "maniacmod.command.debug_on" : "maniacmod.command.debug_off"), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug role <auto|maniac|survivor>} — обирає, ким
+     * буде єдиний гравець наступного {@code /maniac start} у дебазі,
+     * без правки config-файлу. Не вмикає сам дебаг-режим (для цього
+     * лишається окреме {@code /maniac debug}) — лише готує роль
+     * наперед, щоб її можна було перемкнути одразу перед стартом.
+     */
+    private static int setDebugRole(CommandSourceStack source, String raw) {
+        DebugMode.Role role;
+        try {
+            role = DebugMode.Role.valueOf(raw.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            source.sendFailure(Component.translatable("maniacmod.command.unknown_debug_role", raw));
+            return 0;
+        }
+        DebugMode.setRuntimeRole(role);
+        source.sendSuccess(() -> Component.translatable(
+            "maniacmod.command.debug_role_set", role.name()), true);
         return 1;
     }
 
@@ -361,6 +443,47 @@ public final class ManiacCommand {
             + " | " + match.debugStatusLine()
             + " | маньяків у реєстрі: " + ManiacRegistry.all().size()), false);
         return 1;
+    }
+
+    /**
+     * Хп і стан виживого(-их). Без аргументу — по одному рядку на
+     * кожного зареєстрованого виживого; з аргументом — лише вказаний
+     * гравець. Читає ті самі дані, що {@code SurvivorVitalsPacket}
+     * (через {@link MatchOrchestrator#hpOf}/{@code maxHpOf}/
+     * {@code survivorStateOf}), тому число тут завжди збігається з
+     * тим, що бачить сам гравець на HUD.
+     */
+    private static int hp(CommandSourceStack source, ServerPlayer target) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        if (target != null) {
+            if (!match.isSurvivor(target.getUUID())) {
+                source.sendFailure(Component.translatable("maniacmod.command.hp_not_survivor", target.getName().getString()));
+                return 0;
+            }
+            source.sendSuccess(() -> Component.literal(hpLine(match, target.getUUID(), target.getName().getString())), false);
+            return 1;
+        }
+
+        var survivorIds = match.survivorIds();
+        if (survivorIds.isEmpty()) {
+            source.sendFailure(Component.translatable("maniacmod.command.hp_no_survivors"));
+            return 0;
+        }
+        for (var id : survivorIds) {
+            ServerPlayer p = source.getServer().getPlayerList().getPlayer(id);
+            String name = p != null ? p.getName().getString() : id.toString();
+            source.sendSuccess(() -> Component.literal(hpLine(match, id, name)), false);
+        }
+        return survivorIds.size();
+    }
+
+    private static String hpLine(MatchOrchestrator match, java.util.UUID id, String name) {
+        int hp = match.hpOf(id);
+        int maxHp = match.maxHpOf(id);
+        var state = match.survivorStateOf(id);
+        return name + ": " + hp + "/" + maxHp + " хп (" + state.name() + ")";
     }
 
     // ── Карта ────────────────────────────────────────────────────────────

@@ -6,7 +6,8 @@
   "refmap": "maniacmod.refmap.json",
   "mixins": [],
   "client": [
-    "ManiacAttackGuardMixin"
+    "ManiacAttackGuardMixin",
+    "MixinKeyboardInputDownedMovement"
   ],
   "server": [],
   "injectors": {
