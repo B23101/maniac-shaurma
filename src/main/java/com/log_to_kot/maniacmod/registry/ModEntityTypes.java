@@ -38,7 +38,17 @@ public final class ModEntityTypes {
     public static final RegistryObject<EntityType<GroundItemEntity>> GROUND_ITEM =
         ENTITY_TYPES.register("ground_item", () ->
             EntityType.Builder.<GroundItemEntity>of(GroundItemEntity::new, MobCategory.MISC)
-                .sized(0.5f, 0.3f)
+                // Було 0.5×0.3 — надто низький хітбокс: у високій траві
+                // (tall_grass, кущах) верх сутності опинявся НИЖЧЕ текстури
+                // рослинності, тож гравцевий приціл (ванільний raytrace по
+                // isPickable-сутностях) фізично не потрапляв у хітбокс —
+                // клік по видимому предмету проходив повз ціль, «не можна
+                // підняти». 0.6×0.6 виступає над стандартною висотою
+                // короткої трави й дає приціл достатньо товщини по висоті,
+                // лишаючись візуально малим (сам рендер масштабується
+                // окремо в GroundItemRenderer.SCALE, хітбокс з ним не
+                // зв'язаний).
+                .sized(0.6f, 0.6f)
                 // 6 чанків = 96 блоків. Предмети малі й сервер усе одно
                 // обрізає це до власного view-distance; далі за
                 // shouldRenderAtSqrDistance (48 блоків) їх не малюють,

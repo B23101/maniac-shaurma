@@ -43,13 +43,19 @@ import net.minecraft.core.BlockPos;
  *
  * Генератор вважається завершеним лише після обох стадій.
  *
- * Підсвітка (клавіша "5" у виживого) читає visualState():
- *   IDLE     білий   — звичайна підсвітка
- *   REPAIRED жовтий  — генератор зараз ремонтують
- *   FAILED   червоний— щойно стався зрив (коротко)
- *   DONE     зелений — повністю готовий
- * Колір рахується ТУТ, а не в рендері — щоб клієнт і сервер не
- * могли розійтися в тому, що показано.
+ * Підсвітка (клавіша "5" у виживого) — кольори станів:
+ *   IDLE        білий   — не полагоджений, ніхто не працює
+ *   IN_PROGRESS жовтий  — хтось лагодить чи заливає бензин ПРОСТО ЗАРАЗ
+ *   FAILED      червоний— щойно вибухнув (коротко)
+ *   DONE        зелений — повністю готовий
+ *
+ * ⚠ Колір для підсвітки обирає {@code GeneratorModule.highlightStateOf}, а НЕ
+ * поле {@link #visualState()}: воно ставиться при будь-якому прогресі й не
+ * гасне, коли всі пішли, тож недоремонтований генератор лишався б жовтим
+ * назавжди. «Працюють зараз» знають лише активні сесії модуля. Саме поле
+ * {@link #visualState()} тут лишається як внутрішній маркер прогресу.
+ * Палітру (самі кольори) задає {@code ClientMatchState.highlightColor} —
+ * єдине місце, щоб HUD і світ не розійшлися.
  */
 public class GeneratorPoi extends PointOfInterestArchetype {
 
@@ -191,6 +197,31 @@ public class GeneratorPoi extends PointOfInterestArchetype {
     @Override
     public boolean isCompleted() {
         return stage == Stage.DONE;
+    }
+
+    /**
+     * Дебаг: перестрибує ОБИДВІ стадії одразу до DONE, минаючи звичайний
+     * шлях {@link #addRepairProgress}/{@link #addFuel} — для
+     * {@code /maniac generators complete}. На відміну від виклику обох
+     * методів по черзі (довелося б підганяти під точні порогові значення
+     * тіків/відсотків), тут стан просто ставиться напряму: прогрес
+     * REPAIR і FUEL — на максимумі, стадія й видимий стан — DONE.
+     *
+     * Немає ефекту, якщо генератор уже завершено (idempotent — команда,
+     * що зачіпає всі генератори матчу, не має сенсу "довершувати" вже
+     * готові вдруге).
+     *
+     * @return true, якщо цей виклик щойно завершив генератор (був не-DONE).
+     */
+    public boolean forceComplete() {
+        if (stage == Stage.DONE) return false;
+        repairTicks = repairTicksRequired();
+        fuelPercent = fuelRequiredPercent();
+        stage = Stage.DONE;
+        visualState = VisualState.DONE;
+        failedFlashTicks = 0;
+        completed = true;
+        return true;
     }
 
     /**

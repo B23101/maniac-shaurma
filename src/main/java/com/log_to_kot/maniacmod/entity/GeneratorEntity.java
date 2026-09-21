@@ -91,6 +91,29 @@ public class GeneratorEntity extends Entity implements GeoEntity {
     private static final EntityDataAccessor<Boolean> FUEL_STAGE =
         SynchedEntityData.defineId(GeneratorEntity.class, EntityDataSerializers.BOOLEAN);
 
+    /**
+     * БАГФІКС: прогрес ПОТОЧНОЇ стадії, 0-100, нормалізований так само,
+     * як {@code GeneratorProgressPacket.stagePercent()} — для REPAIR це
+     * {@code GeneratorPoi.repairPercent()}, для FUEL — частка залитого
+     * від {@code fuelRequiredPercent}.
+     *
+     * ── Навіщо, якщо прогрес уже йде окремим пакетом ──────────────────
+     * {@code GeneratorProgressPacket} шле сервер лише тому гравцю, який
+     * САМ зараз тримає утримання (в момент refreshRepair/refreshFuel).
+     * Хтось інший, хто просто ДИВИТЬСЯ на генератор (наприклад, підійшов
+     * і ще не встиг натиснути Shift+ПКМ, або вже відпустив, поки хтось
+     * інший продовжує заливати), про реальний накопичений прогрес нічого
+     * не знав — {@code GeneratorHintOverlay} завжди малював порожній
+     * (0%) бар у підказці "Потрібна каністра бензину"/"Утримуй Shift+ПКМ",
+     * навіть якщо бак уже залито наполовину. Це синхронізоване поле —
+     * той самий підхід, що {@link #ACTIVE}/{@link #FUEL_STAGE}: щотік
+     * читається з {@link GeneratorPoi} у {@link #syncFromPoi()} і
+     * бачиться УСІМ клієнтам, що відстежують сутність, незалежно від
+     * того, хто саме зараз ремонтує.
+     */
+    private static final EntityDataAccessor<Integer> STAGE_PERCENT =
+        SynchedEntityData.defineId(GeneratorEntity.class, EntityDataSerializers.INT);
+
     /** Поворот по Y. Завжди 0 — константа, не синхронізується (як у GroundItemEntity). */
     public static final float ROTATION_Y = 0f;
 
@@ -141,6 +164,7 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         this.entityData.define(ROTATION_X, 0f);
         this.entityData.define(ACTIVE, false);
         this.entityData.define(FUEL_STAGE, false);
+        this.entityData.define(STAGE_PERCENT, 0);
     }
 
     public float rotationX() {
@@ -154,6 +178,16 @@ public class GeneratorEntity extends Entity implements GeoEntity {
     /** true — генератор чекає на залив (стадія FUEL), REPAIR уже пройдено. */
     public boolean isFuelStage() {
         return this.entityData.get(FUEL_STAGE);
+    }
+
+    /**
+     * БАГФІКС: реальний прогрес поточної стадії, 0-100 — для FUEL це
+     * фактично залитий відсоток бака (не залежить від того, хто зараз
+     * тримає ПКМ). Читається {@code GeneratorHintOverlay}, щоб бар
+     * підказки показував справжній стан, а не завжди порожній.
+     */
+    public int stagePercent() {
+        return this.entityData.get(STAGE_PERCENT);
     }
 
     /** Позиція, за якою {@code GeneratorModule}/{@code MatchOrchestrator} шукають {@link GeneratorPoi}. */
@@ -203,6 +237,25 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         if (fuelStage != isFuelStage()) {
             this.entityData.set(FUEL_STAGE, fuelStage);
         }
+
+        // БАГФІКС: той самий нормалізований 0-100 відсоток поточної стадії,
+        // що рахує GeneratorProgressPacket — для FUEL ділимо сирий
+        // fuelPercent на fuelRequiredPercent (може бути != 200), для
+        // REPAIR readPercent уже 0-100. DONE лишає останнє значення (100).
+        int stagePercent;
+        if (poi.stage() == GeneratorPoi.Stage.FUEL) {
+            int required = GeneratorPoi.fuelRequiredPercent();
+            stagePercent = required <= 0 ? 0
+                : (int) Math.min(100L, (long) poi.fuelPercent() * 100L / required);
+        } else if (poi.stage() == GeneratorPoi.Stage.DONE) {
+            stagePercent = 100;
+        } else {
+            stagePercent = poi.repairPercent();
+        }
+        if (stagePercent != stagePercent()) {
+            this.entityData.set(STAGE_PERCENT, stagePercent);
+        }
+
         boolean exploding = poi.explosionTicksLeft() > 0;
         if (exploding != explosionGlow) {
             setExplosionGlow(exploding);
@@ -337,6 +390,7 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         this.entityData.set(ROTATION_X, tag.getFloat("RotationX"));
         this.entityData.set(ACTIVE, tag.getBoolean("Active"));
         this.entityData.set(FUEL_STAGE, tag.getBoolean("FuelStage"));
+        this.entityData.set(STAGE_PERCENT, tag.getInt("StagePercent"));
     }
 
     @Override
@@ -344,6 +398,7 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         tag.putFloat("RotationX", this.entityData.get(ROTATION_X));
         tag.putBoolean("Active", this.entityData.get(ACTIVE));
         tag.putBoolean("FuelStage", this.entityData.get(FUEL_STAGE));
+        tag.putInt("StagePercent", this.entityData.get(STAGE_PERCENT));
     }
 
     @Override

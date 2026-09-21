@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod.client;
 
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
+import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import dev.shaurmalib.forge.sound.SoundCenter;
 import net.minecraft.client.Minecraft;
 import net.minecraft.sounds.SoundSource;
@@ -38,6 +39,14 @@ import net.minecraftforge.fml.common.Mod;
  * для самого джерела не відчутне — критична частина фіксу саме
  * позиція, що рухається разом із гравцем щовиклик, а не застигла
  * {@code 0,0,0} з {@code play()}).
+ *
+ * ── Коли задишки НЕМАЄ ────────────────────────────────────────────────
+ * Лише коли стаміна на нулі саме від ВТОМИ (стан HEALTHY). При
+ * {@code BROKEN_LEG} сервер тримає шкалу на нулі постійно — це штраф,
+ * а не виснаження, тож задишка там звучала б без пауз до кінця матчу.
+ * У CRAWLING/UNCONSCIOUS гравець не рухається взагалі — задихатись нема
+ * від чого. Умова стоїть саме на СТАНІ, а не на числі стаміни: так нова
+ * причина «нуль без бігу» не потребує нової правки в цьому класі.
  *
  * ── Чому не частіше MIN_INTERVAL_TICKS ─────────────────────────────────
  * Три варіації звуку (exhausted_breath_1/2/3, ~3.6–4.7с кожна) —
@@ -82,6 +91,18 @@ public final class ExhaustedBreathClientHooks {
         boolean vitalsAllowed = ClientMatchState.allows(PhaseRule.SURVIVOR_VITALS)
             || ClientMatchState.phase() == com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY;
         if (!ClientMatchState.isSurvivor() || !vitalsAllowed) {
+            wasDepletedLastTick = false;
+            return;
+        }
+
+        // Поламана нога тримає стаміну на нулі ПОСТІЙНО (це не втома, а
+        // стан-штраф: шкала не відновлюється, доки не буде Шини). Якщо
+        // реагувати на нуль стаміни й тут, гравець із поламаною ногою
+        // чув би задишку без пауз до кінця матчу. Задишка — реакція на
+        // ВИСНАЖЕННЯ бігом, тому в станах, де стаміна на нулі не через
+        // біг (BROKEN_LEG; а також CRAWLING/UNCONSCIOUS, де гравець
+        // взагалі не рухається), звук не грає.
+        if (ClientMatchState.survivorState() != SurvivorState.HEALTHY) {
             wasDepletedLastTick = false;
             return;
         }

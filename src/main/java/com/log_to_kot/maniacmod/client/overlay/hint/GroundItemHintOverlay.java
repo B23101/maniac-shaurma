@@ -4,6 +4,7 @@ import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
+import com.mojang.blaze3d.vertex.PoseStack;
 import dev.shaurmalib.forge.network.packets.InventorySlotAllocationPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -38,18 +39,31 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * дзеркалиться, але вибір слота вирішує сервер), тому тут перевіряється
  * лише те, що гарантовано: чи слоти існують. Вичерпані слоти покаже
  * серверне повідомлення в action bar при спробі.
+ *
+ * <h3>Без фону, збільшений текст</h3>
+ * На відміну від панельних підказок генератора, ця підказка навмисно
+ * БЕЗ панелі: жодного фону чи рамки {@link ManiacUiTheme#drawHintBar}
+ * тепер немає — лише текст із тінню (як ванільна назва предмета над
+ * хотбаром), піднятий приблизно вдвічі ({@link #TEXT_SCALE}) через
+ * {@code pose().scale}, щоб читатись здалеку так само легко, як досі
+ * читалась ціла панель. Фон на предметі, що лежить просто в траві чи на
+ * підлозі, лише перекривав огляд — сама сутність унизу вже достатній
+ * візуальний якір для тексту над нею.
  */
 @OnlyIn(Dist.CLIENT)
 public final class GroundItemHintOverlay {
 
-    private static final int PANEL_WIDTH = 220;
-    private static final int PANEL_HEIGHT_NAME_ONLY = 24;
-    private static final int PANEL_HEIGHT_WITH_ACTION = 36;
     private static final int ABOVE_CROSSHAIR_GAP = 46;
-    private static final int LINE_GAP = 2;
+    private static final int LINE_GAP = 3;
+
+    /** Масштаб тексту підказки відносно звичайного шрифту — приблизно вдвічі більший. */
+    private static final float TEXT_SCALE = 1.6f;
+
+    /** Колір назви предмета (перший, більший рядок). */
+    private static final int TITLE_COLOR = 0xFFFFFFFF;
 
     /** Колір другого рядка («ПКМ — взяти»). Світліший за тіло, темніший за назву. */
-    private static final int ACTION_COLOR = 0xFFB8B8B8;
+    private static final int ACTION_COLOR = 0xFFD0D0D0;
 
     private GroundItemHintOverlay() {}
 
@@ -63,23 +77,37 @@ public final class GroundItemHintOverlay {
         if (!item.hasStack()) return;
 
         boolean canPickUp = canOfferPickup(mc);
-        Component name = item.displayName();
-        Component action = Component.translatable("maniacmod.hud.ground_item.pickup_hint");
+        String name = item.displayName().getString();
+        String action = Component.translatable("maniacmod.hud.ground_item.pickup_hint").getString();
 
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
-        int panelH = canPickUp ? PANEL_HEIGHT_WITH_ACTION : PANEL_HEIGHT_NAME_ONLY;
-        int panelX = screenW / 2 - PANEL_WIDTH / 2;
-        int panelY = screenH / 2 - ABOVE_CROSSHAIR_GAP - panelH / 2;
+        int centerX = screenW / 2;
+        int anchorY = screenH / 2 - ABOVE_CROSSHAIR_GAP;
 
         Font font = mc.font;
         if (canPickUp) {
-            drawTwoLines(graphics, font, name.getString(), action.getString(),
-                panelX, panelY, PANEL_WIDTH, panelH);
+            drawScaledCentered(graphics, font, name, centerX, anchorY - (font.lineHeight + LINE_GAP), TITLE_COLOR);
+            drawScaledCentered(graphics, font, action, centerX, anchorY, ACTION_COLOR);
         } else {
-            ManiacUiTheme.drawHintBar(graphics, font, name.getString(),
-                panelX, panelY, PANEL_WIDTH, panelH);
+            drawScaledCentered(graphics, font, name, centerX, anchorY, TITLE_COLOR);
         }
+    }
+
+    /**
+     * Один рядок тексту з тінню, центрований по X, збільшений
+     * {@link #TEXT_SCALE} навколо своєї власної базової лінії — сусідній
+     * рядок (заданий окремим {@code baselineY}) масштаб не зсуває.
+     */
+    private static void drawScaledCentered(GuiGraphics g, Font font, String text,
+                                            int centerX, int baselineY, int color) {
+        PoseStack pose = g.pose();
+        pose.pushPose();
+        pose.translate(centerX, baselineY, 0);
+        pose.scale(TEXT_SCALE, TEXT_SCALE, 1f);
+        int width = font.width(text);
+        g.drawString(font, text, -width / 2, -font.lineHeight / 2, color, true);
+        pose.popPose();
     }
 
     /**
@@ -107,22 +135,5 @@ public final class GroundItemHintOverlay {
             if (InventorySlotAllocationPacket.ClientHandler.isAllowed(slot)) return true;
         }
         return false;
-    }
-
-    /**
-     * Панель у стилі {@link ManiacUiTheme#drawHintBar}, але з двома
-     * рядками. Окремий метод теми не додаємо: це єдине місце, де
-     * потрібні два рядки, а тема лишається чистою. Рамка й фон беруться
-     * викликом {@code drawHintBar} з порожнім текстом — тоді малюється
-     * лише панель, а текст ми кладемо самі.
-     */
-    private static void drawTwoLines(GuiGraphics g, Font font, String title, String action,
-                                     int x, int y, int w, int h) {
-        ManiacUiTheme.drawHintBar(g, font, "", x, y, w, h);
-
-        int totalTextHeight = font.lineHeight * 2 + LINE_GAP;
-        int top = y + (h - totalTextHeight) / 2;
-        g.drawCenteredString(font, title, x + w / 2, top, 0xFFFFFFFF);
-        g.drawCenteredString(font, action, x + w / 2, top + font.lineHeight + LINE_GAP, ACTION_COLOR);
     }
 }

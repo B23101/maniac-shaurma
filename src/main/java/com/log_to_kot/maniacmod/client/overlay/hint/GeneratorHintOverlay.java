@@ -3,7 +3,7 @@ package com.log_to_kot.maniacmod.client.overlay.hint;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.ManiacKeybinds;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay;
-import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.items.FuelCanisterItem;
@@ -31,8 +31,9 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * НІЧОГО. Цей клас закриває саме той проміжок: рахує щотік той самий
  * рейкаст, що {@code ClientInputHandler.handleGeneratorRepair}, і поки
  * ({@code hitResult} — генератор) І (утримання ще НЕ триває), малює
- * маленьку панель-хінт того самого стилю {@link ManiacUiTheme}, що й
- * підказки міні-ігор. Щойно утримання почалось —
+ * маленьку панель-хінт того самого стилю {@link GeneratorFuelUiTheme}, що й
+ * прогрес-панель ремонту (текст-рядок + заглиблений бар, поки що порожній —
+ * прогресу ще нема). Щойно утримання почалось —
  * {@link GeneratorProgressOverlay#isVisible()} стає {@code true}, і цей
  * клас перестає малювати: дві підказки одна над одною ніколи не видно.
  *
@@ -58,8 +59,14 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 @OnlyIn(Dist.CLIENT)
 public final class GeneratorHintOverlay {
 
-    private static final int PANEL_WIDTH = 260;
-    private static final int PANEL_HEIGHT = 24;
+    // БАГФІКС: та сама уніфікація масштабу, що GeneratorProgressOverlay —
+    // панель була вдвічі більшою за решту HUD мода.
+    private static final int PANEL_WIDTH = 250;
+    private static final int PADDING = 10;
+    private static final int TEXT_ROW_HEIGHT = 10;
+    private static final int GAP_BEFORE_BAR = 8;
+    private static final int BAR_HEIGHT = 8;
+    private static final int PANEL_HEIGHT = PADDING * 2 + TEXT_ROW_HEIGHT + GAP_BEFORE_BAR + BAR_HEIGHT;
     private static final int ABOVE_CROSSHAIR_GAP = 46;
 
     private GeneratorHintOverlay() {}
@@ -87,7 +94,15 @@ public final class GeneratorHintOverlay {
             ? fuelHintText(mc)
             : Component.translatable("maniacmod.hud.generator.hold_hint");
 
-        drawHint(graphics, mc.font, text.getString());
+        // БАГФІКС: бар підказки раніше завжди малювався порожнім (0%),
+        // навіть коли генератор — особливо стадія FUEL — уже частково
+        // залитий (кимось іншим чи цим же гравцем до того, як відпустив
+        // ПКМ). Тепер беремо реальний накопичений прогрес поточної стадії
+        // напряму із сутності (синхронізований GeneratorEntity.stagePercent(),
+        // те саме значення, що бачить прогрес-панель під час утримання).
+        float fraction = generator.stagePercent() / 100f;
+
+        drawHint(graphics, mc.font, text.getString(), fraction);
     }
 
     /**
@@ -117,7 +132,7 @@ public final class GeneratorHintOverlay {
         return Component.translatable("maniacmod.hud.generator.fuel_hint_no_canister");
     }
 
-    private static void drawHint(GuiGraphics graphics, Font font, String text) {
+    private static void drawHint(GuiGraphics graphics, Font font, String text, float fraction) {
         Minecraft mc = Minecraft.getInstance();
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
@@ -125,6 +140,19 @@ public final class GeneratorHintOverlay {
         int panelX = screenW / 2 - PANEL_WIDTH / 2;
         int panelY = screenH / 2 - ABOVE_CROSSHAIR_GAP - PANEL_HEIGHT / 2;
 
-        ManiacUiTheme.drawHintBar(graphics, font, text, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
+        GeneratorFuelUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
+
+        int textX = panelX + PADDING;
+        int textY = panelY + PADDING;
+        GeneratorFuelUiTheme.drawTitleLeft(graphics, font, text, textX, textY);
+
+        int barY = textY + TEXT_ROW_HEIGHT + GAP_BEFORE_BAR;
+        int barX = panelX + PADDING;
+        int barWidth = PANEL_WIDTH - PADDING * 2;
+        // БАГФІКС: раніше тут завжди був жорсткий 0f — бар підказки не
+        // показував реальний прогрес заливу/ремонту. Тепер малює те, що
+        // фактично вже накопичено на генераторі (той самий заглиблений
+        // трек, що на прогрес-панелі під час утримання).
+        GeneratorFuelUiTheme.drawBar(graphics, barX, barY, barWidth, BAR_HEIGHT, fraction);
     }
 }

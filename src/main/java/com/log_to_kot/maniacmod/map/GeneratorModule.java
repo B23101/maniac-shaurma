@@ -140,6 +140,23 @@ public final class GeneratorModule implements PhaseListener {
          */
         boolean holding = true;
 
+        /**
+         * Скільки тіків прожила ця сесія (незалежно від пауз) — проти
+         * {@link ConfigSchema#MINIGAME_GRACE_TICKS}: доки не набіжить,
+         * міні-гра на цю сесію не випадає (див. клас-докстрінг конфіга).
+         * Рахується щотік у {@link #tickOne}, а не лише під час holding —
+         * пауза не повинна продовжувати grace-період на невизначений час.
+         */
+        int ageTicks = 0;
+
+        /**
+         * Скільки тіків лишилось до кінця cooldown після останньої
+         * міні-гри цієї сесії (0 — можна кидати нову). Виставляється в
+         * {@link ConfigSchema#MINIGAME_COOLDOWN_TICKS} одразу після
+         * succeedMinigame/failMinigame для гравця з цією сесією.
+         */
+        int minigameCooldownTicks = 0;
+
         RepairSession(BlockPos pos) {
             this.pos = pos;
         }
@@ -311,6 +328,11 @@ public final class GeneratorModule implements PhaseListener {
             return false;
         }
 
+        // Grace/cooldown лічильники сесії — незалежно від holding і від
+        // того, чи зараз активна міні-гра (див. RepairSession.ageTicks).
+        session.ageTicks++;
+        if (session.minigameCooldownTicks > 0) session.minigameCooldownTicks--;
+
         // Міні-гра заморожує внесок, і сама стежить за дистанцією та станом
         // гравця (tickMinigameTimeouts) — звичайні перевірки тут не потрібні.
         if (activeMinigames.containsKey(uuid)) {
@@ -326,7 +348,10 @@ public final class GeneratorModule implements PhaseListener {
             generator.addRepairProgress(1);
             sendProgress(player, session, generator);
 
-            if (generator.stage() == GeneratorPoi.Stage.REPAIR
+            boolean pastGrace = session.ageTicks >= ManiacConfigs.get(ConfigSchema.MINIGAME_GRACE_TICKS);
+            boolean pastCooldown = session.minigameCooldownTicks <= 0;
+
+            if (generator.stage() == GeneratorPoi.Stage.REPAIR && pastGrace && pastCooldown
                     && rng.nextDouble() < ManiacConfigs.get(ConfigSchema.MINIGAME_TRIGGER_CHANCE_PER_TICK)) {
                 startRandomMinigame(player, generator);
             }
@@ -677,6 +702,7 @@ public final class GeneratorModule implements PhaseListener {
 
     private void succeedMinigame(ServerPlayer player) {
         ModNetwork.toPlayer(player, new RepairMinigameResultPacket(true));
+        armMinigameCooldown(player);
         // Успіх нічого не додає до repairPercent сам по собі — гравець
         // просто повертається до звичайного утримання ПКМ на
         // наступному тіку (сесія й без того лишалась активною).
@@ -685,8 +711,15 @@ public final class GeneratorModule implements PhaseListener {
     private void failMinigame(ServerPlayer player, ActiveRepairMinigame minigame) {
         if (player != null) {
             ModNetwork.toPlayer(player, new RepairMinigameResultPacket(false));
+            armMinigameCooldown(player);
         }
         applyMinigameFailure(minigame);
+    }
+
+    /** Виставляє cooldown на сесію ремонту гравця після завершеної міні-гри (успіх чи провал). */
+    private void armMinigameCooldown(ServerPlayer player) {
+        RepairSession session = sessions.get(player.getUUID());
+        if (session != null) session.minigameCooldownTicks = ManiacConfigs.get(ConfigSchema.MINIGAME_COOLDOWN_TICKS);
     }
 
     /**
@@ -745,15 +778,65 @@ public final class GeneratorModule implements PhaseListener {
     /**
      * Відповідь на клавішу 5. Один пакет зі станами всіх генераторів;
      * клієнт сам гасить підсвітку через HIGHLIGHT_DURATION_TICKS.
+     *
+     * ── Приватність ──────────────────────────────────────────────────
+     * Пакет іде ЛИШЕ гравцю, що натиснув 5 (не {@code toPlayers}), а
+     * малює його суто клієнтський рендер. Ванільне світіння сутності
+     * ({@code setGlowingTag}) тут свідомо НЕ використовується: воно
+     * видиме всім гравцям, включно з маньяком.
+     *
+     * ── Кольори (рахує сервер, клієнт лише малює) ────────────────────
+     *   DONE        зелений — генератор повністю полагоджено
+     *   IN_PROGRESS жовтий  — ЗАРАЗ хтось лагодить чи заливає бензин
+     *   FAILED      червоний — щойно вибухнув (лишається як є)
+     *   IDLE        білий   — не полагоджений, ніхто не працює
+     *
+     * Жовтий береться не з {@link GeneratorPoi#visualState()}: той
+     * ставиться при БУДЬ-ЯКОМУ прогресі й не гасне, тож недоремонтований
+     * генератор, від якого всі пішли, лишався б жовтим назавжди. Тут
+     * жовтий означає саме «працюють прямо зараз» — його знають лише
+     * активні сесії цього модуля.
      */
     public void sendHighlight(ServerPlayer player) {
+        java.util.Set<BlockPos> busy = new java.util.HashSet<>();
+        for (Map.Entry<UUID, RepairSession> entry : sessions.entrySet()) {
+            if (isActivelyWorking(entry.getKey(), entry.getValue())) {
+                busy.add(entry.getValue().pos);
+            }
+        }
+
         List<GeneratorHighlightPacket.Entry> entries = new ArrayList<>();
         for (GeneratorPoi generator : matchSupplier.get().generators()) {
             entries.add(new GeneratorHighlightPacket.Entry(
-                generator.pos(), generator.visualState()));
+                generator.pos(), highlightStateOf(generator, busy.contains(generator.pos()))));
         }
         ModNetwork.toPlayer(player, new GeneratorHighlightPacket(
             ManiacConfigs.get(ConfigSchema.HIGHLIGHT_DURATION_TICKS), entries));
+    }
+
+    /**
+     * Чи гравець ПРЯМО ЗАРАЗ рухає ремонт/залив цього генератора.
+     * Сесія, що існує, але на паузі (відійшов, відвернувся, нема
+     * каністри), — не «працює»; так само й сесія під час міні-гри
+     * (внесок заморожений). Це той самий набір умов, що в
+     * {@link #tickOne}, тільки без побічних ефектів.
+     */
+    private boolean isActivelyWorking(UUID uuid, RepairSession session) {
+        if (!session.holding) return false;
+        if (activeMinigames.containsKey(uuid)) return false;
+        if (!matchSupplier.get().isSurvivor(uuid)) return false;
+        ServerPlayer player = matchSupplier.get().onlinePlayer(uuid);
+        return player != null && canWork(player, session.pos);
+    }
+
+    /** Чиста функція вибору кольору — окремо, щоб пріоритети було видно в одному місці. */
+    static GeneratorPoi.VisualState highlightStateOf(GeneratorPoi generator, boolean someoneWorking) {
+        if (generator.isCompleted()) return GeneratorPoi.VisualState.DONE;
+        // Вибух важливіший за «працюють»: інакше червоний зникав би, щойно
+        // інший гравець далі лагодить той самий генератор.
+        if (generator.explosionTicksLeft() > 0) return GeneratorPoi.VisualState.FAILED;
+        if (someoneWorking) return GeneratorPoi.VisualState.IN_PROGRESS;
+        return GeneratorPoi.VisualState.IDLE;
     }
 
     // ── Заливка бензину ──────────────────────────────────────────────────
@@ -790,6 +873,55 @@ public final class GeneratorModule implements PhaseListener {
 
     public GeneratorPoi findGenerator(BlockPos pos) {
         return matchSupplier.get().generatorAt(pos);
+    }
+
+    /**
+     * Дебаг: миттєво завершує УСІ ще не готові генератори матчу — для
+     * {@code /maniac generators complete}.
+     *
+     * ── Чому не просто цикл {@code forceComplete()} ────────────────────
+     * Генератор, який хтось ЛАГОДИТЬ прямо зараз, має активну
+     * {@link RepairSession} із прогрес-баром на екрані того гравця.
+     * Просто змінивши {@code GeneratorPoi} під його ногами, ми лишили б
+     * клієнта з баром, що вже не відповідає жодній реальній стадії
+     * (сесія й далі "жива", але сервер більше нічого в неї не додасть —
+     * бар просто застиг би). Тому спершу гасимо прогрес усім, хто зараз
+     * лагодить чи заливає ЦЕЙ конкретний генератор, так само, як робить
+     * {@link #onPhaseExit} при виході з ігрової фази — лише вибірково,
+     * по конкретних uuid, а не по всіх сесіях одразу (гравці, що
+     * лагодять генератор, який і без того вже DONE, свою сесію не
+     * втрачають — forceComplete на завершений генератор і так no-op).
+     *
+     * ── Один сумарний пакет, а не по одному на генератор ───────────────
+     * {@link #onGeneratorCompleted} рахує "N з M" наново щоразу — при
+     * команді, що завершує кілька генераторів одним викликом, проміжні
+     * "3 з 5", "4 з 5" гравець побачив би лише як миготіння. Тут рахунок
+     * і розсилка йдуть один раз, ПІСЛЯ того як усі позначені готовими.
+     *
+     * @return скільки генераторів щойно завершено цим викликом (0, якщо
+     *         усі вже були готові — команда відпрацювала, але новин нема).
+     */
+    public int completeAllGenerators(List<ServerPlayer> players) {
+        int justCompleted = 0;
+        for (GeneratorPoi generator : matchSupplier.get().generators()) {
+            if (generator.isCompleted()) continue;
+
+            for (Iterator<Map.Entry<UUID, RepairSession>> it = sessions.entrySet().iterator(); it.hasNext(); ) {
+                Map.Entry<UUID, RepairSession> entry = it.next();
+                if (!entry.getValue().pos.equals(generator.pos())) continue;
+                ServerPlayer player = find(players, entry.getKey());
+                if (player != null) hideProgress(player);
+                activeMinigames.remove(entry.getKey());
+                it.remove();
+            }
+
+            if (generator.forceComplete()) justCompleted++;
+        }
+
+        if (justCompleted > 0) {
+            onGeneratorCompleted(null, players);
+        }
+        return justCompleted;
     }
 
     /**

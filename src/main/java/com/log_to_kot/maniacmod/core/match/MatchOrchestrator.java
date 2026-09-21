@@ -372,6 +372,17 @@ public final class MatchOrchestrator {
         return context.damage(playerId, amount);
     }
 
+    /**
+     * Дебаг: виставляє хп виживого напряму у ВІДСОТКАХ (0-100) від
+     * maxHp його ролі — для {@code /maniac hp set}. true, якщо
+     * результат рівно 0 хп (викликач — ManiacCommand — сам вирішує,
+     * чи заводити гравця в UNCONSCIOUS тим самим шляхом, що реальний
+     * удар маньяка: {@code survivors().onSurvivorDowned(...)}).
+     */
+    public boolean setSurvivorHpPercent(UUID playerId, int percent) {
+        return context.setHpPercent(playerId, percent);
+    }
+
     /** Скільки виживих ще в матчі (не рахує втеклих і вибулих). */
     public int aliveSurvivorCount() {
         return context.aliveSurvivorCount();
@@ -387,7 +398,7 @@ public final class MatchOrchestrator {
         return context.escapedIds();
     }
 
-    /** Хто вибув остаточно (маньяк добив непритомного) цього матчу. */
+    /** Хто вибув остаточно (непритомний не дочекався підняття) цього матчу. */
     public List<UUID> eliminatedSurvivorIds() {
         return context.eliminatedIds();
     }
@@ -397,7 +408,7 @@ public final class MatchOrchestrator {
         context.markEscaped(player.getUUID(), player.getGameProfile().getName());
     }
 
-    /** Маньяк добив непритомного — гравець вибуває з матчу остаточно. */
+    /** Непритомний помер — гравець вибуває з матчу остаточно. */
     public void markEliminated(ServerPlayer player) {
         context.markEliminated(player.getUUID(), player.getGameProfile().getName());
     }

@@ -21,8 +21,22 @@ import net.minecraft.world.item.ItemStack;
  *   <li><b>Вибраний слот зайнятий</b> (або недозволений) → перший
  *       вільний ДОЗВОЛЕНИЙ слот, за зростанням індексу.</li>
  *   <li><b>Вільних немає</b> → {@link Result#NO_FREE_SLOT}. Нічого не
- *       змінюється, предмет лишається лежати.</li>
+ *       змінюється, предмет лишається лежати. Викликач (взаємодія ПКМ)
+ *       може після цього окремо вирішити застосувати «фізику обміну» —
+ *       {@link #swapSelected} — і викинути вибраний предмет замість
+ *       підібраного; сам {@link #place} цього не робить, бо викликається
+ *       і з місць, де обмін не доречний (наприклад майбутній
+ *       автопідбір).</li>
  * </ol>
+ *
+ * <h3>Обмін «повні слоти» ({@link #swapSelected})</h3>
+ * Коли класти нікуди, гравець і так стоїть із чимось у вибраному слоті
+ * (порожніх рук при {@code NO_FREE_SLOT} не буває — інакше спрацював
+ * би пункт 1). ПКМ по предмету на землі в цьому випадку викидає те, що
+ * зараз у руці, у світ (та сама дуга, що клавіша Q —
+ * {@code GroundItemSpawner.throwFrom}), і кладе на звільнене місце
+ * предмет, по якому клікнули — гравець «міняється» з землею, а не
+ * просто впирається в повний інвентар.
  *
  * <h3>Чому не {@code Inventory#add} і не {@code addToAllowedSlots}</h3>
  * Ванільний {@code add} кладе у БУДЬ-ЯКИЙ вільний слот (9..35, броня) —
@@ -52,7 +66,13 @@ public final class GroundItemPickup {
         /** Вибраний був зайнятий — предмет у першому вільному. */
         PLACED_FREE,
         /** Немає жодного вільного дозволеного слота. Нічого не змінено. */
-        NO_FREE_SLOT
+        NO_FREE_SLOT,
+        /**
+         * Місця не було, тож старий предмет із вибраного слота викинуто
+         * у світ, а новий покладено на його місце. Лише результат
+         * {@link #swapSelected}, {@link #place} його не повертає.
+         */
+        SWAPPED
     }
 
     /** Скільки слотів хотбару існує у Minecraft. Слоти 9+ гравець не бачить. */
@@ -110,6 +130,52 @@ public final class GroundItemPickup {
         Inventory inventory = player.getInventory();
         return isUsable(player, inventory, inventory.selected)
             || firstFreeSlot(player, inventory) >= 0;
+    }
+
+    /**
+     * «Фізика обміну»: усі дозволені слоти зайняті, тож замінюємо вміст
+     * ВИБРАНОГО слота (руки) новим предметом, а старий — викидаємо у
+     * світ тією самою дугою, що Q ({@code GroundItemSpawner.throwFrom}).
+     *
+     * <p>Викликається окремо від {@link #place} тим кодом, що обробляє
+     * ПКМ по предмету на землі, лише коли {@link #place} щойно повернув
+     * {@link Result#NO_FREE_SLOT} — так порядок дій лишається явним у
+     * викликача: спершу звичайна спроба покласти, і тільки якщо вона
+     * неможлива — обмін.</p>
+     *
+     * <p>Вибраний слот при {@code NO_FREE_SLOT} гарантовано не порожній
+     * (інакше {@link #isUsable} прийняв би його ще на кроці 1 у
+     * {@link #place}) і гарантовано в межах хотбару ({@code inventory.selected}
+     * — завжди 0-8 у ванілі), тож єдине, що тут реально перевіряється, —
+     * чи цей конкретний слот дозволений політикою (за замовчуванням так,
+     * але обмежений гравець міг мати вибраним слот поза дозволеним
+     * діапазоном — тоді міняти нема на що, і виклик відмовляє).</p>
+     *
+     * @param player гравець (серверний) — потрібен і для інвентаря, і
+     *               щоб викинути старий стек за його поглядом
+     * @param stack  новий предмет, який кладемо на місце викинутого
+     * @return {@link Result#SWAPPED}, якщо обмін відбувся, інакше знову
+     *         {@link Result#NO_FREE_SLOT} (вибраний слот не дозволений —
+     *         міняти нема на що; інвентар не змінено)
+     */
+    public static Result swapSelected(ServerPlayer player, ItemStack stack) {
+        if (stack.isEmpty()) return Result.NO_FREE_SLOT;
+
+        Inventory inventory = player.getInventory();
+        int selected = inventory.selected;
+        if (selected < 0 || selected >= HOTBAR_SIZE) return Result.NO_FREE_SLOT;
+        if (!InventorySlotAllocation.isSlotAllowed(player, selected)) return Result.NO_FREE_SLOT;
+
+        ItemStack held = inventory.getItem(selected);
+        if (held.isEmpty()) return Result.NO_FREE_SLOT; // не мало статись — place() уже забрав би цей випадок
+
+        // Спершу кладемо новий предмет, потім кидаємо старий: якщо кидок
+        // у світ раптом не вдасться (світ не прийняв сутність), інвентар
+        // гравця однаково лишається коректним, а не порожнім слотом.
+        inventory.setItem(selected, stack.copy());
+        inventory.setChanged();
+        GroundItemSpawner.throwFrom(player, held);
+        return Result.SWAPPED;
     }
 
     // ── Внутрішнє ────────────────────────────────────────────────────────

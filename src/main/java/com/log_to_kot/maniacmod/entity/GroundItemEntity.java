@@ -177,6 +177,10 @@ public class GroundItemEntity extends Entity {
                                           float rotationX) {
         GroundItemEntity entity = create(type, level, stack, pos.x, pos.y, pos.z, rotationX);
         entity.setDeltaMovement(velocity);
+        // Без цього прапора трекер не розсилає швидкість (ванільний
+        // ItemEntity теж його ставить) — клієнт побачив би кинутий
+        // предмет нерухомим, поки не прийде перша позиція.
+        entity.hasImpulse = true;
         entity.pickupDelay = ManiacConfigs.get(ConfigSchema.GROUND_ITEM_DROP_PICKUP_DELAY_TICKS);
         return addToWorld(entity) ? entity : null;
     }
@@ -242,11 +246,14 @@ public class GroundItemEntity extends Entity {
 
     @Override
     public void tick() {
-        // Клієнт: базовий тік (xOld/yOld → плавна інтерполяція руху,
-        // який приходить від сервера) + блиск. Власної фізики на
-        // клієнті немає: позицію веде сервер.
+        // Клієнт: передбачення руху + блиск. Позицію ВЕДЕ сервер (його
+        // пакети виправляють будь-яке розходження), але між пакетами
+        // клієнт сам прораховує ту саму гравітацію — інакше предмет
+        // стрибав би раз на updateInterval тіків замість плавного падіння
+        // (див. tickClientPrediction).
         if (level().isClientSide) {
             super.tick();
+            tickClientPrediction();
             tickClient();
             return;
         }
@@ -281,23 +288,55 @@ public class GroundItemEntity extends Entity {
 
         super.tick();
 
-        Vec3 motion = getDeltaMovement();
-        if (!isNoGravity()) motion = motion.add(0, -GRAVITY, 0);
-        setDeltaMovement(motion);
-
-        move(MoverType.SELF, getDeltaMovement());
-
-        double friction = onGround() ? GROUND_FRICTION : AIR_DRAG;
-        Vec3 after = getDeltaMovement();
-        setDeltaMovement(after.x * friction, after.y * 0.98, after.z * friction);
-        if (onGround() && after.y < 0) {
-            setDeltaMovement(getDeltaMovement().multiply(1, -0.5, 1)); // легкий відскок
-        }
+        stepPhysics();
 
         // Заснути: на землі й майже не рухається.
         if (onGround() && getDeltaMovement().lengthSqr() < REST_SPEED_SQR) {
             fallAsleep();
         }
+    }
+
+    /**
+     * ОДИН крок фізики — ідентичний для сервера й для клієнтського
+     * передбачення ({@link #tickClientPrediction}). Спільний метод
+     * потрібен саме для цього: якщо клієнт і сервер рахують по-різному,
+     * кожен серверний пакет «висмикує» предмет назад, і падіння знову
+     * виглядає ривками.
+     *
+     * Порядок — ванільного {@code ItemEntity.tick}: гравітація → рух →
+     * тертя → відскок. Раніше вертикальна швидкість множилась на 0.98
+     * ДО перевірки відскоку, а відскок читав уже застарілу змінну, тож
+     * на землі він спрацьовував не з тим значенням, що мав.
+     */
+    private void stepPhysics() {
+        if (!isNoGravity()) {
+            setDeltaMovement(getDeltaMovement().add(0, -GRAVITY, 0));
+        }
+
+        move(MoverType.SELF, getDeltaMovement());
+
+        double friction = onGround() ? GROUND_FRICTION : AIR_DRAG;
+        setDeltaMovement(getDeltaMovement().multiply(friction, 0.98, friction));
+
+        if (onGround()) {
+            Vec3 v = getDeltaMovement();
+            if (v.y < 0) setDeltaMovement(v.multiply(1, -0.5, 1)); // легкий відскок
+        }
+    }
+
+    /**
+     * Клієнтське передбачення руху. Виконується лише поки сервер каже,
+     * що предмет НЕ спить: спляча сутність нерухома, і будь-яка
+     * симуляція для неї лише додала б дрібне тремтіння на місці.
+     *
+     * Стартова швидкість приходить від трекера (для кинутого предмета
+     * це забезпечує {@code hasImpulse = true} у {@link #thrown}), далі
+     * клієнт веде предмет сам. Серверні пакети позиції лишаються
+     * джерелом правди й виправляють дрейф.
+     */
+    private void tickClientPrediction() {
+        if (isSettled()) return;
+        stepPhysics();
     }
 
     private void fallAsleep() {
@@ -402,9 +441,22 @@ public class GroundItemEntity extends Entity {
 
         GroundItemPickup.Result result = GroundItemPickup.place(serverPlayer, stack);
         if (result == GroundItemPickup.Result.NO_FREE_SLOT) {
-            serverPlayer.displayClientMessage(
-                Component.translatable("maniacmod.hud.ground_item.no_free_slot"), true);
-            return InteractionResult.FAIL; // предмет лишається лежати
+            // БАГФІКС/фіча: раніше тут усе закінчувалось — предмет
+            // лишався лежати, а гравцю з повним інвентарем не було чого
+            // зробити, крім спершу вручну викинути щось із руки. Тепер,
+            // коли вільного дозволеного слота немає, застосовуємо
+            // «фізику обміну» (GroundItemPickup.swapSelected): те, що
+            // зараз у вибраній руці, летить у світ тією ж дугою, що Q, а
+            // клікнутий предмет одразу опиняється в руці — гравець
+            // «міняється» з землею одним ПКМ замість двох кроків.
+            result = GroundItemPickup.swapSelected(serverPlayer, stack);
+            if (result != GroundItemPickup.Result.SWAPPED) {
+                // Вибраний слот поза дозволеним діапазоном (обмежений
+                // гравець) — міняти нема на що, інвентар не займано.
+                serverPlayer.displayClientMessage(
+                    Component.translatable("maniacmod.hud.ground_item.no_free_slot"), true);
+                return InteractionResult.FAIL; // предмет лишається лежати
+            }
         }
 
         level().playSound(null, getX(), getY(), getZ(), SoundEvents.ITEM_PICKUP,
@@ -433,6 +485,19 @@ public class GroundItemEntity extends Entity {
     @Override
     public boolean isPickable() {
         return true;
+    }
+
+    /**
+     * Запас навколо хітбоксу для гравцевого raytrace-приціловування.
+     * Ванільний дефолт — 0.0 (лише точна AABB). Предмет маленький і
+     * часто лежить у високій траві/кущах, де візуально важко навести
+     * приціл рівно на нього; невеликий запас робить клік прощаючим,
+     * не змінюючи фізичного розміру сутності (він і так уже піднятий
+     * до 0.6×0.6 у {@code ModEntityTypes}).
+     */
+    @Override
+    public float getPickRadius() {
+        return 0.15f;
     }
 
     /**

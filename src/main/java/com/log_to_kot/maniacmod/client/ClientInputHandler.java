@@ -17,7 +17,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraftforge.api.distmarker.Dist;
+import net.minecraft.world.InteractionResult;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -40,6 +42,15 @@ import net.minecraftforge.fml.common.Mod;
 public final class ClientInputHandler {
 
     private static boolean rescueHeld = false;
+    private static int rescueResendCounter = 0;
+
+    /**
+     * Як часто повторювати «тримаю», поки кнопку утримують. Клієнт шле
+     * стан лише при ЗМІНІ, а сервер знімає рятівника, що на мить вийшов за
+     * дальність. Без повтору такий рятівник лишався б поза сесією, поки не
+     * відпустить і не натисне знову.
+     */
+    private static final int RESCUE_RESEND_TICKS = 10;
     private static boolean repairHeld = false;
 
     /**
@@ -74,6 +85,17 @@ public final class ClientInputHandler {
      */
     static void forceReleaseRepairHold() {
         repairHeld = false;
+    }
+
+    /**
+     * Чи зараз активна локальна сесія утримання ремонту генератора —
+     * для {@code GeneratorRepairSwingGuardMixin}, який глушить ванільний
+     * замах рукою/анімацію "use item", поки триває утримання (див.
+     * докстрінг того міксина: причина існування — постійний замах від
+     * затиснутого ПКМ, а не одноразова дія).
+     */
+    public static boolean isRepairHeld() {
+        return repairHeld;
     }
 
     @SubscribeEvent
@@ -149,6 +171,9 @@ public final class ClientInputHandler {
         if (!ClientMatchState.allows(PhaseRule.HUD)) return;
 
         while (ManiacKeybinds.HIGHLIGHT.consumeClick()) {
+            // Локальна перевірка — лише щоб не слати пакет, який сервер
+            // усе одно відхилить; сам кулдаун тримає сервер.
+            if (onCooldown(AbilityCooldownPacket.HIGHLIGHT_ID)) continue;
             ModNetwork.toServer(new HighlightTogglePacket());
         }
     }
@@ -189,22 +214,57 @@ public final class ClientInputHandler {
         standUpWasDown = down;
     }
 
-    /** Shift біля непритомного — лише зміни стану, не щотік. */
+    /**
+     * Чи гравець дивиться на лежачого союзника. Спільна умова для підняття
+     * й для підказки «Утримуй ПКМ» ({@code RescueOverlay}).
+     */
+    public static boolean isLookingAtDownedSurvivor() {
+        if (!(Minecraft.getInstance().hitResult instanceof EntityHitResult hit)) return false;
+        return ClientMatchState.isDowned(hit.getEntity().getUUID());
+    }
+
+    /**
+     * Утримання ПКМ на лежачому союзнику — лише зміни стану (плюс рідкий
+     * повтор, див. {@link #RESCUE_RESEND_TICKS}), не щотік.
+     *
+     * Потрібно ВСЕ разом: ПКМ без Shift ({@link ManiacKeybinds#isRescueHeld()}),
+     * приціл на лежачому й сам гравець не лежить. Приціл — щоб ПКМ, який
+     * тисне заради предмета під ногами, не «піднімав» когось поруч.
+     */
     private static void handleRescueHold() {
         if (!ClientMatchState.isSurvivor()) return;
-        if (!ClientMatchState.allows(PhaseRule.RESCUE)) {
-            if (rescueHeld) {
-                rescueHeld = false;
-                ModNetwork.toServer(new RescueHoldPacket(false));
-            }
+
+        boolean held = ClientMatchState.allows(PhaseRule.RESCUE)
+            && ManiacKeybinds.isRescueHeld()
+            && !ClientMatchState.survivorState().isCrawlOnly()
+            && isLookingAtDownedSurvivor();
+
+        if (held != rescueHeld) {
+            rescueHeld = held;
+            rescueResendCounter = 0;
+            ModNetwork.toServer(new RescueHoldPacket(held));
             return;
         }
+        if (held && ++rescueResendCounter >= RESCUE_RESEND_TICKS) {
+            rescueResendCounter = 0;
+            ModNetwork.toServer(new RescueHoldPacket(true));
+        }
+    }
 
-        boolean held = ManiacKeybinds.isRescueHeld();
-        if (held == rescueHeld) return;
-
-        rescueHeld = held;
-        ModNetwork.toServer(new RescueHoldPacket(held));
+    /**
+     * ПКМ по лежачому союзнику не має «використовувати» предмет у руці.
+     * Ванільний клієнт після невдалої взаємодії з сутністю (PASS) викликає
+     * {@code useItem} — тому підняття з аптечкою чи каністрою в руках
+     * одразу витрачало б її. Скасування ЦІЄЇ події з успішним результатом
+     * зупиняє ланцюжок до використання предмета.
+     */
+    @SubscribeEvent
+    public static void onEntityInteractSpecific(PlayerInteractEvent.EntityInteractSpecific event) {
+        if (!event.getLevel().isClientSide()) return;
+        if (!ClientMatchState.isSurvivor()) return;
+        if (!ClientMatchState.isDowned(event.getTarget().getUUID())) return;
+        event.setCanceled(true);
+        event.setCancellationResult(InteractionResult.SUCCESS);
     }
 
     /**
@@ -225,7 +285,7 @@ public final class ClientInputHandler {
      * набереться 100%". Тому тут напряму читається стан ванільних
      * клавіш "sneak"+"use" — {@link ManiacKeybinds#isRepairHeld()},
      * точно за тим самим підходом, що {@link ManiacKeybinds#isRescueHeld()}
-     * (Shift) чи {@link ManiacKeybinds#isStandUpDown()} (Пробіл).
+     * (ПКМ) чи {@link ManiacKeybinds#isStandUpDown()} (Пробіл).
      *
      * ── Визначення генератора ─────────────────────────────────────────
      * {@code Minecraft.getInstance().hitResult} — той самий рейкаст,

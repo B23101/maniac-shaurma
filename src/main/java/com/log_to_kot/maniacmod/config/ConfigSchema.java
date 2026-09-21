@@ -196,6 +196,27 @@ public final class ConfigSchema {
         ConfigKey.decimal("generators", "minigameTriggerChancePerTick", 0.0015, 0.0, 1.0);
 
     /**
+     * Скільки тіків від ПОЧАТКУ сесії ремонту (перший {@code refreshRepair}
+     * на цей генератор, не кожне повторне утримання) міні-гра гарантовано
+     * НЕ випадає — щоб вона не могла з'явитись за секунду після 0%, як у
+     * Dead by Daylight (там перший скілл-чек теж не трапляється миттєво).
+     * Не скидається паузами: якщо гравець відпустив і знову затиснув ПКМ
+     * на той самий генератор, лишок grace-періоду didn't reset — рахунок
+     * іде від {@link com.log_to_kot.maniacmod.map.GeneratorModule.RepairSession#pos}
+     * створення сесії, а не від кожного відновлення утримання.
+     */
+    public static final ConfigKey<Integer> MINIGAME_GRACE_TICKS =
+        ConfigKey.integer("generators", "minigameGraceTicks", 60, 0, 1200);
+
+    /**
+     * Скільки тіків після завершення міні-гри (успіх чи провал) наступна
+     * міні-гра гарантовано не випаде — той самий cooldown, що в DBD між
+     * скілл-чеками, щоб вони не йшли одна за одною занадто щільно.
+     */
+    public static final ConfigKey<Integer> MINIGAME_COOLDOWN_TICKS =
+        ConfigKey.integer("generators", "minigameCooldownTicks", 100, 0, 1200);
+
+    /**
      * Скільки влучень треба в міні-грі "ціль" (Generator Startup — рухомий
      * повзунок, нерухома ціль): дизайн-скрін показує "Hits: 0/3". Один
      * промах по цілі — миттєвий провал (технічна поломка), спроби НЕ
@@ -213,7 +234,7 @@ public final class ConfigSchema {
      * (обидва читають той самий ключ конфігу).
      */
     public static final ConfigKey<Double> TARGET_MINIGAME_CURSOR_SPEED =
-        ConfigKey.decimal("generators", "targetMinigameCursorSpeed", 0.7, 0.05, 5.0);
+        ConfigKey.decimal("generators", "targetMinigameCursorSpeed", 1.1, 0.05, 5.0);
 
     /**
      * Ширина "зони влучання" навколо нерухомої цілі в міні-грі "ціль",
@@ -334,8 +355,49 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> FLASHLIGHT_COOLDOWN_TICKS =
         ConfigKey.integer("survivors", "flashlightCooldownTicks", 600, 20, 6000);
 
+    /**
+     * Скільки тіків треба утримувати ПКМ на непритомному, щоб підняти його
+     * (одним рятівником). 160 тіків = 8 с.
+     */
     public static final ConfigKey<Integer> RESCUE_TICKS =
-        ConfigKey.integer("survivors", "rescueTicks", 300, 20, 6000);
+        ConfigKey.integer("survivors", "rescueTicks", 160, 20, 6000);
+
+    /**
+     * Скільки тіків непритомний живе без допомоги, перш ніж помре.
+     * 1200 тіків = 60 с. Час іде лише в ігрових фазах і стоїть, поки
+     * гравець офлайн.
+     */
+    public static final ConfigKey<Integer> DOWNED_BLEED_OUT_TICKS =
+        ConfigKey.integer("survivors", "downedBleedOutTicks", 1200, 100, 36000);
+
+    /**
+     * За скільки тіків ПОВНИЙ прогрес підняття згасає до нуля, коли його
+     * ніхто не тримає (100 тіків = 5 с). Швидкість згасання стала — від
+     * неповного прогресу він скидається відповідно швидше.
+     */
+    public static final ConfigKey<Integer> RESCUE_DECAY_TICKS =
+        ConfigKey.integer("survivors", "rescueDecayTicks", 100, 1, 6000);
+
+    /** Скільки хп має гравець одразу після підняття (обмежується максимумом ролі). */
+    public static final ConfigKey<Integer> REVIVE_HP =
+        ConfigKey.integer("survivors", "reviveHp", 10, 1, 1000);
+
+    /**
+     * Частка звичайної швидкості, з якою повзе непритомний (0.15 = 15%).
+     * Множник ідеться як атрибутний модифікатор на сервері, тож клієнт
+     * отримує його разом зі стандартною синхронізацією атрибутів.
+     */
+    public static final ConfigKey<Double> DOWNED_CRAWL_SPEED =
+        ConfigKey.decimal("survivors", "downedCrawlSpeed", 0.15, 0.0, 1.0);
+
+    /**
+     * На якій відстані (блоки, від ніг до ніг) рятівник може піднімати
+     * непритомного. Трохи більше за ванільну дальність рейкасту (3.0):
+     * рейкаст міряє від ОЧЕЙ до хітбокса, а тут — між позиціями, тож при
+     * 3.0 крайні влучання клієнта сервер відхиляв би.
+     */
+    public static final ConfigKey<Double> RESCUE_RANGE_BLOCKS =
+        ConfigKey.decimal("survivors", "rescueRangeBlocks", 3.5, 1.0, 8.0);
 
     public static final ConfigKey<Double> RESCUE_HELPER_BONUS =
         ConfigKey.decimal("survivors", "rescueHelperBonus", 0.2, 0.0, 1.0);
@@ -505,7 +567,7 @@ public final class ConfigSchema {
     public static final ConfigBlock GENERATORS = ConfigBlock.settings("generators", "generators.yml",
         "Ремонт, бензин, міні-ігри й підсвітка генераторів.",
         GENERATORS_REQUIRED, BONUS_GENERATORS_PER_MANIAC,
-        MINIGAME_TRIGGER_CHANCE_PER_TICK,
+        MINIGAME_TRIGGER_CHANCE_PER_TICK, MINIGAME_GRACE_TICKS, MINIGAME_COOLDOWN_TICKS,
         TARGET_MINIGAME_HITS_REQUIRED, TARGET_MINIGAME_CURSOR_SPEED, TARGET_MINIGAME_HIT_ZONE_WIDTH,
         WIRE_MINIGAME_TICKS, TARGET_MINIGAME_LAG_TOLERANCE_MS,
         FUEL_REQUIRED_PERCENT, FUEL_PERCENT_PER_SECOND,
@@ -518,6 +580,7 @@ public final class ConfigSchema {
     public static final ConfigBlock SURVIVORS = ConfigBlock.settings("survivors", "survivors.yml",
         "Здоров'я, стаміна, падіння, підняття непритомних.",
         SURVIVOR_MAX_HP, SURVIVOR_SLOTS, FLASHLIGHT_COOLDOWN_TICKS, RESCUE_TICKS,
+        DOWNED_BLEED_OUT_TICKS, RESCUE_DECAY_TICKS, REVIVE_HP, DOWNED_CRAWL_SPEED, RESCUE_RANGE_BLOCKS,
         RESCUE_HELPER_BONUS, STAMINA_DRAIN_PER_TICK, STAMINA_REGEN_PER_TICK,
         FALL_KNOCKDOWN_HEIGHT, LEG_BREAK_MIN_HEIGHT, LEG_BREAK_CHANCE_AT_MIN,
         LEG_BREAK_MAX_HEIGHT, LEG_BREAK_CHANCE_AT_MAX, STAND_UP_PRESSES, HEARTBEAT_RANGE_BLOCKS);

@@ -4,7 +4,8 @@ import com.log_to_kot.maniacmod.net.S2CPacket;
 import net.minecraft.network.FriendlyByteBuf;
 
 /**
- * Сервер → клієнт: початок перезарядки дії маньяка.
+ * Сервер → клієнт: початок перезарядки дії (маньяка або, для
+ * підсвітки генераторів, виживого).
  *
  * ── Категорія: actionprogress ────────────────────────────────────────
  * Той самий патерн, що {@link GeneratorProgressPacket}: сервер шле
@@ -22,6 +23,14 @@ public record AbilityCooldownPacket(String actionId, int totalTicks) implements 
 
     /** Удар маньяка. Зарезервований id — не використовувати для здібності. */
     public static final String ATTACK_ID = "attack";
+
+    /**
+     * Підсвітка генераторів виживого (клавіша 5). Це перезарядка ВИЖИВОГО,
+     * а не маньяка, але форма та сама — «сервер каже скільки, клієнт
+     * відраховує сам», — тому окремий тип пакета не потрібен. Не
+     * перетинається з {@code "ability:N"}/{@code "trap:N"}: різний префікс.
+     */
+    public static final String HIGHLIGHT_ID = "survivor:highlight";
 
     /** Здібність за номером клавіші 1–3. */
     public static String abilityId(int slot) {

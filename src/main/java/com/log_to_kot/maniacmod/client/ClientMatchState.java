@@ -5,12 +5,14 @@ import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
+import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import net.minecraft.core.BlockPos;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Клієнтське дзеркало стану матчу.
@@ -52,6 +54,23 @@ public final class ClientMatchState {
     // ── Підсвітка генераторів ────────────────────────────────────────────
     private static List<GeneratorHighlightPacket.Entry> highlight = List.of();
     private static long highlightUntilTick = 0;
+
+    // ── Лежачі виживі (DownedSurvivorsPacket) ───────────────────────────
+    // Джерело правди для ПОЗИ (DownedPose), мітки на карту й таймера до
+    // смерті. Час між пакетами клієнт відлічує сам від downedReceivedAtMs.
+    private static List<DownedSurvivorsPacket.Entry> downed = List.of();
+    private static long downedReceivedAtMs = 0;
+    /** Найбільший ticksLeft, побачений для кожного лежачого, — знаменник шкали часу. */
+    private static final Map<UUID, Integer> downedMaxTicks = new java.util.HashMap<>();
+
+    // ── Прогрес підняття (RescueProgressPacket) ──────────────────────────
+    // Шкала живе, поки пакети приходять: якщо нового не було довше за
+    // RESCUE_UI_TIMEOUT_MS — вважаємо, що підняття зупинилось.
+    private static final long RESCUE_UI_TIMEOUT_MS = 250;
+    private static int rescueProgress = 0;
+    private static int rescueRequired = 0;
+    private static boolean rescueAsVictim = false;
+    private static long rescueUpdatedAtMs = 0;
 
     // ── Ростер (tab-екран) ───────────────────────────────────────────────
     private static List<RosterSyncPacket.RosterEntry> roster = List.of();
@@ -107,6 +126,24 @@ public final class ClientMatchState {
         highlightUntilTick = currentTick + durationTicks;
     }
 
+    static void setDowned(List<DownedSurvivorsPacket.Entry> entries) {
+        downed = List.copyOf(entries);
+        downedReceivedAtMs = System.currentTimeMillis();
+        java.util.Set<UUID> present = new java.util.HashSet<>();
+        for (DownedSurvivorsPacket.Entry entry : entries) {
+            present.add(entry.id());
+            downedMaxTicks.merge(entry.id(), entry.ticksLeft(), Math::max);
+        }
+        downedMaxTicks.keySet().retainAll(present);
+    }
+
+    static void setRescueProgress(int progress, int required, boolean asVictim) {
+        rescueProgress = Math.max(0, progress);
+        rescueRequired = Math.max(0, required);
+        rescueAsVictim = asVictim;
+        rescueUpdatedAtMs = System.currentTimeMillis();
+    }
+
     static void setRoster(List<RosterSyncPacket.RosterEntry> entries) {
         roster = List.copyOf(entries);
     }
@@ -131,11 +168,54 @@ public final class ClientMatchState {
         highlight = List.of();
         highlightUntilTick = 0;
         roster = List.of();
+        downed = List.of();
+        downedMaxTicks.clear();
+        rescueRequired = 0;
+        rescueProgress = 0;
+        com.log_to_kot.maniacmod.client.overlay.WorldToScreen.invalidate();
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
         com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.reset();
+        com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker.reset();
     }
 
     // ── Читання ──────────────────────────────────────────────────────────
+
+    /** Чи цей гравець (будь-який, не лише я) зараз лежить непритомним. */
+    public static boolean isDowned(UUID id) {
+        for (DownedSurvivorsPacket.Entry entry : downed) {
+            if (entry.id().equals(id)) return true;
+        }
+        return false;
+    }
+
+    public static List<DownedSurvivorsPacket.Entry> downedEntries() { return downed; }
+
+    /** Скільки мс лишилось лежачому: серверне значення мінус те, що минуло від пакета. */
+    public static long downedMillisLeft(DownedSurvivorsPacket.Entry entry) {
+        long elapsed = System.currentTimeMillis() - downedReceivedAtMs;
+        return Math.max(0L, entry.ticksLeft() * 50L - elapsed);
+    }
+
+    /** Частка часу, що ще лишилась (1 — щойно ліг, 0 — час вийшов). */
+    public static float downedFraction(DownedSurvivorsPacket.Entry entry) {
+        int max = downedMaxTicks.getOrDefault(entry.id(), entry.ticksLeft());
+        if (max <= 0) return 0f;
+        return Math.max(0f, Math.min(1f, downedMillisLeft(entry) / (max * 50f)));
+    }
+
+    /** Чи підняття йде просто зараз (пакети прогресу ще свіжі). */
+    public static boolean rescueActive() {
+        return rescueRequired > 0
+            && System.currentTimeMillis() - rescueUpdatedAtMs < RESCUE_UI_TIMEOUT_MS;
+    }
+
+    public static float rescueFraction() {
+        return rescueRequired <= 0 ? 0f : Math.max(0f, Math.min(1f, (float) rescueProgress / rescueRequired));
+    }
+
+    /** true — це пакет для того, кого піднімають; false — для рятівника. */
+    public static boolean rescueAsVictim() { return rescueAsVictim; }
+
 
     public static GamePhase phase()            { return phase; }
     public static boolean isGameplay()         { return phase.isGameplay(); }
@@ -169,6 +249,13 @@ public final class ClientMatchState {
         long left = readyAt - currentTick;
         if (left <= 0) return 0f;
         return Math.min(1f, (float) left / total);
+    }
+
+    /** Скільки ТІКІВ лишилось до кінця кулдауну (0 — готово). Для підписів у секундах. */
+    public static long abilityCooldownTicksLeft(String abilityId, long currentTick) {
+        Long readyAt = abilityReadyAt.get(abilityId);
+        if (readyAt == null) return 0L;
+        return Math.max(0L, readyAt - currentTick);
     }
 
     /** Генератори, які зараз підсвічені. Порожньо, якщо підсвітка згасла. */

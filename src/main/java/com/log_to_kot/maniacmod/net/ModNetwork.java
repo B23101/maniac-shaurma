@@ -1,6 +1,8 @@
 package com.log_to_kot.maniacmod.net;
 
 import com.log_to_kot.maniacmod.ManiacMod;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.RescueProgressPacket;
+import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.AbilityActivatePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.HighlightTogglePacket;
 import com.log_to_kot.maniacmod.net.c2s.minigame.TargetMinigameClickPacket;
@@ -66,7 +68,7 @@ public final class ModNetwork {
      * з різними версіями просто не з'єднаються — це краще, ніж
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
      */
-    private static final String PROTOCOL_VERSION = "4";
+    private static final String PROTOCOL_VERSION = "5";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -98,6 +100,8 @@ public final class ModNetwork {
         s2c(GeneratorCompletedPacket.class,     GeneratorCompletedPacket::new);
         s2c(GeneratorExplosionPacket.class,     GeneratorExplosionPacket::new);
         s2c(GroundItemVisualSettingsPacket.class, GroundItemVisualSettingsPacket::new);
+        s2c(DownedSurvivorsPacket.class,          DownedSurvivorsPacket::new);
+        s2c(RescueProgressPacket.class,           RescueProgressPacket::new);
 
         // ── Клієнт → сервер ─────────────────────────────────────────────
         c2s(AbilityActivatePacket.class,    AbilityActivatePacket::new);

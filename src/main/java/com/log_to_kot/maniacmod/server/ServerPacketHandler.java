@@ -91,9 +91,12 @@ public final class ServerPacketHandler {
         if (!match.isSurvivor(player.getUUID())) return;
         if (!match.phases().allows(PhaseRule.HUD)) return;
 
-        // TODO(міграція survivors): перевірити кулдаун підсвітки (30 с)
-        // — сам кулдаун належить ролі виживого, не генераторам.
-        match.generatorModule().sendHighlight(player);
+        // Кулдаун (30 с за замовчуванням) належить ролі виживого, а не
+        // генераторам — тому запуск іде через SurvivorModule, який сам
+        // вирішує, готова сила чи ні, і лише потім просить генератори
+        // показати стан. Відмова мовчазна: клієнт і так не слатиме пакет,
+        // поки бачить кулдаун на власному HUD.
+        match.survivors().tryUseHighlight(player);
     }
 
     public static void onStandUpAttempt(ServerPlayer player) {

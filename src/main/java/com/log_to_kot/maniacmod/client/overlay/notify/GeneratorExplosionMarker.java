@@ -1,19 +1,12 @@
 package com.log_to_kot.maniacmod.client.overlay.notify;
 
-import com.log_to_kot.maniacmod.ManiacMod;
-import net.minecraft.client.Camera;
+import com.log_to_kot.maniacmod.client.overlay.WorldToScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
-import net.minecraftforge.client.event.RenderLevelStageEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import org.joml.Matrix4f;
-import org.joml.Vector4f;
 
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -30,7 +23,7 @@ import java.util.Map;
  *  • світова геометрія (промінь, куб) обрізається дальньою площиною
  *    камери, яка залежить від налаштувань гравця.
  * Екранна проєкція позиції від цього не залежить: беремо матриці
- * камери з {@link RenderLevelStageEvent}, множимо на позицію
+ * камери (див. {@link WorldToScreen}), множимо на позицію
  * та малюємо мітку в GUI. Якщо генератор за спиною чи за краєм екрана,
  * мітка притискається до краю й вказує напрямок.
  *
@@ -40,8 +33,6 @@ import java.util.Map;
  * згаснути навіть коли відкрите меню й клієнтські тіки не рахуються.
  */
 @OnlyIn(Dist.CLIENT)
-@Mod.EventBusSubscriber(modid = ManiacMod.MOD_ID, value = Dist.CLIENT,
-                        bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class GeneratorExplosionMarker {
 
     private static final int RED = 0xFF3030;
@@ -50,11 +41,6 @@ public final class GeneratorExplosionMarker {
 
     /** Позиція → момент (мс), коли мітка гасне. Порядок вставки зберігається. */
     private static final Map<BlockPos, Long> activeUntilMs = new LinkedHashMap<>();
-
-    /** Проєкція × вид із останнього кадру світу. */
-    private static final Matrix4f viewProjection = new Matrix4f();
-    private static Vec3 cameraPos = Vec3.ZERO;
-    private static boolean matricesValid = false;
 
     private GeneratorExplosionMarker() {}
 
@@ -65,26 +51,10 @@ public final class GeneratorExplosionMarker {
     /** Викликається зі {@code ClientMatchState.reset()} — кінець матчу гасить усе. */
     public static void reset() {
         activeUntilMs.clear();
-        matricesValid = false;
-    }
-
-    /**
-     * Запам'ятовує матриці камери. AFTER_PARTICLES — стадія, коли
-     * {@code PoseStack} уже містить поворот камери (проєкція приходить
-     * окремо), а на екран ще нічого не намальовано поверх світу.
-     */
-    @SubscribeEvent
-    public static void onRenderLevel(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) return;
-        if (activeUntilMs.isEmpty()) return;
-        Camera camera = event.getCamera();
-        viewProjection.set(event.getProjectionMatrix()).mul(event.getPoseStack().last().pose());
-        cameraPos = camera.getPosition();
-        matricesValid = true;
     }
 
     public static void render(GuiGraphics graphics) {
-        if (activeUntilMs.isEmpty() || !matricesValid) return;
+        if (activeUntilMs.isEmpty()) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
 
@@ -110,25 +80,10 @@ public final class GeneratorExplosionMarker {
         double wy = pos.getY() + 1.5;
         double wz = pos.getZ() + 0.5;
 
-        Vector4f clip = new Vector4f(
-            (float) (wx - cameraPos.x), (float) (wy - cameraPos.y), (float) (wz - cameraPos.z), 1.0f);
-        viewProjection.transform(clip);
-        if (Math.abs(clip.w) < 1.0e-6f) return;
-
-        float ndcX = clip.x / clip.w;
-        float ndcY = clip.y / clip.w;
-        if (clip.w < 0) {
-            // За спиною камери: проєкція дзеркальна, розвертаємо, щоб мітка
-            // показувала бік, куди треба повернутись.
-            ndcX = -ndcX;
-            ndcY = -ndcY;
-            if (Math.abs(ndcX) < 0.05f && Math.abs(ndcY) < 0.05f) ndcY = -1.0f;
-        }
-
-        int sx = Math.round((ndcX * 0.5f + 0.5f) * width);
-        int sy = Math.round((1.0f - (ndcY * 0.5f + 0.5f)) * height);
-        sx = Math.max(EDGE_MARGIN, Math.min(width - EDGE_MARGIN, sx));
-        sy = Math.max(EDGE_MARGIN, Math.min(height - EDGE_MARGIN, sy));
+        WorldToScreen.Point point = WorldToScreen.project(wx, wy, wz, width, height, EDGE_MARGIN);
+        if (point == null) return;
+        int sx = point.x();
+        int sy = point.y();
 
         // Пульсація й швидке згасання в останні 400 мс.
         double pulse = 0.65 + 0.35 * Math.sin(now / 90.0);
@@ -141,9 +96,7 @@ public final class GeneratorExplosionMarker {
             graphics.fill(sx - half, sy + dy, sx + half + 1, sy + dy + 1, color);
         }
 
-        double dx = wx - cameraPos.x;
-        double dz = wz - cameraPos.z;
-        int meters = (int) Math.round(Math.sqrt(dx * dx + dz * dz));
+        int meters = (int) Math.round(WorldToScreen.distanceXZ(wx, wz));
         String label = Component.translatable("maniacmod.hud.generator.exploded", meters).getString();
         int textColor = (Math.max(90, alpha) << 24) | 0xFFFFFF;
         graphics.drawCenteredString(mc.font, label, sx, sy + RADIUS + 4, textColor);

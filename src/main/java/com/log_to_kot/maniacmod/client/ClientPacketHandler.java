@@ -54,6 +54,14 @@ public final class ClientPacketHandler {
         ClientMatchState.setVitals(hp, maxHp, stamina, state, heartbeat);
     }
 
+    public static void onDownedSurvivors(List<com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket.Entry> entries) {
+        ClientMatchState.setDowned(entries);
+    }
+
+    public static void onRescueProgress(int progress, int required, boolean asVictim) {
+        ClientMatchState.setRescueProgress(progress, required, asVictim);
+    }
+
     public static void onStandUpProgress(int presses, int required) {
         ClientMatchState.setStandUpProgress(presses, required);
     }
@@ -65,6 +73,10 @@ public final class ClientPacketHandler {
     public static void onGeneratorHighlight(int durationTicks,
                                             List<GeneratorHighlightPacket.Entry> entries) {
         ClientMatchState.setHighlight(entries, durationTicks, clientTick());
+        // Малює саме маркер: ClientMatchState лише тримає дані. Раніше
+        // підсвітку не малював ніхто, тож клавіша 5 нічого не показувала.
+        com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker
+            .show(entries, durationTicks);
     }
 
     public static void onGeneratorProgress(GeneratorProgressPacket packet) {

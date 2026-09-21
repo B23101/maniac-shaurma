@@ -130,6 +130,14 @@ public final class ManiacCombatModule implements PhaseListener {
         if (!match.isManiac(attacker.getUUID())) return false;
         if (!(target instanceof ServerPlayer victim)) return false;
         if (!match.isSurvivor(victim.getUUID())) return false;
+
+        // Лежачого бити НЕ можна: він уже на нулі, і його доля вирішується
+        // таймером (SurvivorModule.tickDowned) чи підняттям союзником, а не
+        // ударом маньяка. Повертаємось ДО перевірки кулдауну — марний змах
+        // не має ні шкоди, ні перезарядки.
+        if (match.survivorStateOf(victim.getUUID()) == com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS) {
+            return false;
+        }
         if (cooldownTicks > 0) return false;
 
         ManiacArchetype archetype = match.maniacArchetype();
@@ -138,19 +146,8 @@ public final class ManiacCombatModule implements PhaseListener {
         double range = archetype.attackRangeBlocks();
         if (attacker.distanceTo(victim) > range) return false;
 
-        // Добивання: удар по вже непритомному не знімає хп заново (він
-        // і так на нулі) — це остаточне вибуття, а не ще один "downed".
-        if (match.survivorStateOf(victim.getUUID()) == com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS) {
-            match.survivors().onSurvivorLeftMatch(victim, com.log_to_kot.maniacmod.survivors.SurvivorState.ELIMINATED);
-            match.markEliminated(victim);
-            // Подія важлива для табу й фіналу — не чекаємо наступного
-            // throttled roster-тіку з SurvivorModule.onPhaseTick.
-            com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(
-                attacker.getServer().getPlayerList().getPlayers());
-        } else {
-            boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
-            if (downed) match.survivors().onSurvivorDowned(victim);
-        }
+        boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
+        if (downed) match.survivors().onSurvivorDowned(victim);
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
     }

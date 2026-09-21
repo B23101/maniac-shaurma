@@ -80,6 +80,19 @@ public final class ModSoundCues {
         // відчуття гравця (напруга/втома), а не подія світу на кшталт
         // генератора чи пастки.
         cue(ModSounds.EXHAUSTED_BREATH, SoundStage.POSITIONAL_FIXED, AMBIENCE, 1.0f);
+
+        // Серцебиття від близькості маньяка (HeartbeatSoundHandler) — та сама
+        // логіка "звук ТІЛА гравця", що й задишка: позиційний, від координат
+        // mc.player, категорія AMBIENCE (особисте відчуття напруги, не подія
+        // світу). Перенесено з мода "снайпери" (EnhancedVisuals HeartbeatHandler).
+        cue(ModSounds.HEARTBEAT_IN,  SoundStage.POSITIONAL_FIXED, AMBIENCE, 1.0f);
+        cue(ModSounds.HEARTBEAT_OUT, SoundStage.POSITIONAL_FIXED, AMBIENCE, 1.0f);
+
+        // Хрускіт кісток при переломі ноги — подія ТІЛА гравця в момент
+        // конкретної події (вставання після падіння), а не постійне
+        // відчуття на кшталт серцебиття/задишки, тому WORLD (як TRAP_SNAP),
+        // не AMBIENCE.
+        cue(ModSounds.BONE_BREAK, SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
     }
 
     private static void cue(RegistryObject<SoundEvent> sound, SoundStage stage,

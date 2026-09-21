@@ -1,7 +1,12 @@
 maxHp: 100
 inventorySlots: 4
 flashlightCooldownTicks: 600
-rescueTicks: 300
+rescueTicks: 160
+rescueDecayTicks: 100
+downedBleedOutTicks: 1200
+reviveHp: 10
+downedCrawlSpeed: 0.15
+rescueRangeBlocks: 3.5
 rescueHelperBonus: 0.2
 staminaDrainPerTick: 0.008
 staminaRegenPerTick: 0.004

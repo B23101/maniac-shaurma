@@ -7,6 +7,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import com.mojang.blaze3d.systems.RenderSystem;
 
 /**
  * "З'єднай дроти" — 4 кольорові контакти зліва, 4 справа, навмисно
@@ -18,6 +20,18 @@ import net.minecraft.network.chat.Component;
  * акцентами й заголовком-капсом, що й в інших екранах цього сімейства
  * (див. {@link TargetMinigameScreen}) — контакти й дроти лишаються
  * кольоровими поверх спільного темного фону панелі.
+ *
+ * ── Дріт = текстура, а не лінія ──────────────────────────────────────
+ * Дріт малюється текстурою {@link #TEX_WIRE} (нейтральна сіра оплітка з
+ * об'ємом), РОЗТЯГНУТОЮ вздовж дроту: прямокутник завдовжки як відстань
+ * між кінцями, повернутий на кут лінії. Колір накладається тонуванням
+ * ({@code setShaderColor}), тому одна текстура обслуговує всі чотири
+ * кольори. Раніше дріт був ланцюжком крапок-квадратів {@code fill()}.
+ *
+ * ── Помилка ──────────────────────────────────────────────────────────
+ * Неправильний дріт або вихід часу фарбує вікно в червоне; воно лишається
+ * червоним, доки екран не закриється ({@link #FAIL_LINGER_MS} після
+ * серверного вердикту).
  *
  * ── Хто що рахує ─────────────────────────────────────────────────────
  * Індекс контакту {@code i} — це "колір": лівий {@code i} завжди
@@ -58,6 +72,21 @@ public final class WireMinigameScreen extends Screen {
     private static final int HINT_HEIGHT = 22;
     private static final int HINT_GAP = 10;
 
+    /** Текстура дроту: 16×8, нейтральна — колір дає тонування. */
+    private static final ResourceLocation TEX_WIRE =
+        new ResourceLocation("maniacmod", "textures/gui/minigame/wire.png");
+    private static final int WIRE_TEX_W = 16;
+    private static final int WIRE_TEX_H = 8;
+
+    /** Товщина дроту на екрані, px (висота розтягнутої текстури). */
+    private static final int WIRE_THICKNESS = 6;
+
+    /** Скільки мс вікно лишається червоним після провалу, перш ніж закритись. */
+    private static final long FAIL_LINGER_MS = 900;
+
+    private static final int FAIL_PANEL_BG = 0xE63A0A0A;
+    private static final int FAIL_BORDER = 0xFFB0242F;
+
     private final int timeLimitTicks;
     private final long openedAtMillis;
 
@@ -67,6 +96,12 @@ public final class WireMinigameScreen extends Screen {
 
     private int draggingLeftSlot = -1;
     private boolean finished = false;
+
+    /** true після провалу — вікно червоніє до закриття. */
+    private boolean failed = false;
+
+    /** Коли (мс) закрити екран після провалу; 0 — не заплановано. */
+    private long closeAtMillis = 0;
 
     public WireMinigameScreen(int[] initialRightSlotForLeft, int timeLimitTicks) {
         super(Component.translatable("maniacmod.minigame.wires.title"));
@@ -94,11 +129,30 @@ public final class WireMinigameScreen extends Screen {
         confirmedCorrect[leftSlot] = true;
     }
 
-    /** Викликається ClientPacketHandler після RepairMinigameResultPacket — закриває екран у будь-якому разі. */
+    /**
+     * Викликається ClientPacketHandler після RepairMinigameResultPacket.
+     * Успіх закриває екран одразу. Провал (неправильний дріт, вихід часу,
+     * дистанція) фарбує вікно в червоне й закриває його через
+     * {@link #FAIL_LINGER_MS} у {@link #tick()}.
+     */
     public void onResult(boolean success) {
         if (finished) return;
         finished = true;
-        Minecraft.getInstance().setScreen(null);
+        draggingLeftSlot = -1; // не лишаємо дріт «в руці» на червоному екрані
+        if (success) {
+            Minecraft.getInstance().setScreen(null);
+            return;
+        }
+        failed = true;
+        closeAtMillis = System.currentTimeMillis() + FAIL_LINGER_MS;
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (closeAtMillis != 0 && System.currentTimeMillis() >= closeAtMillis) {
+            Minecraft.getInstance().setScreen(null);
+        }
     }
 
     private int panelX() { return width / 2 - PANEL_WIDTH / 2; }
@@ -109,7 +163,11 @@ public final class WireMinigameScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (finished || button != 0) return false;
+        // Після вердикту (червоне вікно) клік споживаємо, але нічого не
+        // робимо: повернути false означало б «клік нікому не потрібен»
+        // і він міг би провалитись у світ під панеллю.
+        if (finished) return true;
+        if (button != 0) return false;
         int panelX = panelX();
         int panelY = panelY();
 
@@ -167,7 +225,7 @@ public final class WireMinigameScreen extends Screen {
         int panelX = panelX();
         int panelY = panelY();
 
-        ManiacUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
+        drawPanelFrame(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
         ManiacUiTheme.drawTitle(graphics, font, title, panelX, panelY, PANEL_WIDTH);
 
         for (int left = 0; left < SLOT_COUNT; left++) {
@@ -200,9 +258,16 @@ public final class WireMinigameScreen extends Screen {
         int hintY = panelY + PANEL_HEIGHT + HINT_GAP;
         double remainingSeconds = Math.max(0,
             timeLimitTicks / 20.0 - (System.currentTimeMillis() - openedAtMillis) / 1000.0);
-        ManiacUiTheme.drawHintBar(graphics, font,
-            Component.translatable("maniacmod.minigame.wires.time_left", (int) Math.ceil(remainingSeconds)).getString(),
-            panelX, hintY, PANEL_WIDTH, HINT_HEIGHT);
+        String hintText = Component.translatable(
+            "maniacmod.minigame.wires.time_left", (int) Math.ceil(remainingSeconds)).getString();
+        if (failed) {
+            graphics.fill(panelX, hintY, panelX + PANEL_WIDTH, hintY + HINT_HEIGHT, FAIL_PANEL_BG);
+            ManiacUiTheme.border1px(graphics, panelX, hintY, PANEL_WIDTH, HINT_HEIGHT, FAIL_BORDER);
+            graphics.drawCenteredString(font, hintText, panelX + PANEL_WIDTH / 2,
+                hintY + (HINT_HEIGHT - font.lineHeight) / 2, FAIL_BORDER);
+        } else {
+            ManiacUiTheme.drawHintBar(graphics, font, hintText, panelX, hintY, PANEL_WIDTH, HINT_HEIGHT);
+        }
 
         super.render(graphics, mouseX, mouseY, partialTick);
     }
@@ -214,15 +279,67 @@ public final class WireMinigameScreen extends Screen {
         graphics.fill(x - SLOT_RADIUS + 3, y - SLOT_RADIUS + 3, x + SLOT_RADIUS - 3, y + SLOT_RADIUS - 3, color);
     }
 
-    /** Лінія товщиною ~2px через послідовність невеликих заповнень — без залежності від тесселятора ліній. */
+    /**
+     * Дріт: текстура {@link #TEX_WIRE}, РОЗТЯГНУТА вздовж лінії між двома
+     * точками. Малюється прямокутник завдовжки як відстань між кінцями
+     * й товщиною {@link #WIRE_THICKNESS}, після чого матриця повертається
+     * на кут лінії (початок координат — у першій точці), тож дріт іде під
+     * будь-яким кутом, а не лише горизонтально.
+     *
+     * Колір дає {@code setShaderColor}: текстура нейтральна (сіра), і одна
+     * картинка обслуговує всі кольори. Після малювання множник ОБОВ'ЯЗКОВО
+     * повертається до білого — інакше всі наступні елементи GUI (і сам
+     * Minecraft) лишились би тонованими.
+     *
+     * У провалі дріт тьмяніє (множник до 55%), щоб не конфліктувати з
+     * червоним вікном, але лишався впізнаваним за кольором.
+     */
     private void drawWire(GuiGraphics graphics, int x1, int y1, int x2, int y2, int color) {
-        int steps = Math.max(1, (int) dist(x1, y1, x2, y2) / 4);
-        for (int i = 0; i <= steps; i++) {
-            float t = (float) i / steps;
-            int x = (int) (x1 + (x2 - x1) * t);
-            int y = (int) (y1 + (y2 - y1) * t);
-            graphics.fill(x - 1, y - 1, x + 1, y + 1, color);
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        int length = Math.max(1, (int) Math.round(Math.sqrt(dx * dx + dy * dy)));
+        float angle = (float) Math.atan2(dy, dx);
+
+        float dim = failed ? 0.55f : 1.0f;
+        float r = ((color >> 16) & 0xFF) / 255f * dim;
+        float g = ((color >> 8) & 0xFF) / 255f * dim;
+        float b = (color & 0xFF) / 255f * dim;
+
+        var pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(x1, y1, 0);
+        pose.mulPose(com.mojang.math.Axis.ZP.rotation(angle));
+
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderColor(r, g, b, 1.0f);
+        // Текстура тягнеться на всю довжину (uWidth = довжина у px, але
+        // регіон джерела — вся 16×8 картинка), тобто РОЗТЯГУЄТЬСЯ, а не
+        // повторюється плиткою.
+        graphics.blit(TEX_WIRE, 0, -WIRE_THICKNESS / 2, length, WIRE_THICKNESS,
+            0f, 0f, WIRE_TEX_W, WIRE_TEX_H, WIRE_TEX_W, WIRE_TEX_H);
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+        RenderSystem.disableBlend();
+
+        pose.popPose();
+    }
+
+    /** Панель міні-гри; у провалі — червона (фон, рамка, кутові акценти). */
+    private void drawPanelFrame(GuiGraphics graphics, int x, int y, int w, int h) {
+        if (!failed) {
+            ManiacUiTheme.drawPanel(graphics, x, y, w, h);
+            return;
         }
+        graphics.fill(x, y, x + w, y + h, FAIL_PANEL_BG);
+        ManiacUiTheme.border1px(graphics, x, y, w, h, FAIL_BORDER);
+        int t = 2, c = 10;
+        graphics.fill(x, y, x + c, y + t, FAIL_BORDER);
+        graphics.fill(x, y, x + t, y + c, FAIL_BORDER);
+        graphics.fill(x + w - c, y, x + w, y + t, FAIL_BORDER);
+        graphics.fill(x + w - t, y, x + w, y + c, FAIL_BORDER);
+        graphics.fill(x, y + h - t, x + c, y + h, FAIL_BORDER);
+        graphics.fill(x, y + h - c, x + t, y + h, FAIL_BORDER);
+        graphics.fill(x + w - c, y + h - t, x + w, y + h, FAIL_BORDER);
+        graphics.fill(x + w - t, y + h - c, x + w, y + h, FAIL_BORDER);
     }
 
     @Override

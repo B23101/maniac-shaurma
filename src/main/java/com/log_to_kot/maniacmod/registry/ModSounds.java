@@ -51,8 +51,21 @@ public final class ModSounds {
     // вище: клас-константа = одна подія в sounds.json, не один файл.
     public static final RegistryObject<SoundEvent> EXHAUSTED_BREATH = register("exhausted_breath");
 
-    // TODO(асети): за дизайном ще потрібні — серцебиття (heartbeat),
-    // хруст ноги (leg_break), провал міні-гри генератора
+    // ── Серцебиття від близькості маньяка ───────────────────────────────
+    // Перенесено з мода "снайпери" (система EnhancedVisuals HeartbeatHandler):
+    // два коротких удари на один цикл пульсу — OUT одразу, IN за 5 тіків
+    // до кінця циклу (див. HeartbeatSoundHandler.tick()). Гучність і
+    // сила залежить від того, наскільки близько маньяк — computeHeartbeat
+    // у SurvivorModule вже рахує це значення 0..1, звук лише озвучує те,
+    // що HUD уже показує пульсуючим серцем.
+    public static final RegistryObject<SoundEvent> HEARTBEAT_IN  = register("heartbeat_in");
+    public static final RegistryObject<SoundEvent> HEARTBEAT_OUT = register("heartbeat_out");
+
+    // ── Тіло ─────────────────────────────────────────────────────────────
+    // Хрускіт кісток при переломі ноги (onStandUpAttempt → BROKEN_LEG).
+    public static final RegistryObject<SoundEvent> BONE_BREAK = register("bone_break");
+
+    // TODO(асети): за дизайном ще потрібні — провал міні-гри генератора
     // (minigame_fail), залив бензину (fuel_pour). Реєструвати після
     // додавання .ogg.
 

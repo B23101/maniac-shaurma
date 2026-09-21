@@ -10,16 +10,21 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Забирає в лежачого виживого (CRAWLING / UNCONSCIOUS) ходьбу, стрибок і
- * присідання на КЛІЄНТІ.
+ * Клієнтська частина «лежання» виживого.
  *
- * ── Чому серверного локу недостатньо ─────────────────────────────────
+ *   • CRAWLING (щойно впав) — забирає ВСЕ: ходьбу, стрибок. Гравець лежить
+ *     на місці, доки не натисне пробіл потрібну кількість разів.
+ *   • UNCONSCIOUS (0 хп) — забирає лише СТРИБОК. Непритомний ПОВЗЕ:
+ *     напрямки лишаються, а швидкість ріже серверний модифікатор
+ *     (див. {@code SurvivorModule.ensureCrawlSpeed}), який клієнт отримує
+ *     зі стандартною синхронізацією атрибутів.
+ *
+ * ── Чому серверного локу недостатньо (для CRAWLING) ──────────────────
  * {@code InteractionLockHooks} морозить гравця на сервері
  * ({@code setDeltaMovement(0,0,0)} щотік + ресинк позиції раз на 5
  * тіків). Але клієнт сам симулює рух і шле позицію серверу, тому між
  * ресинками лежачий гравець «прослизає» вперед, а стрибок клієнт
- * виконує локально, ще до того як сервер його відкине. Саме це й
- * спостерігалось: рух і стрибки не блокувались.
+ * виконує локально, ще до того як сервер його відкине.
  *
  * ── Чому саме {@code KeyboardInput.tick} ─────────────────────────────
  * Це єдине місце, де натиснуті клавіші перетворюються на вхід руху
@@ -33,28 +38,30 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * ({@code ManiacKeybinds.isStandUpDown}), а не через {@code jumping},
  * тому обнулене {@code jumping} на вставання не впливає.
  *
- * ── Присідання (Shift) ───────────────────────────────────────────────
- * {@code shiftKeyDown} свідомо НЕ чіпаємо. Shift — це утримання
- * порятунку ({@code RescueHoldPacket}), яке читається напряму через
- * {@code options.keyShift.isDown()}, а не через це поле; обнулення
- * прапорця тут нічого б не дало для порятунку, зате могло б розійтися
- * з тим, що читають інші частини клієнта. Присідання лежачого гравця
- * руху не дає — рух уже обнулено.
+ * ── Клавіші дій ──────────────────────────────────────────────────────
+ * Присідання (Shift) і ПКМ свідомо НЕ чіпаємо: підняття читає ПКМ напряму
+ * через {@code options.keyUse}, а не через це поле. Присідання лежачому
+ * нічого не дає — поза йому примусово ставить {@code MixinPlayerDownedPose}.
  *
  * ⚠ Це зручність і синхронізація відчуттів, а не захист: клієнт можна
- * змінити, і чесність тримає сервер (freeze щотік у
- * {@code InteractionLockHooks}). Ніколи не переносити сюди перевірки,
- * від яких залежить чесність гри.
+ * змінити. Швидкість повзання тримає сервер (атрибут), а CRAWLING —
+ * freeze щотік у {@code InteractionLockHooks}. Ніколи не переносити сюди
+ * перевірки, від яких залежить чесність гри.
  */
 @Mixin(KeyboardInput.class)
 public abstract class MixinKeyboardInputDownedMovement extends Input {
 
     @Inject(method = "tick", at = @At("RETURN"))
-    private void maniacmod$blockMovementWhenDowned(boolean isSneaking, float sneakSpeed, CallbackInfo ci) {
+    private void maniacmod$restrictMovementWhenDowned(boolean isSneaking, float sneakSpeed, CallbackInfo ci) {
         if (!ClientMatchState.isSurvivor()) return;
 
         SurvivorState state = ClientMatchState.survivorState();
-        if (state != SurvivorState.CRAWLING && state != SurvivorState.UNCONSCIOUS) return;
+        if (state == SurvivorState.UNCONSCIOUS) {
+            // Повзе: напрямки лишаються, стрибати не може.
+            this.jumping = false;
+            return;
+        }
+        if (state != SurvivorState.CRAWLING) return;
 
         this.up = false;
         this.down = false;

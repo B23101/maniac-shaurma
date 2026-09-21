@@ -60,5 +60,20 @@
       { "name": "maniacmod:exhausted_breath_2", "stream": false },
       { "name": "maniacmod:exhausted_breath_3", "stream": false }
     ]
+  },
+  "heartbeat_in": {
+    "sounds": [
+      { "name": "maniacmod:heartbeat_in", "stream": false }
+    ]
+  },
+  "heartbeat_out": {
+    "sounds": [
+      { "name": "maniacmod:heartbeat_out", "stream": false }
+    ]
+  },
+  "bone_break": {
+    "sounds": [
+      { "name": "maniacmod:bone_break", "stream": false }
+    ]
   }
 }

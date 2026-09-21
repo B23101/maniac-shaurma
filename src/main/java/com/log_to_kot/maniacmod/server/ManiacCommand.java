@@ -38,6 +38,10 @@ import java.util.Map;
  *   /maniac morph <maniac|survivor|reset> — дебаг-перетворення в лобі
  *   /maniac phase <фаза>          — ручний перехід (налагодження)
  *   /maniac status                — хто в якій ролі, яка фаза, чи готова карта
+ *   /maniac hp [гравець]          — хп/стан виживого(-их)
+ *   /maniac hp set <гравець> <0-100> — дебаг: виставити хп у % (0 = downed)
+ *   /maniac generators complete   — дебаг: миттєво полагодити всі генератори
+ *   /maniac revive <гравець>      — дебаг: підняти непритомного гравця (як інший гравець підняв)
  *   /maniac lobby set             — точка лобі = позиція виконавця
  *   /maniac point add <вид> [id]  — розмітити точку на своїй позиції
  *   /maniac point list            — скільки яких точок розмічено
@@ -103,12 +107,31 @@ public final class ManiacCommand {
         root.then(Commands.literal("status")
             .executes(ctx -> status(ctx.getSource())));
 
-        // /maniac hp                — хп/стан УСІХ виживих
-        // /maniac hp <гравець>      — хп/стан ОДНОГО виживого
+        // /maniac hp                          — хп/стан УСІХ виживих
+        // /maniac hp <гравець>                — хп/стан ОДНОГО виживого
+        // /maniac hp set <гравець> <0-100>    — дебаг: виставити хп у %
         root.then(Commands.literal("hp")
             .executes(ctx -> hp(ctx.getSource(), null))
+            .then(Commands.literal("set")
+                .then(Commands.argument("survivor", EntityArgument.player())
+                    .then(Commands.argument("percent", IntegerArgumentType.integer(0, 100))
+                        .executes(ctx -> setHp(ctx.getSource(),
+                            EntityArgument.getPlayer(ctx, "survivor"),
+                            IntegerArgumentType.getInteger(ctx, "percent"))))))
             .then(Commands.argument("survivor", EntityArgument.player())
                 .executes(ctx -> hp(ctx.getSource(),
+                    EntityArgument.getPlayer(ctx, "survivor")))));
+
+        // /maniac generators complete — дебаг: миттєво полагодити ВСІ генератори матчу
+        root.then(Commands.literal("generators")
+            .then(Commands.literal("complete")
+                .executes(ctx -> completeGenerators(ctx.getSource()))));
+
+        // /maniac revive <гравець> — дебаг: підняти непритомного гравця
+        // без другого гравця, що фізично тримає ПКМ 8 секунд.
+        root.then(Commands.literal("revive")
+            .then(Commands.argument("survivor", EntityArgument.player())
+                .executes(ctx -> revive(ctx.getSource(),
                     EntityArgument.getPlayer(ctx, "survivor")))));
 
         root.then(Commands.literal("phase")
@@ -484,6 +507,92 @@ public final class ManiacCommand {
         int maxHp = match.maxHpOf(id);
         var state = match.survivorStateOf(id);
         return name + ": " + hp + "/" + maxHp + " хп (" + state.name() + ")";
+    }
+
+    /**
+     * Дебаг-команда: виставити хп виживого напряму у відсотках (0-100).
+     * Чистий дебаг-інструмент для тестування HUD/станів — не претендує
+     * бути "справжнім джерелом урону" (те лишається за
+     * {@code ManiacCombatModule.onAttack}), але на 0% свідомо заводить
+     * гравця в UNCONSCIOUS ТИМ САМИМ шляхом, що реальний удар
+     * ({@code survivors().onSurvivorDowned}) — інакше команда лишила б
+     * гравця "на нулі хп, але стоячи", і решта стейт-машини (лежання,
+     * bleed-out, підняття) просто не знала б, що він мертвий.
+     */
+    private static int setHp(CommandSourceStack source, ServerPlayer target, int percent) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        if (!match.isSurvivor(target.getUUID())) {
+            source.sendFailure(Component.translatable("maniacmod.command.hp_not_survivor", target.getName().getString()));
+            return 0;
+        }
+
+        boolean downed = match.setSurvivorHpPercent(target.getUUID(), percent);
+        if (downed) {
+            match.survivors().onSurvivorDowned(target);
+        } else {
+            match.survivors().forceVitalsRefresh(target);
+        }
+
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.hp_set",
+            target.getName().getString(), percent, hpLine(match, target.getUUID(), target.getName().getString())), true);
+        return 1;
+    }
+
+    /**
+     * Дебаг-команда: миттєво полагоджує ВСІ ще не готові генератори
+     * матчу — {@link com.log_to_kot.maniacmod.map.GeneratorModule#completeAllGenerators}
+     * робить фактичну роботу (форсить кожен генератор, гасить прогрес-бари
+     * тим, хто саме лагодив, шле один сумарний GeneratorCompletedPacket);
+     * тут лише парсинг команди й повідомлення адміну.
+     *
+     * Наступний {@code onPhaseTick} сам помітить {@code allRequiredGeneratorsDone()}
+     * і переведе фазу HUNT → POWERED звичайним шляхом — команді не треба
+     * форсити перехід фази окремо.
+     */
+    private static int completeGenerators(CommandSourceStack source) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        var players = source.getServer().getPlayerList().getPlayers();
+        int count = match.generatorModule().completeAllGenerators(players);
+
+        if (count == 0) {
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.generators_already_done"), false);
+        } else {
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.generators_completed", count), true);
+        }
+        return count;
+    }
+
+    /**
+     * Дебаг-команда: піднімає непритомного {@code target} рівно тим самим
+     * шляхом, що звичайний rescue іншим гравцем ({@code SurvivorModule.reviveDowned}
+     * через {@link com.log_to_kot.maniacmod.survivors.SurvivorModule#debugRevive}) —
+     * гравець встає із {@code reviveHp} хп, а не отримує повне здоров'я
+     * напряму. Для тестів HUD/станів, коли немає другого гравця під
+     * рукою, щоб фізично постояти 8 секунд поруч із лежачим.
+     */
+    private static int revive(CommandSourceStack source, ServerPlayer target) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        if (!match.isSurvivor(target.getUUID())) {
+            source.sendFailure(Component.translatable("maniacmod.command.hp_not_survivor", target.getName().getString()));
+            return 0;
+        }
+
+        boolean revived = match.survivors().debugRevive(target);
+        if (!revived) {
+            source.sendFailure(Component.translatable("maniacmod.command.revive_not_downed",
+                target.getName().getString()));
+            return 0;
+        }
+
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.revived",
+            target.getName().getString()), true);
+        return 1;
     }
 
     // ── Карта ────────────────────────────────────────────────────────────

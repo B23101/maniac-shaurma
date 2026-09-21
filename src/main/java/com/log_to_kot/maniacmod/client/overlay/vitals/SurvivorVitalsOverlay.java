@@ -3,6 +3,9 @@ package com.log_to_kot.maniacmod.client.overlay.vitals;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.log_to_kot.maniacmod.client.ManiacKeybinds;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
@@ -153,9 +156,74 @@ public final class SurvivorVitalsOverlay {
             renderStatusIcon(graphics, mc, iconsLeft, iconsTop, state);
         }
 
+        renderHighlightSlot(graphics, mc, panelLeft, panelTop);
+
         if (state == SurvivorState.CRAWLING) {
             renderStandUpBar(graphics, mc);
         }
+    }
+
+    // ── Сила підсвітки генераторів (клавіша 5) ───────────────────────────
+
+    private static final int HL_SLOT = 36;
+    private static final int HL_ICON = 24;
+    private static final int HL_GAP = 4;
+    private static final ResourceLocation TEX_HIGHLIGHT_ICON =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/highlight_icon.png");
+
+    /**
+     * Слот сили над панеллю показників — у стилі слотів маньяка
+     * ({@code ManiacHotbarOverlay}): темний фон, рамка, іконка по центру.
+     *
+     *   • зверху зліва — клавіша активації (за замовчуванням «5»; беремо
+     *     справжню назву прив'язки, тож перепризначення видно одразу);
+     *   • готова — золота рамка й яскрава іконка;
+     *   • перезаряджається — іконка тьмяніє, темна завіса опускається зверху
+     *     вниз і скорочується разом із часом, по центру — залишок у секундах.
+     *
+     * Дані ті самі, що й у кулдаунів маньяка ({@code abilityCooldownFraction}):
+     * сервер шле тривалість один раз, клієнт відраховує сам.
+     */
+    private static void renderHighlightSlot(GuiGraphics graphics, Minecraft mc, int panelLeft, int panelTop) {
+        long tick = mc.level != null ? mc.level.getGameTime() : 0L;
+        // Частка, що ЛИШИЛАСЬ: 1 — щойно використали, 0 — готово.
+        float remaining = ClientMatchState.abilityCooldownFraction(AbilityCooldownPacket.HIGHLIGHT_ID, tick);
+        boolean ready = remaining <= 0f;
+
+        int x = panelLeft;
+        int y = panelTop - HL_GAP - HL_SLOT;
+
+        graphics.fill(x, y, x + HL_SLOT, y + HL_SLOT, ManiacUiTheme.SLOT_FILL);
+        ManiacUiTheme.border1px(graphics, x, y, HL_SLOT, HL_SLOT,
+            ready ? ManiacUiTheme.MENU_ACCENT_GOLD : ManiacUiTheme.BORDER);
+
+        int iconX = x + (HL_SLOT - HL_ICON) / 2;
+        int iconY = y + (HL_SLOT - HL_ICON) / 2 + 2; // трохи нижче центру: угорі місце під клавішу
+        float tint = ready ? 1.0f : 0.40f;
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderColor(tint, tint, tint, 1.0f);
+        graphics.blit(TEX_HIGHLIGHT_ICON, iconX, iconY, HL_ICON, HL_ICON, 0f, 0f, 32, 32, 32, 32);
+        // Множник ОБОВ'ЯЗКОВО назад до білого: інакше решта GUI лишилась би тонованою.
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+        RenderSystem.disableBlend();
+
+        if (!ready) {
+            int curtain = Math.round((HL_SLOT - 2) * remaining);
+            graphics.fill(x + 1, y + 1, x + HL_SLOT - 1, y + 1 + curtain, 0xB0000000);
+
+            // Округлення вгору: «0с» ніколи не показується, поки сила не готова.
+            int seconds = (int) Math.ceil(
+                ClientMatchState.abilityCooldownTicksLeft(AbilityCooldownPacket.HIGHLIGHT_ID, tick) / 20.0);
+            String text = String.valueOf(seconds);
+            graphics.drawString(mc.font, text,
+                x + (HL_SLOT - mc.font.width(text)) / 2,
+                y + (HL_SLOT - mc.font.lineHeight) / 2 + 2,
+                ManiacUiTheme.TEXT_TITLE, true);
+        }
+
+        String key = ManiacKeybinds.HIGHLIGHT.getTranslatedKeyMessage().getString();
+        graphics.drawString(mc.font, key, x + 4, y + 3,
+            ready ? ManiacUiTheme.TEXT_ACCENT : ManiacUiTheme.TEXT_BODY, true);
     }
 
     private static float clamp01(float v) {

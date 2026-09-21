@@ -98,4 +98,40 @@ public final class GroundItemSpawner {
             rng.nextFloat() * 360f);
         return entity != null;
     }
+
+    // ── Смерть виживого: предмети навколо тіла ───────────────────────────
+
+    /** Висота появи предмета над підлогою тіла: лежачий гравець низько. */
+    private static final double BODY_DROP_HEIGHT = 0.35;
+
+    /** Горизонтальний розліт, блоків/тік. Мале — предмети лягають «поколу», а не летять. */
+    private static final double BODY_DROP_SPREAD_SPEED = 0.10;
+
+    /** Невеликий підкид угору, щоб предмет не «прилипав» до тіла. */
+    private static final double BODY_DROP_UP_SPEED = 0.18;
+
+    /**
+     * Викидає предмет НАВКОЛО тіла загиблого — не по дузі за поглядом, як
+     * {@link #throwFrom} (Q), а в довільний бік із малою швидкістю: після
+     * смерті предмети розсипаються довкола гравця, а не летять від нього.
+     * Та сама сутність і те саме падіння, що й у Q-викиданні, тож підібрати
+     * їх можна звичайним способом.
+     *
+     * @return {@code true}, якщо світ прийняв сутність
+     */
+    public static boolean dropAround(ServerPlayer body, ItemStack stack) {
+        Random rng = new Random();
+        ServerLevel level = body.serverLevel();
+
+        Vec3 pos = new Vec3(body.getX(), body.getY() + BODY_DROP_HEIGHT, body.getZ());
+        double angle = rng.nextDouble() * Math.PI * 2;
+        // 0.4..1.0 від максимуму: усі предмети різної дальності, а не кільце.
+        double speed = BODY_DROP_SPREAD_SPEED * (0.4 + 0.6 * rng.nextDouble());
+        Vec3 velocity = new Vec3(Math.cos(angle) * speed, BODY_DROP_UP_SPEED, Math.sin(angle) * speed);
+
+        GroundItemEntity entity = GroundItemEntity.thrown(
+            ModEntityTypes.GROUND_ITEM.get(), level, stack, pos, velocity,
+            rng.nextFloat() * 360f);
+        return entity != null;
+    }
 }

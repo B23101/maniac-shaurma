@@ -80,7 +80,7 @@ final class MatchContext {
     /** Хто вже втік — щоб не рахувати їх ні живими, ні мертвими. */
     private final List<UUID> escaped = new ArrayList<>();
 
-    /** Хто вибув остаточно (маньяк добив непритомного). */
+    /** Хто вибув остаточно (непритомний не дочекався підняття). */
     private final List<UUID> eliminated = new ArrayList<>();
 
     /**
@@ -141,7 +141,7 @@ final class MatchContext {
     }
 
     /**
-     * Маньяк добив непритомного. На відміну від {@code removeSurvivor}
+     * Непритомний помер (вичерпано час). На відміну від {@code removeSurvivor}
      * (вихід із сервера) це остаточний ігровий підсумок — гравець
      * лишається в {@link #terminalDisplayNames}/{@link #terminalStates}
      * для табу й фіналу, а не просто зникає з мап.
@@ -199,6 +199,32 @@ final class MatchContext {
         if (!survivorRoles.containsKey(uuid) || amount <= 0) return false;
 
         int next = Math.max(0, survivorHp.getOrDefault(uuid, 0) - amount);
+        survivorHp.put(uuid, next);
+        return next == 0;
+    }
+
+    /**
+     * Дебаг-сетер хп у ВІДСОТКАХ (0-100) від maxHp ролі — для
+     * {@code /maniac hp set}. На відміну від {@link #damage}/{@link #heal}
+     * (які рахують дельту від поточного хп) тут абсолютне значення:
+     * адміну зручніше сказати "постав 30%", ніж рахувати, скільки зняти
+     * від невідомого поточного хп.
+     *
+     * Повертає true, якщо результат — рівно 0 хп (виклик за цим вирішує,
+     * чи заводити гравця в UNCONSCIOUS, так само як після
+     * {@link #damage}). Проценти округлюються до найближчого цілого хп;
+     * 1..100 гарантовано дають хоча б 1 хп, щоб "1%" не ставало 0 через
+     * округлення вниз на малому maxHp.
+     */
+    public boolean setHpPercent(UUID uuid, int percent) {
+        SurvivorRole role = survivorRoles.get(uuid);
+        if (role == null) return false;
+
+        int clamped = Math.max(0, Math.min(100, percent));
+        int maxHp = role.maxHp();
+        int next = clamped == 0 ? 0 : Math.max(1, Math.round(maxHp * (clamped / 100f)));
+        next = Math.min(maxHp, next);
+
         survivorHp.put(uuid, next);
         return next == 0;
     }

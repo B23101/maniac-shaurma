@@ -8,10 +8,14 @@ import com.log_to_kot.maniacmod.client.overlay.hint.GeneratorHintOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hint.GroundItemHintOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorCompletedOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker;
+import com.log_to_kot.maniacmod.client.overlay.actionprogress.RescueOverlay;
+import com.log_to_kot.maniacmod.client.overlay.notify.DownedSurvivorMarker;
+import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacHotbarOverlay;
 import com.log_to_kot.maniacmod.client.overlay.roster.TabRosterOverlay;
 import com.log_to_kot.maniacmod.client.overlay.debug.DebugOverlay;
 import com.log_to_kot.maniacmod.client.overlay.vitals.SurvivorVitalsOverlay;
+import com.log_to_kot.maniacmod.client.overlay.vitals.LowHpVignetteOverlay;
 import com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator;
 import com.log_to_kot.maniacmod.client.renderer.GroundItemRenderer;
 import com.log_to_kot.maniacmod.client.renderer.GeneratorRenderer;
@@ -154,9 +158,24 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_explosion",
             (gui, graphics, partialTick, width, height) ->
                 GeneratorExplosionMarker.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_highlight",
+            (gui, graphics, partialTick, width, height) ->
+                GeneratorHighlightMarker.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_downed_marker",
+            (gui, graphics, partialTick, width, height) ->
+                DownedSurvivorMarker.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_rescue",
+            (gui, graphics, partialTick, width, height) ->
+                RescueOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "maniac_survivor_vitals",
             (gui, graphics, partialTick, width, height) ->
                 SurvivorVitalsOverlay.render(graphics));
+        // Поверх усього ігрового HUD (той самий шар, що debug-режим) —
+        // вінʼєтка має лишатись видимою крайовим зором незалежно від
+        // того, що ще малюється (прогрес-панелі, підказки, ростер).
+        event.registerAboveAll("maniac_low_hp_vignette",
+            (gui, graphics, partialTick, width, height) ->
+                LowHpVignetteOverlay.render(graphics));
         event.registerAboveAll("maniac_debug_mode",
             (gui, graphics, partialTick, width, height) ->
                 DebugOverlay.render(graphics));

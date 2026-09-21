@@ -56,6 +56,18 @@ public abstract class ItemArchetype extends Item {
         if (level.isClientSide) return InteractionResultHolder.pass(player.getItemInHand(hand));
         if (!(player instanceof ServerPlayer sp)) return InteractionResultHolder.fail(player.getItemInHand(hand));
 
+        // Непритомний (0 хп) не користується предметами. Без цього він міг
+        // би вжити Аптечку: хп стало б > 0, а стан лишився б UNCONSCIOUS —
+        // гравець лежить, але «здоровий». Виходить із лежання лише через
+        // підняття союзником. CRAWLING (після падіння) не чіпаємо.
+        var match = com.log_to_kot.maniacmod.ManiacMod.match();
+        if (match != null) {
+            var state = match.survivorStateOf(sp.getUUID());
+            if (state != null && state.requiresRescue()) {
+                return InteractionResultHolder.fail(player.getItemInHand(hand));
+            }
+        }
+
         if (!cooldownReady(sp) || !usesRemaining(sp)) {
             return InteractionResultHolder.fail(player.getItemInHand(hand));
         }

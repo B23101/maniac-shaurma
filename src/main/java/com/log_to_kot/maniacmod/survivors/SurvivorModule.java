@@ -8,15 +8,34 @@ import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.net.ModNetwork;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.StandUpProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket;
+import com.log_to_kot.maniacmod.registry.ModSounds;
 import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.forge.stamina.StaminaRules;
 import dev.shaurmalib.forge.stamina.StaminaService;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.ChatFormatting;
+import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.scores.Scoreboard;
+import com.log_to_kot.maniacmod.loot.GroundItemSpawner;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.RescueProgressPacket;
+import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
+import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
@@ -51,6 +70,21 @@ import java.util.List;
  * Проміжні лічильники ЦЬОГО модуля (останній надісланий HUD-знімок,
  * прогрес підняття непритомного) — локальні тут, бо нікому іншому
  * не потрібні.
+ *
+ * ── Життєвий цикл непритомного (UNCONSCIOUS) ─────────────────────────
+ *   0 хп → {@link #onSurvivorDowned}: гравець лягає (поза — міксин
+ *          {@code MixinPlayerDownedPose}), повзе повільно
+ *          ({@code downedCrawlSpeed}), шкала стаміни на нулі, всім
+ *          виживим видно мітку на всю карту, іде таймер
+ *          {@code downedBleedOutTicks} (за замовчуванням 60 с).
+ *   ┌ союзник утримує ПКМ ~{@code rescueTicks} (8 с); якщо відпустив —
+ *   │   прогрес згасає до нуля за {@code rescueDecayTicks} (5 с) →
+ *   │   {@link #reviveDowned}: гравець стоїть із {@code reviveHp} хп,
+ *   │   без стадії CRAWLING — одразу може бігти (стаміна від нуля).
+ *   └ таймер вичерпано → {@link #eliminateDowned}:
+ *       предмети розсипаються навколо тіла, гравець стає глядачем
+ *       ({@code GameType.SPECTATOR}), сама смерть іде через шов
+ *       {@link SurvivorDeathSequence} — туди піде анімація.
  */
 public final class SurvivorModule implements PhaseListener {
 
@@ -64,7 +98,12 @@ public final class SurvivorModule implements PhaseListener {
     private final Map<UUID, java.util.Set<UUID>> rescuers = new HashMap<>();
 
     /** Прогрес підняття жертви, у тіках утримання (накопичується, поки хоч один рятівник тримає). */
-    private final Map<UUID, Integer> rescueProgressTicks = new HashMap<>();
+    /**
+     * Прогрес підняття — double, а не int. Множник помічників дробовий
+     * (двоє ≈ ×1.2), і з цілим {@code Math.round(1.2)} давав 1: бонус
+     * з'являвся лише при чотирьох рятівниках, попри дизайн «двоє швидше».
+     */
+    private final Map<UUID, Double> rescueProgressTicks = new HashMap<>();
 
     /**
      * Причина локу руху для InteractionLock (shaurma-lib) — гравець
@@ -74,6 +113,44 @@ public final class SurvivorModule implements PhaseListener {
      * рядок-ключ, за яким саме цей лок знімається, а не чужий.
      */
     private static final String DOWNED_MOVEMENT_LOCK_REASON = "survivor_downed";
+
+    /**
+     * Скільки тіків лишилось до наступної підсвітки генераторів (клавіша 5)
+     * для кожного виживого. Немає запису = підсвітка готова.
+     *
+     * Це стан САМЕ цього модуля, а не матчу: підсвітку більше ніхто не
+     * читає (див. правило «чи це стан МАТЧУ» в AI_CODE_GUIDE, розділ 3.2).
+     * Лічильник у ТІКАХ, що тікають лише в фазах, де гра йде, — тому пауза
+     * між фазами (наприклад ROLE_REVEAL) не з'їдає перезарядку.
+     */
+    private final Map<UUID, Integer> highlightCooldownTicks = new HashMap<>();
+
+    // ── Непритомні ───────────────────────────────────────────────────────
+
+    /** Постійний id модифікатора швидкості: щоб зняти рівно свій, а не чужий. */
+    private static final UUID DOWNED_SPEED_MODIFIER_ID =
+        UUID.fromString("5b0e0a6c-3f1d-4c55-9a1e-6d2f8a7c1b90");
+
+    /** Як часто оновлювати клієнтам позиції/таймери лежачих, поки список непорожній. */
+    private static final int DOWNED_BROADCAST_INTERVAL_TICKS = 10;
+
+    /** Запас до дальності підняття, вище якого рятівника скидають із сесії (гістерезис проти мерехтіння на межі). */
+    private static final double RESCUE_RANGE_PRUNE_MARGIN = 1.0;
+
+    /** Непритомний → скільки тіків лишилось до смерті. Ключі = хто зараз лежить. */
+    private final Map<UUID, Integer> bleedOutTicksLeft = new HashMap<>();
+
+    /** Склад списку, який клієнти бачили востаннє: за ним видно, що список ЗМІНИВСЯ. */
+    private final Set<UUID> lastBroadcastDowned = new HashSet<>();
+    private int downedBroadcastCounter = 0;
+
+    /** Хто вже в процесі смерті — щоб удар/таймер не запустили її вдруге, поки йде анімація. */
+    private final Set<UUID> dying = new HashSet<>();
+
+    /** Режим гри ДО того, як гравця зробили глядачем — щоб повернути в лобі. */
+    private final Map<UUID, GameType> gameModeBeforeSpectating = new HashMap<>();
+
+    private final SurvivorDeathSequence deathSequence = new SurvivorDeathSequence();
 
     /** Таб-ростер оновлюється раз на секунду по hp, не щотік — той самий throttle, що config-watcher у ServerHooks. */
     private static final int ROSTER_BROADCAST_INTERVAL_TICKS = 20;
@@ -116,6 +193,8 @@ public final class SurvivorModule implements PhaseListener {
             for (ServerPlayer player : players) {
                 StaminaService.clear(player);
                 unlockMovement(player);
+                removeCrawlSpeed(player);
+                setDownedGlow(player, false);
                 hideStandUpProgress(player);
             }
             rescuers.clear();
@@ -123,6 +202,23 @@ public final class SurvivorModule implements PhaseListener {
             legRulesApplied.clear();
             pendingLegBreak.clear();
             standUpPresses.clear();
+            // Нова гра — підсвітка знову готова. Клієнтові окремо нічого
+            // слати не треба: ClientMatchState.reset() гасить кулдауни
+            // на виході з матчу.
+            highlightCooldownTicks.clear();
+
+            // Лежачі й «помираючі» більше нікуди не зникнуть самі: гасимо
+            // мітки/позу в усіх клієнтів явним порожнім списком.
+            bleedOutTicksLeft.clear();
+            dying.clear();
+            lastBroadcastDowned.clear();
+            ModNetwork.toPlayers(players, new DownedSurvivorsPacket(List.of()));
+
+            // Глядачі повертаються в свій звичайний режим лише коли гру
+            // скинуто: на ENDING вони ще дивляться підсумок.
+            if (phase == GamePhase.RESET || phase == GamePhase.LOBBY) {
+                restoreGameModes(players);
+            }
         }
     }
 
@@ -151,6 +247,8 @@ public final class SurvivorModule implements PhaseListener {
         boolean hudOnlyPhase = phase == GamePhase.LOBBY || phase == GamePhase.ROLE_REVEAL;
         if (!vitalsPhase && !hudOnlyPhase) return;
 
+        tickHighlightCooldowns(players);
+
         ServerPlayer maniac = maniacOf(players);
         for (ServerPlayer player : players) {
             if (!match().isSurvivor(player.getUUID())) continue;
@@ -164,6 +262,7 @@ public final class SurvivorModule implements PhaseListener {
         if (!vitalsPhase) return;
 
         if (phase.allows(PhaseRule.RESCUE)) tickRescues();
+        tickDowned(players);
         if (phase.allows(PhaseRule.ESCAPE)) tickEscapes(players);
 
         // Throttled: hp міняється поступово (урон/лікування), не
@@ -171,6 +270,66 @@ public final class SurvivorModule implements PhaseListener {
         if (++rosterBroadcastCounter >= ROSTER_BROADCAST_INTERVAL_TICKS) {
             rosterBroadcastCounter = 0;
             com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(players);
+        }
+    }
+
+    // ── Підсвітка генераторів (сила, клавіша 5) ──────────────────────────
+
+    /**
+     * Спроба використати силу підсвітки. Викликається з
+     * {@code ServerPacketHandler.onHighlightRequest} ПІСЛЯ перевірок ролі й
+     * фази — тут лише кулдаун і сам запуск.
+     *
+     * Перезарядка — на сервері: клієнт міг би слати пакет щотік, а
+     * локальна перевірка в {@code ClientInputHandler} — лише зручність
+     * (щоб не засмічувати мережу), а не захист.
+     *
+     * Кулдаун стартує ТІЛЬКИ після успішного використання: відмова
+     * (ще не готово) його не продовжує, інакше спам клавіші тримав би
+     * силу заблокованою вічно.
+     *
+     * @return true, якщо підсвітку показано (кулдаун запущено)
+     */
+    public boolean tryUseHighlight(ServerPlayer player) {
+        UUID id = player.getUUID();
+        if (highlightCooldownTicks.getOrDefault(id, 0) > 0) return false;
+
+        var role = match().survivorRoleOf(id);
+        if (role == null) return false;
+        int cooldown = role.flashlightCooldownTicks();
+
+        match().generatorModule().sendHighlight(player);
+
+        highlightCooldownTicks.put(id, cooldown);
+        // Клієнт відлічує сам від цього значення (та сама форма, що в
+        // кулдаунів маньяка) — тікових пакетів нема.
+        ModNetwork.toPlayer(player, new AbilityCooldownPacket(AbilityCooldownPacket.HIGHLIGHT_ID, cooldown));
+        return true;
+    }
+
+    /**
+     * Раз на тік зменшує лічильники й повідомляє клієнт, коли сила знову
+     * готова (той самий {@code ready}-сигнал, що в маньяка).
+     */
+    private void tickHighlightCooldowns(List<ServerPlayer> players) {
+        if (highlightCooldownTicks.isEmpty()) return;
+
+        var it = highlightCooldownTicks.entrySet().iterator();
+        while (it.hasNext()) {
+            var entry = it.next();
+            int left = entry.getValue() - 1;
+            if (left > 0) {
+                entry.setValue(left);
+                continue;
+            }
+            it.remove();
+            for (ServerPlayer player : players) {
+                if (player.getUUID().equals(entry.getKey())) {
+                    ModNetwork.toPlayer(player,
+                        AbilityCooldownPacket.ready(AbilityCooldownPacket.HIGHLIGHT_ID));
+                    break;
+                }
+            }
         }
     }
 
@@ -213,7 +372,7 @@ public final class SurvivorModule implements PhaseListener {
         // Якщо поставити тут здорові правила, а legRulesApplied вже містить
         // його UUID, syncLegRules вважатиме правила "вже застосованими" і
         // ніколи їх не виправить: нога зламана, а стаміна відновлюється.
-        boolean broken = match().survivorStateOf(player.getUUID()) == SurvivorState.BROKEN_LEG;
+        boolean broken = staminaLocked(match().survivorStateOf(player.getUUID()));
         if (broken) {
             legRulesApplied.add(player.getUUID());
         } else {
@@ -252,6 +411,9 @@ public final class SurvivorModule implements PhaseListener {
         legRulesApplied.remove(player.getUUID());
         pendingLegBreak.remove(player.getUUID());
         standUpPresses.remove(player.getUUID());
+        highlightCooldownTicks.remove(player.getUUID());
+        bleedOutTicksLeft.remove(player.getUUID());
+        removeCrawlSpeed(player);
         unlockMovement(player);
         hideStandUpProgress(player);
     }
@@ -275,9 +437,12 @@ public final class SurvivorModule implements PhaseListener {
         rescuers.remove(id);
         rescueProgressTicks.remove(id);
         removeRescuer(id);
+        // Вихід НЕ дає обійти перезарядку: якщо гравець перезайде в тому ж
+        // матчі, кулдаун має лишитись. Тому тут його свідомо НЕ чистимо —
+        // він зникне сам, коли дотікає, або з кінцем матчу.
     }
 
-    // ── Лок руху (CRAWLING / UNCONSCIOUS) ───────────────────────────────
+    // ── Лок руху (лише CRAWLING після падіння; непритомний повзе — див. ensureCrawlSpeed) ──
 
     private void lockMovement(ServerPlayer player) {
         ManiacMod.lib().interactionLockModule()
@@ -362,7 +527,7 @@ public final class SurvivorModule implements PhaseListener {
      * правил після лікування — див. {@link #syncLegRules}).
      */
     private void tickBrokenLegStamina(ServerPlayer player) {
-        boolean broken = match().survivorStateOf(player.getUUID()) == SurvivorState.BROKEN_LEG;
+        boolean broken = staminaLocked(match().survivorStateOf(player.getUUID()));
         syncLegRules(player, broken);
         if (!broken) return;
         if (StaminaService.getStamina(player) > 0) {
@@ -507,10 +672,8 @@ public final class SurvivorModule implements PhaseListener {
     }
 
     /**
-     * Єдиний вхід у стан CRAWLING — і з падіння ({@link #onFall}), і з
-     * порятунку непритомного ({@link #tickRescues}). Раніше ці два шляхи
-     * дублювали одні й ті самі чотири рядки, і порятунок забував би
-     * будь-який новий крок (наприклад показ шкали вставання).
+     * Єдиний вхід у стан CRAWLING — з падіння ({@link #onFall}). Піднятий
+     * союзником ({@link #reviveDowned}) сюди НЕ потрапляє: він встає одразу.
      *
      * Лежить, доки не набере потрібну кількість натискань пробілу
      * ({@link #onStandUpAttempt}); рух і поворот фізично заблоковані на
@@ -557,6 +720,17 @@ public final class SurvivorModule implements PhaseListener {
         Boolean legBroken = pendingLegBreak.remove(id);
         SurvivorState next = Boolean.TRUE.equals(legBroken) ? SurvivorState.BROKEN_LEG : SurvivorState.HEALTHY;
         match().setSurvivorState(id, next);
+        if (next == SurvivorState.BROKEN_LEG) {
+            // Хрускіт кісток — гравець дізнається про перелом одразу, як
+            // тільки встав (саме тут стан уперше стає BROKEN_LEG, не
+            // раніше: до вставання гравець лежав/повзав і ще не знав,
+            // ціла нога чи ні — те саме, що вирішує pendingLegBreak
+            // вище). Ванільний позиційний playSound, а не SoundCenter:
+            // подія серверна (тут, не в клієнтському хендлері), і має
+            // бути чутна всім поруч, а не лише самому гравцю.
+            player.level().playSound(null, player.blockPosition(),
+                ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+        }
         // Гравець встав — рухається знову, з поламаною ногою чи без.
         unlockMovement(player);
         hideStandUpProgress(player);
@@ -588,6 +762,19 @@ public final class SurvivorModule implements PhaseListener {
         sendVitals(player, true);
     }
 
+    /**
+     * Форс-знімок HUD одразу після дебаг-зміни хп ({@code /maniac hp set}) —
+     * той самий патерн, що {@link #onSplintApplied}: команда вже змінила
+     * число через {@code MatchOrchestrator}, тут лише гарантія, що клієнт
+     * побачить нове значення негайно, а не після наступного throttled
+     * тіку (sendVitals без force мовчить, якщо пакет "виглядає так само",
+     * що між реальними ударами не проблема, але для дебаг-команди мало б
+     * дивний вигляд "команда відпрацювала, а шкала не ворухнулась").
+     */
+    public void forceVitalsRefresh(ServerPlayer player) {
+        sendVitals(player, true);
+    }
+
     // ── Непритомність / підняття ────────────────────────────────────────
 
     /**
@@ -597,22 +784,31 @@ public final class SurvivorModule implements PhaseListener {
      * замість напряму рішення "гравець вибув").
      */
     public void onSurvivorDowned(ServerPlayer player) {
-        if (match().survivorStateOf(player.getUUID()) == SurvivorState.UNCONSCIOUS) return;
-        match().setSurvivorState(player.getUUID(), SurvivorState.UNCONSCIOUS);
-        rescuers.remove(player.getUUID());
-        rescueProgressTicks.remove(player.getUUID());
+        UUID id = player.getUUID();
+        if (match().survivorStateOf(id) == SurvivorState.UNCONSCIOUS) return;
+        match().setSurvivorState(id, SurvivorState.UNCONSCIOUS);
+        rescuers.remove(id);
+        rescueProgressTicks.remove(id);
         // Якщо гравця добили, поки він лежав і намагався встати —
         // прогрес вставання більше не має сенсу (він тепер непритомний,
         // а не "майже підвівся"), інакше шкала лишилась би на екрані.
-        standUpPresses.remove(player.getUUID());
-        pendingLegBreak.remove(player.getUUID());
+        standUpPresses.remove(id);
+        pendingLegBreak.remove(id);
         hideStandUpProgress(player);
-        // Непритомний не рухається сам — той самий лок, що CRAWLING
-        // (той самий reason: ідемпотентно, якщо вже лежав із поламаною
-        // ногою до цього, зняття станеться рівно один раз).
-        lockMovement(player);
+
+        // Непритомний ПОВЗЕ, а не заморожений: знімаємо лок (якщо падав і
+        // лежав у CRAWLING), замість нього — повільна швидкість. Позу
+        // лежачого ставить міксин, стрибок забирає клієнтський міксин руху.
+        unlockMovement(player);
+        ensureCrawlSpeed(player);
+        setDownedGlow(player, true);
+        player.setSprinting(false);
+
+        bleedOutTicksLeft.put(id, ManiacConfigs.get(ConfigSchema.DOWNED_BLEED_OUT_TICKS));
         sendVitals(player, true);
         broadcastRosterFor(player);
+        // Мітку й позу всім клієнтам розішле найближчий tickDowned
+        // (склад списку змінився) — окремо тут слати не треба.
     }
 
     /** Той самий сервер, що вже дає {@code onlineManiacOf} — зручність для форс-подій поза тіковим списком players. */
@@ -635,6 +831,9 @@ public final class SurvivorModule implements PhaseListener {
         pendingLegBreak.remove(player.getUUID());
         standUpPresses.remove(player.getUUID());
         legRulesApplied.remove(player.getUUID());
+        bleedOutTicksLeft.remove(player.getUUID());
+        removeCrawlSpeed(player);
+        setDownedGlow(player, false);
         unlockMovement(player);
         hideStandUpProgress(player);
         sendVitals(player, finalState, 0f, true);
@@ -650,11 +849,22 @@ public final class SurvivorModule implements PhaseListener {
             removeRescuer(rescuer.getUUID());
             return;
         }
+        if (!canRescue(rescuer)) return;
 
         ServerPlayer victim = findNearestUnconscious(rescuer);
         if (victim == null) return;
 
-        rescuers.computeIfAbsent(victim.getUUID(), k -> new java.util.HashSet<>()).add(rescuer.getUUID());
+        rescuers.computeIfAbsent(victim.getUUID(), k -> new HashSet<>()).add(rescuer.getUUID());
+    }
+
+    /**
+     * Хто взагалі МОЖЕ піднімати: живий виживий, який сам стоїть. Раніше
+     * цієї перевірки не було, і непритомний (або той, хто лежить після
+     * падіння) міг піднімати іншого.
+     */
+    private boolean canRescue(ServerPlayer rescuer) {
+        SurvivorState state = match().survivorStateOf(rescuer.getUUID());
+        return state != null && !state.isCrawlOnly() && !state.isTerminal();
     }
 
     private void removeRescuer(UUID rescuerId) {
@@ -664,7 +874,7 @@ public final class SurvivorModule implements PhaseListener {
     }
 
     private ServerPlayer findNearestUnconscious(ServerPlayer rescuer) {
-        double rescueRange = 3.0;
+        double rescueRange = ManiacConfigs.get(ConfigSchema.RESCUE_RANGE_BLOCKS);
         ServerPlayer nearest = null;
         double nearestDistSq = rescueRange * rescueRange;
         for (UUID survivorId : match().survivorIds()) {
@@ -687,42 +897,405 @@ public final class SurvivorModule implements PhaseListener {
      * ×2) — множник рахується як 1 + 0.2 * (rescuers - 1), рівно те
      * число, що назване в GAME_DESIGN.md, узагальнене на будь-яку
      * кількість рятівників через RESCUE_HELPER_BONUS з конфігу.
+     *
+     * Кожен тік з рятівників знімаються ті, хто відійшов далі за
+     * дальність, помер чи сам ліг: клієнт шле «тримаю» лише при ЗМІНІ
+     * (плюс рідкий повтор), тож без цього рятівник, що відійшов, лишався б
+     * у сесії, поки не відпустить кнопку.
+     *
+     * ── Згасання ─────────────────────────────────────────────────────
+     * Поки НІХТО не тримає, набраний прогрес щотіка спадає й за
+     * {@code rescueDecayTicks} (5 с) доходить до нуля. Раніше він лишався
+     * назавжди — почати підняття, піти й повернутись через хвилину було б
+     * безкоштовним «збереженням».
      */
     private void tickRescues() {
         int requiredTicks = ManiacConfigs.get(ConfigSchema.RESCUE_TICKS);
         double helperBonus = ManiacConfigs.get(ConfigSchema.RESCUE_HELPER_BONUS);
+        double rescueRange = ManiacConfigs.get(ConfigSchema.RESCUE_RANGE_BLOCKS);
+        double pruneRange = rescueRange + RESCUE_RANGE_PRUNE_MARGIN;
+        // Швидкість згасання стала: повний прогрес зникає рівно за
+        // rescueDecayTicks, а неповний — відповідно швидше.
+        double decayPerTick = (double) requiredTicks
+            / Math.max(1, ManiacConfigs.get(ConfigSchema.RESCUE_DECAY_TICKS));
 
         var iterator = rescuers.entrySet().iterator();
         while (iterator.hasNext()) {
             var entry = iterator.next();
             UUID victimId = entry.getKey();
-            java.util.Set<UUID> activeRescuers = entry.getValue();
+            Set<UUID> activeRescuers = entry.getValue();
 
             if (match().survivorStateOf(victimId) != SurvivorState.UNCONSCIOUS) {
                 rescueProgressTicks.remove(victimId);
                 iterator.remove();
                 continue;
             }
-            if (activeRescuers.isEmpty()) continue;
+            ServerPlayer victim = match().onlinePlayer(victimId);
+            pruneRescuers(activeRescuers, victim, pruneRange);
+
+            if (activeRescuers.isEmpty()) {
+                // Ніхто не тримає — прогрес спадає. Порожній запис
+                // прибираємо, коли прогрес дійшов до нуля: наступне
+                // утримання створить його заново.
+                if (!decayRescue(victimId, victim, decayPerTick, requiredTicks, rescueRange)) {
+                    iterator.remove();
+                }
+                continue;
+            }
 
             double multiplier = 1.0 + helperBonus * (activeRescuers.size() - 1);
-            int progressed = rescueProgressTicks.merge(victimId, (int) Math.round(multiplier), Integer::sum);
+            double progressed = rescueProgressTicks.merge(victimId, multiplier, Double::sum);
+
+            sendRescueProgress(victim, activeRescuers, (int) progressed, requiredTicks);
 
             if (progressed >= requiredTicks) {
-                ServerPlayer victim = match().onlinePlayer(victimId);
                 rescueProgressTicks.remove(victimId);
                 iterator.remove();
-                if (victim != null) {
-                    // Піднятий гравець завжди встає HEALTHY: onFall не
-                    // викликався для нього (він втратив свідомість від
-                    // удару/пастки, не від падіння), тому pendingLegBreak
-                    // для нього порожній і onStandUpAttempt однаково
-                    // повернув би HEALTHY — прибираємо тут явно.
-                    pendingLegBreak.remove(victimId);
-                    beginCrawling(victim);
-                }
+                if (victim != null) reviveDowned(victim);
             }
         }
+    }
+
+    /**
+     * Знімає з прогресу один тік згасання. Шкалу бачать лежачий і ті, хто
+     * поруч і міг би підняти: вони бачать, як вона тане, і розуміють, що
+     * треба тримати далі (без цього рятівник, що відпустив, бачив би
+     * підказку «Утримуй ПКМ» і не знав, що прогрес утікає).
+     *
+     * @return true, якщо прогрес ще лишився; false — дійшов до нуля
+     */
+    private boolean decayRescue(UUID victimId, ServerPlayer victim, double decayPerTick,
+                                int requiredTicks, double range) {
+        Double current = rescueProgressTicks.get(victimId);
+        if (current == null) return false;
+
+        double next = current - decayPerTick;
+        if (next <= 0) {
+            rescueProgressTicks.remove(victimId);
+            return false;
+        }
+        rescueProgressTicks.put(victimId, next);
+        sendRescueProgress(victim, survivorsWhoCanRescueNear(victim, range), (int) next, requiredTicks);
+        return true;
+    }
+
+    /** Виживі, які стоять достатньо близько до лежачого й самі здатні піднімати. */
+    private Set<UUID> survivorsWhoCanRescueNear(ServerPlayer victim, double range) {
+        Set<UUID> result = new HashSet<>();
+        if (victim == null) return result;
+        double rangeSq = range * range;
+        for (UUID id : match().survivorIds()) {
+            if (id.equals(victim.getUUID())) continue;
+            ServerPlayer candidate = match().onlinePlayer(id);
+            if (candidate != null && canRescue(candidate) && candidate.distanceToSqr(victim) <= rangeSq) {
+                result.add(id);
+            }
+        }
+        return result;
+    }
+
+    private void pruneRescuers(Set<UUID> active, ServerPlayer victim, double range) {
+        double rangeSq = range * range;
+        active.removeIf(rescuerId -> {
+            ServerPlayer rescuer = match().onlinePlayer(rescuerId);
+            if (rescuer == null || victim == null) return true;
+            if (!canRescue(rescuer)) return true;
+            return rescuer.distanceToSqr(victim) > rangeSq;
+        });
+    }
+
+    private void sendRescueProgress(ServerPlayer victim, Set<UUID> rescuerIds, int progress, int required) {
+        if (victim != null) {
+            ModNetwork.toPlayer(victim, new RescueProgressPacket(progress, required, true));
+        }
+        for (UUID rescuerId : rescuerIds) {
+            ServerPlayer rescuer = match().onlinePlayer(rescuerId);
+            if (rescuer != null) {
+                ModNetwork.toPlayer(rescuer, new RescueProgressPacket(progress, required, false));
+            }
+        }
+    }
+
+    /**
+     * Піднімає непритомного: він СТОЇТЬ, має {@code reviveHp} хп і може
+     * бігти. Стадії CRAWLING (пробіл × N) тут немає — це шлях лише після
+     * падіння; піднятий союзником одразу на ногах.
+     *
+     * Стаміна лишається нульовою (її тримало правило «непритомний»), а
+     * щойно стан стає HEALTHY, звичайні правила повертаються і вона
+     * відновлюється — піднятий гравець виснажений, а не свіжий.
+     *
+     * Не чіпає {@link #rescuers}: викликається під час ітерації по ній.
+     */
+    private void reviveDowned(ServerPlayer victim) {
+        UUID id = victim.getUUID();
+        bleedOutTicksLeft.remove(id);
+        pendingLegBreak.remove(id);
+        standUpPresses.remove(id);
+        removeCrawlSpeed(victim);
+        setDownedGlow(victim, false);
+
+        match().setSurvivorState(id, SurvivorState.HEALTHY);
+        match().healSurvivor(id, ManiacConfigs.get(ConfigSchema.REVIVE_HP));
+
+        hideStandUpProgress(victim);
+        sendVitals(victim, true);
+        broadcastRosterFor(victim);
+    }
+
+    /**
+     * Дебаг: піднімає непритомного гравця ТІЄЮ Ж дорогою, що звичайний
+     * rescue іншим гравцем — викликає {@link #reviveDowned} напряму,
+     * минаючи чекання {@code rescueTicks} утримання. Для
+     * {@code /maniac revive} (перевірка HUD/станів без другого гравця,
+     * що стоїть і тримає ПКМ вісім секунд).
+     *
+     * <p>Прибирає жертву з будь-якої активної сесії {@link #rescuers} /
+     * {@link #rescueProgressTicks} ПЕРЕД підняттям — інакше наступний
+     * {@link #tickRescues} тика пізніше побачив би запис про вже не
+     * {@code UNCONSCIOUS} жертву в мапі рятівників і сам би це
+     * прибрав, але зайвий тік розсилав би застарілий
+     * {@code RescueProgressPacket} рятівнику, що й далі тримає кнопку.</p>
+     *
+     * @return true, якщо гравець дійсно був непритомний і його підняли;
+     *         false — гравець не в стані UNCONSCIOUS, піднімати нічого.
+     */
+    public boolean debugRevive(ServerPlayer victim) {
+        UUID id = victim.getUUID();
+        if (match().survivorStateOf(id) != SurvivorState.UNCONSCIOUS) return false;
+
+        rescueProgressTicks.remove(id);
+        rescuers.remove(id);
+
+        reviveDowned(victim);
+        return true;
+    }
+
+    // ── Таймер до смерті непритомного ────────────────────────────────────
+
+    /**
+     * Раз на тік: віднімає час у кожного лежачого, вбиває тих, у кого він
+     * вийшов, і розсилає клієнтам склад/позиції лежачих.
+     *
+     * Час стоїть для гравця, що вийшов із сервера, — він не може померти
+     * офлайн, поки союзники не мають змоги його підняти.
+     */
+    private void tickDowned(List<ServerPlayer> players) {
+        List<UUID> expired = new ArrayList<>();
+        List<UUID> stale = new ArrayList<>();
+
+        for (var entry : bleedOutTicksLeft.entrySet()) {
+            UUID id = entry.getKey();
+            if (match().survivorStateOf(id) != SurvivorState.UNCONSCIOUS) {
+                // Стан змінили не ми (морф, вихід з ролі) — таймер більше
+                // нічого не значить.
+                stale.add(id);
+                continue;
+            }
+            ServerPlayer player = match().onlinePlayer(id);
+            if (player == null) continue; // офлайн: час стоїть
+
+            // Ідемпотентно й дешево: повертає повільність після респавну/
+            // релогу, які transient-модифікатор не переживають.
+            ensureCrawlSpeed(player);
+
+            int left = entry.getValue() - 1;
+            if (left <= 0) {
+                expired.add(id);
+            } else {
+                entry.setValue(left);
+            }
+        }
+
+        // Видалення лише ПІСЛЯ ітерації: eliminateDowned чіпає bleedOutTicksLeft.
+        for (UUID id : stale) bleedOutTicksLeft.remove(id);
+        for (UUID id : expired) {
+            ServerPlayer player = match().onlinePlayer(id);
+            if (player != null) eliminateDowned(player);
+        }
+
+        broadcastDowned(players);
+    }
+
+    /**
+     * Шле всім клієнтам список лежачих: одразу, коли склад змінився, і раз на
+     * {@link #DOWNED_BROADCAST_INTERVAL_TICKS}, поки він непорожній (щоб
+     * позиції й таймери не застарівали). Порожній список, що змінився
+     * (останнього підняли/він помер), теж іде — він гасить мітки й позу.
+     */
+    private void broadcastDowned(List<ServerPlayer> players) {
+        Set<UUID> current = bleedOutTicksLeft.keySet();
+        boolean changed = !current.equals(lastBroadcastDowned);
+        if (!changed) {
+            if (current.isEmpty()) return;
+            if (++downedBroadcastCounter < DOWNED_BROADCAST_INTERVAL_TICKS) return;
+        }
+        downedBroadcastCounter = 0;
+        lastBroadcastDowned.clear();
+        lastBroadcastDowned.addAll(current);
+
+        List<DownedSurvivorsPacket.Entry> entries = new ArrayList<>();
+        for (var entry : bleedOutTicksLeft.entrySet()) {
+            ServerPlayer player = match().onlinePlayer(entry.getKey());
+            if (player == null) continue;
+            entries.add(new DownedSurvivorsPacket.Entry(
+                entry.getKey(), player.getX(), player.getY(), player.getZ(), entry.getValue()));
+        }
+        ModNetwork.toPlayers(players, new DownedSurvivorsPacket(entries));
+    }
+
+    // ── Смерть ───────────────────────────────────────────────────────────
+
+    /**
+     * Непритомний помирає: вичерпано таймер ({@link #tickDowned}). Удар
+     * маньяка лежачого НЕ вбиває — {@code ManiacCombatModule.onAttack}
+     * такі удари ігнорує, тож цей метод — єдина дорога до смерті лежачого.
+     *
+     * Саме вмирання йде через {@link SurvivorDeathSequence}: коли там
+     * з'явиться анімація, {@link #finishElimination} запуститься по її
+     * кінці. Мітка {@link #dying} не пускає другу смерть, поки перша триває.
+     */
+    private void eliminateDowned(ServerPlayer player) {
+        UUID id = player.getUUID();
+        if (!match().isSurvivor(id)) return;
+        if (!dying.add(id)) return;
+
+        bleedOutTicksLeft.remove(id);
+        Vec3 bodyPosition = player.position();
+        deathSequence.play(player, bodyPosition, () -> finishElimination(player));
+    }
+
+    private void finishElimination(ServerPlayer player) {
+        UUID id = player.getUUID();
+        dying.remove(id);
+        // Анімація могла тривати довше, ніж гравець лишався в матчі.
+        if (!match().isSurvivor(id)) return;
+
+        dropInventoryAround(player);
+
+        // onSurvivorLeftMatch — ДО markEliminated: після нього hpOf уже -1
+        // і жертва не отримала б фінальний знімок стану.
+        onSurvivorLeftMatch(player, SurvivorState.ELIMINATED);
+        match().markEliminated(player);
+
+        becomeSpectator(player);
+        broadcastRosterFor(player);
+    }
+
+    /**
+     * Розсипає ВЕСЬ інвентар навколо тіла — так само, як гравець викидає
+     * предмет на Q, тільки не вперед, а довкола. Якщо світ не прийняв
+     * сутність, предмет усе одно не губиться: падає ванільним спавном.
+     */
+    private void dropInventoryAround(ServerPlayer player) {
+        var inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (stack.isEmpty()) continue;
+            inventory.setItem(slot, ItemStack.EMPTY);
+            if (!GroundItemSpawner.dropAround(player, stack)) {
+                player.spawnAtLocation(stack);
+            }
+        }
+    }
+
+    /**
+     * Загиблий стає глядачем. Клієнт отримує роль SPECTATOR, щоб HUD виживого
+     * зник, а вихідний режим гри запам'ятовується — у лобі його повертає
+     * {@link #restoreGameModes}, інакше гравець лишався б глядачем назавжди.
+     */
+    private void becomeSpectator(ServerPlayer player) {
+        gameModeBeforeSpectating.putIfAbsent(player.getUUID(), player.gameMode.getGameModeForPlayer());
+        player.setGameMode(GameType.SPECTATOR);
+        ModNetwork.toPlayer(player, new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, ""));
+    }
+
+    private void restoreGameModes(List<ServerPlayer> players) {
+        for (ServerPlayer player : players) {
+            GameType previous = gameModeBeforeSpectating.remove(player.getUUID());
+            if (previous != null) player.setGameMode(previous);
+        }
+        // Хто був офлайн — лишається в мапі: режим повернеться, коли його
+        // побачить наступний скид.
+    }
+
+    // ── Повзання ─────────────────────────────────────────────────────────
+
+    /**
+     * Непритомному потрібен рух, але повільний: замість лока — множник
+     * швидкості. Це атрибутний модифікатор на СЕРВЕРІ, який ванільна
+     * синхронізація атрибутів сама доставляє клієнту (тому клієнт рухається
+     * повільно без окремого пакета).
+     *
+     * ── Чому перевіряємо саме ЗНАЧЕННЯ, а не лише наявність ────────────
+     * Раніше тут був ранній вихід лише за фактом наявності модифікатора:
+     * якщо конфіг {@code downedCrawlSpeed} змінювався, поки гравець УЖЕ
+     * непритомний (а не при новому падінні), старий коефіцієнт лишався
+     * приліпленим до атрибута аж до наступного разу. Тепер застарілий
+     * модифікатор знімається й ставиться заново з поточним конфігом.
+     */
+    private void ensureCrawlSpeed(ServerPlayer player) {
+        AttributeInstance speed = player.getAttribute(Attributes.MOVEMENT_SPEED);
+        if (speed == null) return;
+        double factor = ManiacConfigs.get(ConfigSchema.DOWNED_CRAWL_SPEED);
+
+        AttributeModifier existing = speed.getModifier(DOWNED_SPEED_MODIFIER_ID);
+        if (existing != null) {
+            if (existing.getAmount() == factor - 1.0) return;
+            speed.removeModifier(DOWNED_SPEED_MODIFIER_ID);
+        }
+        speed.addTransientModifier(new AttributeModifier(
+            DOWNED_SPEED_MODIFIER_ID, "maniacmod_downed_crawl",
+            factor - 1.0, AttributeModifier.Operation.MULTIPLY_TOTAL));
+    }
+
+    private void removeCrawlSpeed(ServerPlayer player) {
+        AttributeInstance speed = player.getAttribute(Attributes.MOVEMENT_SPEED);
+        if (speed != null) speed.removeModifier(DOWNED_SPEED_MODIFIER_ID);
+    }
+
+    /** Назва команди, чий колір контуру — той, яким підсвічено непритомних. Спільна для всіх гравців. */
+    private static final String DOWNED_GLOW_TEAM = "maniac_survivor_downed";
+
+    /**
+     * Вмикає/вимикає ванільний контур непритомності на гравцеві —
+     * той самий підхід, що {@code GeneratorEntity.setExplosionGlow}:
+     * {@code setGlowingTag} малює контур крізь стіни всім, хто бачить
+     * сутність, без жодного клієнтського рендер-коду. Колір контуру —
+     * колір команди, тому на час непритомності гравець входить у
+     * спільну команду цього кольору.
+     *
+     * На відміну від генераторної підсвітки (навмисно лише клієнту, що
+     * натиснув 5, бо там приховувати стан від маньяка — частина
+     * дизайну), тут видимість УСІМ — саме те, що потрібно: непритомний
+     * і без того показаний маньяку через {@link DownedSurvivorMarker}
+     * (екранна мітка), тож світіння нічого додатково не розкриває, а
+     * лише робить самого гравця видимим крізь стіни так само, як мітку.
+     */
+    private void setDownedGlow(ServerPlayer player, boolean on) {
+        player.setGlowingTag(on);
+
+        Scoreboard scoreboard = player.serverLevel().getScoreboard();
+        String member = player.getScoreboardName();
+        PlayerTeam team = scoreboard.getPlayerTeam(DOWNED_GLOW_TEAM);
+        if (on) {
+            if (team == null) {
+                team = scoreboard.addPlayerTeam(DOWNED_GLOW_TEAM);
+                team.setColor(ChatFormatting.GOLD);
+            }
+            scoreboard.addPlayerToTeam(member, team);
+        } else if (team != null && scoreboard.getPlayersTeam(member) == team) {
+            scoreboard.removePlayerFromTeam(member, team);
+        }
+    }
+
+    /**
+     * Стани, у яких шкала стаміни ЗАВЖДИ на нулі й не відновлюється: поламана
+     * нога (до Шини) і непритомний (не бігає взагалі). Одне джерело правди
+     * для правил стаміни, щотікового притискання й того, що бачить HUD.
+     */
+    private static boolean staminaLocked(SurvivorState state) {
+        return state == SurvivorState.BROKEN_LEG || state == SurvivorState.UNCONSCIOUS;
     }
 
     // ── Серцебиття ───────────────────────────────────────────────────────
@@ -788,7 +1361,7 @@ public final class SurvivorModule implements PhaseListener {
         SurvivorState state = stateOverride != null ? stateOverride : match().survivorStateOf(id);
         if (state == null) state = SurvivorState.HEALTHY;
 
-        float stamina = state == SurvivorState.BROKEN_LEG
+        float stamina = staminaLocked(state)
             ? 0f
             : StaminaService.isEnabled() && StaminaService.getMaxStamina(player) > 0
                 ? StaminaService.getStamina(player) / StaminaService.getMaxStamina(player)
