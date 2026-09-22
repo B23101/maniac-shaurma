@@ -5,6 +5,7 @@ import com.log_to_kot.maniacmod.net.s2c.actionprogress.RescueProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.AbilityActivatePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.HighlightTogglePacket;
+import com.log_to_kot.maniacmod.net.c2s.intent.ManiacStrikePacket;
 import com.log_to_kot.maniacmod.net.c2s.minigame.TargetMinigameClickPacket;
 import com.log_to_kot.maniacmod.net.c2s.minigame.WireMinigameDropPacket;
 import com.log_to_kot.maniacmod.net.c2s.settings.SettingsChangePacket;
@@ -14,7 +15,10 @@ import com.log_to_kot.maniacmod.net.c2s.hold.RescueHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.hold.GeneratorRepairHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.StandUpPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.TrapPlacePacket;
+import com.log_to_kot.maniacmod.net.c2s.traps.TrapChoosePacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
+import com.log_to_kot.maniacmod.net.s2c.traps.TrapCatalogPacket;
+import com.log_to_kot.maniacmod.net.s2c.traps.TrapLoadoutPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameResultPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket;
@@ -68,7 +72,7 @@ public final class ModNetwork {
      * з різними версіями просто не з'єднаються — це краще, ніж
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
      */
-    private static final String PROTOCOL_VERSION = "5";
+    private static final String PROTOCOL_VERSION = "8";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -102,6 +106,8 @@ public final class ModNetwork {
         s2c(GroundItemVisualSettingsPacket.class, GroundItemVisualSettingsPacket::new);
         s2c(DownedSurvivorsPacket.class,          DownedSurvivorsPacket::new);
         s2c(RescueProgressPacket.class,           RescueProgressPacket::new);
+        s2c(TrapCatalogPacket.class,              TrapCatalogPacket::new);
+        s2c(TrapLoadoutPacket.class,              TrapLoadoutPacket::new);
 
         // ── Клієнт → сервер ─────────────────────────────────────────────
         c2s(AbilityActivatePacket.class,    AbilityActivatePacket::new);
@@ -115,6 +121,8 @@ public final class ModNetwork {
         c2s(WireMinigameDropPacket.class,    WireMinigameDropPacket::new);
         c2s(SettingsChangePacket.class,      SettingsChangePacket::new);
         c2s(OpenSettingsMenuRequestPacket.class, OpenSettingsMenuRequestPacket::new);
+        c2s(TrapChoosePacket.class,              TrapChoosePacket::new);
+        c2s(ManiacStrikePacket.class,            ManiacStrikePacket::new);
 
         // Нові пакети — ТІЛЬКИ в кінець свого блоку.
     }

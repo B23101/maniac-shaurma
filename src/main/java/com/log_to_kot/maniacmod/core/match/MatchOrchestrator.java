@@ -90,6 +90,17 @@ public final class MatchOrchestrator {
     private final ManiacCombatModule combat = new ManiacCombatModule(() -> this);
 
     /**
+     * Пастки маньяка: розміщення, спрацювання, звільнення. Тримається
+     * полем, бо сутність капкана, хук лома й мережеві обробники
+     * звертаються до нього напряму — той самий патерн, що generators/combat.
+     */
+    private final com.log_to_kot.maniacmod.maniacs.ManiacSpeedModule maniacSpeed =
+        new com.log_to_kot.maniacmod.maniacs.ManiacSpeedModule(() -> this);
+
+    private final com.log_to_kot.maniacmod.traps.TrapModule traps =
+        new com.log_to_kot.maniacmod.traps.TrapModule(() -> this);
+
+    /**
      * Розкладає предмети по ITEM-точках. Не PhaseListener: спавн луту —
      * частина {@link #applySpawnPlan} (як і спавн генераторів), у нього
      * немає власного життєвого циклу. Прибирання лежачих предметів
@@ -127,6 +138,8 @@ public final class MatchOrchestrator {
         phases.register(inventoryAllocation);
         phases.register(generators);
         phases.register(combat);
+        phases.register(traps);
+        phases.register(maniacSpeed);
         phases.register(survivors);
         phases.register(worldEnvironment);
     }
@@ -139,6 +152,16 @@ public final class MatchOrchestrator {
     /** Модуль удару — для хука AttackEntityEvent. */
     public ManiacCombatModule combat() {
         return combat;
+    }
+
+    /** Модуль швидкості маньяка — для дебаг-зняття ролі поза лобі (debugUnmorph). */
+    public com.log_to_kot.maniacmod.maniacs.ManiacSpeedModule maniacSpeed() {
+        return maniacSpeed;
+    }
+
+    /** Модуль пасток — для BearTrapEntity, хука лома й ServerPacketHandler. */
+    public com.log_to_kot.maniacmod.traps.TrapModule traps() {
+        return traps;
     }
 
     /** Модуль хп/стаміни/падіння/підняття — для ServerHooks і ServerPacketHandler. */
@@ -202,14 +225,15 @@ public final class MatchOrchestrator {
         if (isManiac(id)) {
             ManiacArchetype archetype = maniacArchetype();
             return new RoleSyncPacket(RoleSyncPacket.Role.MANIAC,
-                archetype == null ? "" : archetype.id());
+                archetype == null ? "" : archetype.id(),
+                archetype == null ? 0.0 : archetype.attackRangeBlocks());
         }
         if (isSurvivor(id)) {
             var role = survivorRoleOf(id);
             return new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR,
-                role == null ? "" : role.id());
+                role == null ? "" : role.id(), 0.0);
         }
-        return new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "");
+        return new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "", 0.0);
     }
 
     /** Узгоджує підготовку плану і фізичне застосування розкидання. */
@@ -317,6 +341,11 @@ public final class MatchOrchestrator {
      */
     public List<ServerPlayer> onlinePlayers() {
         return server == null ? List.of() : List.copyOf(server.getPlayerList().getPlayers());
+    }
+
+    /** Онлайн-гравець за UUID, або null (вийшов / сервер не підключено). */
+    public ServerPlayer onlinePlayer(UUID playerId) {
+        return server == null ? null : server.getPlayerList().getPlayer(playerId);
     }
 
     /** Чи цей гравець зараз виживий цього матчу. */
@@ -572,9 +601,17 @@ public final class MatchOrchestrator {
         survivors().onLobbyMorphAway(player);
         context.assignManiac(player.getUUID(), archetype);
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
-            new RoleSyncPacket(RoleSyncPacket.Role.MANIAC, archetype == null ? "" : archetype.id()));
+            new RoleSyncPacket(RoleSyncPacket.Role.MANIAC, archetype == null ? "" : archetype.id(),
+                archetype == null ? 0.0 : archetype.attackRangeBlocks()));
         inventoryAllocation().applyOnJoin(player);
         broadcastRosterAround(player);
+        // LOBBY не дозволяє TRAPS (див. GamePhase), тому TrapModule сам
+        // не шле цей пакет тут — а екран налаштувань/дебаг-огляду вже
+        // може показувати обраного маньяка з його пастками заздалегідь.
+        // Каталог пропонуємо теж: дебаг-тестувальник має бачити той
+        // самий екран вибору, що й звичайний маньяк у грі.
+        if (archetype != null) traps.syncCatalogIfChoiceNeeded(player, archetype);
+        traps.syncLoadout(player);
     }
 
     /**
@@ -589,7 +626,7 @@ public final class MatchOrchestrator {
             com.log_to_kot.maniacmod.survivors.SurvivorRegistry.defaultRole();
         context.addSurvivor(player.getUUID(), role);
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
-            new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR, ""));
+            new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR, "", 0.0));
         inventoryAllocation().applyOnJoin(player);
         // Вмикає StaminaService і шле реальний vitals-пакет (hp зі
         // щойно виставленого role.maxHp(), стаміна = 100% бо щойно
@@ -608,9 +645,120 @@ public final class MatchOrchestrator {
         survivors().onLobbyMorphAway(player);
         context.clearRole(player.getUUID());
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
-            new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, ""));
+            new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "", 0.0));
         inventoryAllocation().applyOnJoin(player);
         broadcastRosterAround(player);
+    }
+
+    /**
+     * {@code /maniac debug unmorph} — те саме, що {@link #unmorph}, але
+     * дозволено в БУДЬ-ЯКІЙ фазі (LOBBY, ROLE_REVEAL, HUNT, ...), не
+     * лише в лобі. Лише для дебаг-зміни ролі: стан самого матчу
+     * (фаза, чи є ще маньяк) свідомо НЕ чіпаємо — виконавець сам
+     * відповідає за те, що робить це посеред гри.
+     *
+     * ── Чому не можна просто прибрати {@code phases.is(GamePhase.LOBBY)}
+     * з {@link #unmorph} ─────────────────────────────────────────────
+     * Звичайний {@code unmorph} у лобі ніколи не мав справи з маньячими
+     * модифікаторами (швидкість, лок атаки удару, обраний набір
+     * пасток) — вони там просто не активні ({@code ManiacSpeedModule},
+     * {@code ManiacCombatModule} ігнорують неігрові фази). Поза лобі ці
+     * системи АКТИВНІ, і без явного зняття колишній маньяк лишився б
+     * зі швидкістю 1.2, вічним локом атаки на перезарядці й "лип кими"
+     * пастками до кінця матчу. Тому дебаг-версія явно кличе
+     * {@code maniacSpeed().onPlayerLeft} і {@code combat().onPlayerLeft}
+     * (ті самі методи, якими маньяк очищається при діконекті —
+     * семантика та сама: "цей гравець більше не маньяк, кому б
+     * розсилати стан").
+     */
+    public void debugUnmorph(ServerPlayer player) {
+        maniacSpeed().onPlayerLeft(player);
+        combat().onPlayerLeft(player);
+        traps().resetChoice();
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            com.log_to_kot.maniacmod.net.s2c.traps.TrapLoadoutPacket.empty());
+        survivors().onLobbyMorphAway(player);
+        context.clearRole(player.getUUID());
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "", 0.0));
+        inventoryAllocation().applyOnJoin(player);
+        broadcastRosterAround(player);
+    }
+
+    /**
+     * {@code /maniac debug swap maniac [гравець]} — перетворює гравця на
+     * маньяка в БУДЬ-ЯКІЙ фазі матчу, не лише в лобі (на відміну від
+     * {@link #morphManiac}). Якщо гравець щойно був виживим, роль
+     * знімається тим самим шляхом, що й {@link #debugUnmorph} — БЕЗ
+     * проміжного SPECTATOR: гравець переходить одразу у MANIAC, а не
+     * "маньяк → глядач → маньяк" двома командами.
+     *
+     * Архетип: явно переданий (наприклад раніше обраний), інакше перший
+     * з реєстру, інакше {@code null} (як і в debug-старті — гравець сам
+     * обирає в меню, якщо фаза це дозволяє).
+     */
+    public void debugSwapToManiac(ServerPlayer player, ManiacArchetype archetype) {
+        UUID previousManiac = context.maniacUUID();
+        if (previousManiac != null && !previousManiac.equals(player.getUUID())) {
+            // Маньяк уже є, і це не той самий гравець — знімаємо стару
+            // роль так само, як debugUnmorph, інакше матч лишився б із
+            // двома "маньяками" одночасно (один — за контекстом, другий —
+            // за модулями бою/швидкості).
+            ServerPlayer oldManiac = server == null ? null
+                : server.getPlayerList().getPlayer(previousManiac);
+            if (oldManiac != null) releaseManiacModules(oldManiac);
+            context.clearRole(previousManiac);
+        }
+        if (context.isSurvivor(player.getUUID())) {
+            survivors().onLobbyMorphAway(player);
+            context.clearRole(player.getUUID());
+        }
+
+        context.assignManiac(player.getUUID(), archetype);
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new RoleSyncPacket(RoleSyncPacket.Role.MANIAC, archetype == null ? "" : archetype.id(),
+                archetype == null ? 0.0 : archetype.attackRangeBlocks()));
+        inventoryAllocation().applyOnJoin(player);
+        if (archetype != null) traps.syncCatalogIfChoiceNeeded(player, archetype);
+        traps.syncLoadout(player);
+        broadcastRosterAround(player);
+    }
+
+    /**
+     * {@code /maniac debug swap survivor [гравець]} — перетворює гравця
+     * на виживого в БУДЬ-ЯКІЙ фазі матчу, не лише в лобі (на відміну від
+     * {@link #morphSurvivor}). Якщо гравець щойно був маньяком, роль
+     * знімається тим самим шляхом, що й {@link #debugUnmorph} — БЕЗ
+     * проміжного SPECTATOR.
+     */
+    public void debugSwapToSurvivor(ServerPlayer player) {
+        if (context.isManiac(player.getUUID())) {
+            releaseManiacModules(player);
+            context.clearRole(player.getUUID());
+        }
+
+        com.log_to_kot.maniacmod.survivors.SurvivorRole role =
+            com.log_to_kot.maniacmod.survivors.SurvivorRegistry.defaultRole();
+        context.addSurvivor(player.getUUID(), role);
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            new RoleSyncPacket(RoleSyncPacket.Role.SURVIVOR, "", 0.0));
+        inventoryAllocation().applyOnJoin(player);
+        survivors().onLobbyMorphToSurvivor(player);
+        broadcastRosterAround(player);
+    }
+
+    /**
+     * Знімає з гравця всі маньячі модифікатори (швидкість, лок атаки,
+     * обрані пастки) тим самим шляхом, що {@link #debugUnmorph} і
+     * {@code onPlayerLeft} для маньяка — спільний хвіст для будь-якого
+     * "цей гравець більше не маньяк" поза лобі.
+     */
+    private void releaseManiacModules(ServerPlayer player) {
+        maniacSpeed().onPlayerLeft(player);
+        combat().onPlayerLeft(player);
+        traps().resetChoice();
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            com.log_to_kot.maniacmod.net.s2c.traps.TrapLoadoutPacket.empty());
     }
 
     /**
@@ -631,16 +779,6 @@ public final class MatchOrchestrator {
         return onlinePlayers.stream()
             .filter(player -> !player.isSpectator())
             .toList();
-    }
-
-    /**
-     * Гравець за UUID серед реально онлайн зараз — null, якщо вийшов
-     * або сервер ще не прикріплений. Для модулів, яким потрібен
-     * ServerPlayer поза тіковим списком players (наприклад rescue-сесія,
-     * що завершується не в той самий тік, коли почалась).
-     */
-    public ServerPlayer onlinePlayer(UUID id) {
-        return server == null ? null : server.getPlayerList().getPlayer(id);
     }
 
     /** Реєструє будь-яку тимчасову сутність, створену ігровим модулем. */
@@ -1057,6 +1195,8 @@ public final class MatchOrchestrator {
         generatorModule().onPlayerLeftDuringMinigame(player.getUUID());
         // Лок руху, прогрес вставання, правила стаміни — усе за UUID.
         survivors.onPlayerLeft(player);
+        traps.onPlayerLeft(player);
+        maniacSpeed.onPlayerLeft(player);
 
         List<ServerPlayer> online = player.getServer().getPlayerList().getPlayers();
         if (context.isManiac(player.getUUID())) {
@@ -1093,6 +1233,20 @@ public final class MatchOrchestrator {
         if (!context.isManiac(player.getUUID())) return;
 
         context.assignManiac(player.getUUID(), archetype);
+
+        // roleSyncFor читає archetype ЩОЙНО ПІСЛЯ assignManiac вище: до
+        // вибору в меню архетип у клієнта був "" (RoleSyncPacket на вхід
+        // у ROLE_REVEAL шлеться з archetype ще null — MENU-режим). Без
+        // повторної відправки тут archetypeId лишався б порожнім аж до
+        // наступного переходу фази, і екран вибору пасток не мав би на
+        // основі чого відкритись.
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player, roleSyncFor(player));
+        // MENU-режим: архетип щойно став відомим лише зараз (на вході в
+        // ROLE_REVEAL його ще не було). Пропонуємо вибір пасток, якщо є
+        // з чого — той самий шлях, що RANDOM/FIXED проходять одразу на
+        // вході в фазу (там архетип відомий раніше).
+        if (archetype != null) traps.syncCatalogIfChoiceNeeded(player, archetype);
+        traps.syncLoadout(player);
     }
 
     public void reset(List<ServerPlayer> players) {

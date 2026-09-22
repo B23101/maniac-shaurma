@@ -10,7 +10,8 @@
   "client": [
     "ManiacAttackGuardMixin",
     "MixinKeyboardInputDownedMovement",
-    "GeneratorRepairSwingGuardMixin"
+    "GeneratorRepairSwingGuardMixin",
+    "ManiacSprintGuardMixin"
   ],
   "server": [],
   "injectors": {

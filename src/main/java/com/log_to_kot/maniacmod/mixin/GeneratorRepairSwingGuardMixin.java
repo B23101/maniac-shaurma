@@ -1,6 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
 import com.log_to_kot.maniacmod.client.ClientInputHandler;
+import com.log_to_kot.maniacmod.client.traps.TrapPlacementController;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -40,12 +41,21 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * ⚠ Це суто візуальна заглушка. Прогрес ремонту тримає сервер
  * (GeneratorRepairHoldPacket), і від цього міксина ніяк не залежить.
  */
+/*
+ * Ім'я історичне: міксин з'явився для ремонту генератора, а тепер глушить
+ * ванільне «використати» ще й у режимі розміщення пастки. Перейменування
+ * зачепило б maniacmod.mixins.json, тому клас лишено як є.
+ */
 @Mixin(Minecraft.class)
 public abstract class GeneratorRepairSwingGuardMixin {
 
     @Inject(method = "startUseItem", at = @At("HEAD"), cancellable = true)
     private void maniacmod$suppressSwingDuringRepair(CallbackInfo ci) {
-        if (!ClientInputHandler.isRepairHeld()) return;
+        // Ремонт генератора (утримання) АБО режим розміщення пастки: в обох
+        // ПКМ — це «дія мода», а не ванільне «використати предмет». У режимі
+        // розміщення ПКМ лише підтверджує пастку; без цього він одночасно
+        // ще й махав би рукою / ставив блок / вживав предмет.
+        if (!ClientInputHandler.isRepairHeld() && !TrapPlacementController.isActive()) return;
         ci.cancel();
     }
 }

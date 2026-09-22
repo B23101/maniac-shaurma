@@ -1,6 +1,7 @@
 package com.log_to_kot.maniacmod.registry;
 
 import com.log_to_kot.maniacmod.ManiacMod;
+import com.log_to_kot.maniacmod.entity.BearTrapEntity;
 import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
 import net.minecraft.world.entity.EntityType;
@@ -76,6 +77,23 @@ public final class ModEntityTypes {
                 .noSummon()
                 .fireImmune()
                 .build("generator"));
+
+    /**
+     * Капкан. Хітбокс 0.9×0.3: плаский на вигляд, але достатньо широкий,
+     * щоб гравець, який іде повз, справді наступив, і достатньо
+     * товстий по висоті, щоб приціл ловив його ломом (ЛКМ). Так само,
+     * як у ground_item: занадто низький хітбокс проходить «під»
+     * прицілом.
+     */
+    public static final RegistryObject<EntityType<BearTrapEntity>> BEAR_TRAP =
+        ENTITY_TYPES.register("bear_trap", () ->
+            EntityType.Builder.<BearTrapEntity>of(BearTrapEntity::new, MobCategory.MISC)
+                .sized(0.9f, 0.3f)
+                .clientTrackingRange(16)     // 256 блоків; маньяк має бачити свої пастки
+                .updateInterval(10)          // змінюється лише SNAPPED — нечасто
+                .noSummon()
+                .fireImmune()
+                .build("bear_trap"));
 
     // TODO(міграція maniacs): MANIAC EntityType переїжджає сюди разом
     // з модулем маньяків.

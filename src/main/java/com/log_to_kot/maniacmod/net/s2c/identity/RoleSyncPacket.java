@@ -20,26 +20,31 @@ import net.minecraft.network.FriendlyByteBuf;
  * нічого не казав виживим — тому клієнт виживого взагалі не знав, що
  * він у грі.
  *
- * @param role        роль локального гравця
- * @param archetypeId id архетипу: маньяка ("chucky") або ролі виживого
- *                    ("default"); порожній рядок для глядача
+ * @param role             роль локального гравця
+ * @param archetypeId      id архетипу: маньяка ("chucky") або ролі виживого
+ *                         ("default"); порожній рядок для глядача
+ * @param attackRangeBlocks дальність удару маньяка в блоках, з якої
+ *                         клієнт сам вирішує, чи зіграти замах ЛКМ
+ *                         (див. {@code ManiacAttackGuardMixin}) —
+ *                         0.0 для не-маньяка (поле не читається)
  */
-public record RoleSyncPacket(Role role, String archetypeId) implements S2CPacket {
+public record RoleSyncPacket(Role role, String archetypeId, double attackRangeBlocks) implements S2CPacket {
 
     public enum Role { MANIAC, SURVIVOR, SPECTATOR }
 
     public RoleSyncPacket(FriendlyByteBuf buf) {
-        this(buf.readEnum(Role.class), buf.readUtf());
+        this(buf.readEnum(Role.class), buf.readUtf(), buf.readDouble());
     }
 
     @Override
     public void encode(FriendlyByteBuf buf) {
         buf.writeEnum(role);
         buf.writeUtf(archetypeId);
+        buf.writeDouble(attackRangeBlocks);
     }
 
     @Override
     public void clientHandle() {
-        com.log_to_kot.maniacmod.client.ClientPacketHandler.onRole(role, archetypeId);
+        com.log_to_kot.maniacmod.client.ClientPacketHandler.onRole(role, archetypeId, attackRangeBlocks);
     }
 }

@@ -454,7 +454,7 @@ public final class ConfigSchema {
      * базове значення.
      */
     public static final ConfigKey<Double> ATTACK_RANGE_BLOCKS =
-        ConfigKey.decimal("maniac", "attackRangeBlocks", 3.5, 1.0, 8.0);
+        ConfigKey.decimal("maniac", "attackRangeBlocks", 1.0, 1.0, 8.0);
 
     public static final ConfigKey<Integer> ATTACK_COOLDOWN_TICKS =
         ConfigKey.integer("maniac", "attackCooldownTicks", 120, 10, 600);
@@ -467,6 +467,78 @@ public final class ConfigSchema {
 
     public static final ConfigKey<Integer> TRAP_MIN_DISTANCE_TO_PLAYER =
         ConfigKey.integer("maniac", "trapMinDistanceToPlayerBlocks", 3, 0, 32);
+
+    /**
+     * Множник швидкості руху маньяка відносно ЗВИЧАЙНОЇ ходьби гравця.
+     *
+     * <p>Маньяк не має спринту взагалі: його «бігом» і є ця підвищена
+     * ходьба. 1.2 = на 20% швидше за звичайну ходьбу виживого. Числа
+     * живуть тут, а не в архетипі, бо швидкість — це налаштування
+     * балансу, яке адмін має правити без перекомпіляції; конкретний
+     * маньяк може перевизначити її в {@code ManiacArchetype#speedMultiplier()}.</p>
+     */
+    public static final ConfigKey<Double> MANIAC_SPEED_MULTIPLIER =
+        ConfigKey.decimal("maniac", "speedMultiplier", 1.2, 0.5, 3.0);
+
+    /**
+     * Перезарядка ПІСЛЯ встановлення капкана, у тіках. 800 = 40 с.
+     *
+     * <p>Окремо від {@link #TRAP_PLACE_COOLDOWN_TICKS}: то спільне
+     * значення для пасток без власного, а капкан за дизайном має свій
+     * (він перевизначає {@code TrapArchetype#placementCooldownTicks()}).</p>
+     */
+    public static final ConfigKey<Integer> BEAR_TRAP_PLACE_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "bearTrapPlaceCooldownTicks", 800, 20, 12000);
+
+    /**
+     * На яку відстань (блоків) від очей маньяк може націлити розміщення
+     * пастки. Сервер міряє це заново — позиція в пакеті лише «куди
+     * дивиться клієнт», а не довірене значення.
+     */
+    public static final ConfigKey<Double> TRAP_PLACE_RANGE_BLOCKS =
+        ConfigKey.decimal("maniac", "trapPlaceRangeBlocks", 6.0, 2.0, 16.0);
+
+    /**
+     * Скільки пасток маньяк бере в матч (вибір у меню на початку).
+     * Верхня межа — {@code ManiacArchetype.MAX_TRAP_SLOTS} (клавіші
+     * 5/6/7), тож більше трьох не має сенсу. Поки в реєстрі одна
+     * пастка, вибір зводиться до неї — але число готове.
+     */
+    public static final ConfigKey<Integer> TRAPS_PER_MATCH =
+        ConfigKey.integer("maniac", "trapsPerMatch", 3, 1, 3);
+
+    // ── bear trap (капкан): наслідки для жертви ─────────────────────────
+
+    /** Шкода від захлопнення капкана, у хп. «Трохи» за дизайном: не наближає до 0 різко. */
+    public static final ConfigKey<Integer> BEAR_TRAP_DAMAGE =
+        ConfigKey.integer("maniac", "bearTrapDamage", 1, 0, 100);
+
+    /**
+     * Скільки ПРИХОВАНОЇ міцності ніг (0–100) знімає один капкан.
+     * Шкала клієнту не показується: гравець не знає, скільки ще
+     * витримають ноги, доки не хруснуло. Кілька капканів поспіль
+     * зламають ногу напевно, один — лише на межі.
+     */
+    public static final ConfigKey<Integer> BEAR_TRAP_LEG_DAMAGE =
+        ConfigKey.integer("maniac", "bearTrapLegDamage", 40, 0, 100);
+
+    /** Скільки міцності ніг відновлюється за секунду, коли гравець НЕ в пастці. 0 = не відновлюється. */
+    public static final ConfigKey<Double> LEG_INTEGRITY_REGEN_PER_SECOND =
+        ConfigKey.decimal("maniac", "legIntegrityRegenPerSecond", 0.5, 0.0, 20.0);
+
+    // ── crowbar (лом) ────────────────────────────────────────────────────
+
+    /** Скільки % міцності лом втрачає за один удар по капкану. Дизайн: 33. */
+    public static final ConfigKey<Integer> CROWBAR_HIT_WEAR_PERCENT =
+        ConfigKey.integer("maniac", "crowbarHitWearPercent", 33, 1, 100);
+
+    /** Перезарядка лома між ударами по капкану, у тіках. 400 = 20 с. */
+    public static final ConfigKey<Integer> CROWBAR_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "crowbarCooldownTicks", 400, 0, 12000);
+
+    /** Дальність, з якої лом дістає до капкана (блоків від очей). */
+    public static final ConfigKey<Double> CROWBAR_RANGE_BLOCKS =
+        ConfigKey.decimal("maniac", "crowbarRangeBlocks", 3.5, 1.0, 8.0);
 
     // ── maniac_selection ─────────────────────────────────────────────────
 
@@ -588,7 +660,11 @@ public final class ConfigSchema {
     public static final ConfigBlock MANIAC = ConfigBlock.settings("maniac", "maniacs.yml",
         "Базові параметри маньяка. Архетип може перевизначити їх для себе.",
         ATTACK_RANGE_BLOCKS, ATTACK_COOLDOWN_TICKS, ATTACK_DAMAGE,
-        TRAP_PLACE_COOLDOWN_TICKS, TRAP_MIN_DISTANCE_TO_PLAYER);
+        TRAP_PLACE_COOLDOWN_TICKS, TRAP_MIN_DISTANCE_TO_PLAYER,
+        MANIAC_SPEED_MULTIPLIER, BEAR_TRAP_PLACE_COOLDOWN_TICKS,
+        TRAP_PLACE_RANGE_BLOCKS, TRAPS_PER_MATCH,
+        CROWBAR_HIT_WEAR_PERCENT, CROWBAR_COOLDOWN_TICKS, CROWBAR_RANGE_BLOCKS,
+        BEAR_TRAP_DAMAGE, BEAR_TRAP_LEG_DAMAGE, LEG_INTEGRITY_REGEN_PER_SECOND);
 
     public static final ConfigBlock MANIAC_SELECTION = ConfigBlock.settings("maniac_selection", "maniacs.yml",
         "Хто стає маньяком і як обирається персонаж.",

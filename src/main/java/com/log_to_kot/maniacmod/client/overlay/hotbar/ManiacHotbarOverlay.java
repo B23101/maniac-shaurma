@@ -154,7 +154,7 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
             int slotX = left + index * (SLOT_SIZE + SLOT_GAP);
 
             if (maniac && index == 0) {
-                renderStrikeSlot(graphics, minecraft, slotX, top, inventorySlot, index + 1);
+                renderStrikeSlot(graphics, minecraft, slotX, top, inventorySlot, index + 1, currentTick);
             } else if (maniac) {
                 SlotKind kind = classifyManiacSlot(index);
                 renderManiacSlot(graphics, minecraft, slotX, top, inventorySlot, index + 1, kind, currentTick);
@@ -259,13 +259,25 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
     // ── Маньяк: слот удару (круглий) + 3 заряди сили по колу ──────────
 
     private void renderStrikeSlot(GuiGraphics graphics, Minecraft minecraft, int x, int y,
-                                   int inventorySlot, int displayNumber) {
+                                   int inventorySlot, int displayNumber, long currentTick) {
         int centerX = x + SLOT_SIZE / 2;
         int centerY = y + SLOT_SIZE / 2;
         int radius = SLOT_SIZE / 2;
 
         fillCircle(graphics, centerX, centerY, radius, SLOT_FILL);
         strokeCircle(graphics, centerX, centerY, radius, STRIKE_BORDER, 1);
+
+        // Кільце перезарядки удару: той самий канал (AbilityCooldownPacket
+        // / ClientMatchState.abilityCooldownFraction), яким уже живляться
+        // кільця здібностей і пасток — просто по колу, а не по периметру
+        // квадрата, бо слот удару круглий.
+        float cooldownFraction = ClientMatchState.abilityCooldownFraction(
+            com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket.ATTACK_ID, currentTick);
+        float readyFraction = clamp01(1f - cooldownFraction);
+        if (readyFraction > 0f && readyFraction < 1f) {
+            strokeProgressCircle(graphics, centerX, centerY, radius, STRIKE_GLYPH_COLOR, readyFraction, 2);
+        }
+
         drawStrikeGlyph(graphics, centerX, centerY, STRIKE_ICON_SIZE, STRIKE_GLYPH_COLOR);
 
         String number = String.valueOf(displayNumber);
@@ -400,6 +412,31 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
             if (r <= 0) continue;
             for (int i = 0; i < steps; i++) {
                 double angle = 2 * Math.PI * i / steps;
+                int px = cx + (int) Math.round(r * Math.cos(angle));
+                int py = cy + (int) Math.round(r * Math.sin(angle));
+                g.fill(px, py, px + 1, py + 1, color);
+            }
+        }
+    }
+
+    /**
+     * Кільце прогресу (0..1) по колу, за годинниковою стрілкою від
+     * верхньої точки (12 година) — той самий "напрямок читання", що й
+     * {@link #strokeProgressSquare} (top -> right -> ...), лише по колу
+     * замість периметра квадрата. {@code fraction} = 1 щойно вдарив
+     * (кільце повне), 0 = перезарядка скінчилась (кільце зникає, бо
+     * викликач малює лише поки {@code 0 < readyFraction < 1}).
+     */
+    private static void strokeProgressCircle(GuiGraphics g, int cx, int cy, int radius, int color,
+                                              float fraction, int thickness) {
+        float frac = clamp01(fraction);
+        int steps = Math.max(24, radius * 2);
+        int litSteps = Math.round(steps * frac);
+        for (int t = 0; t < thickness; t++) {
+            int r = radius - t;
+            if (r <= 0) continue;
+            for (int i = 0; i < litSteps; i++) {
+                double angle = -Math.PI / 2 + 2 * Math.PI * i / steps;
                 int px = cx + (int) Math.round(r * Math.cos(angle));
                 int py = cy + (int) Math.round(r * Math.sin(angle));
                 g.fill(px, py, px + 1, py + 1, color);

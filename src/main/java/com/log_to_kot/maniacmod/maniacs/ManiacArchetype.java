@@ -14,7 +14,7 @@ import java.util.List;
  * ── Жорсткі межі, які НЕ налаштовуються ──────────────────────────────
  * У маньяка немає інвентаря, тому клавіші 1–4 вільні:
  *   1 / 2 / 3 — здібності (максимум {@link #MAX_ABILITIES})
- *   Z / X / C — пастки (максимум {@link #MAX_TRAP_SLOTS})
+ *   5 / 6 / 7 — пастки (максимум {@link #MAX_TRAP_SLOTS})
  *   ЛКМ      — удар
  * Ці числа — константи, а не конфіг: збільшити їх нікуди, бо клавіш
  * рівно стільки. Архетип, що віддасть більше, падає одразу при
@@ -32,7 +32,7 @@ public abstract class ManiacArchetype {
     /** Здібності: клавіші 1, 2, 3. */
     public static final int MAX_ABILITIES = 3;
 
-    /** Пастки: клавіші Z, X, C. */
+    /** Пастки: клавіші 5, 6, 7. */
     public static final int MAX_TRAP_SLOTS = 3;
 
     /** У маньяка немає інвентаря — звідси й вільні клавіші 1–4. */
@@ -66,7 +66,7 @@ public abstract class ManiacArchetype {
     /** Здібності на клавіші 1, 2, 3 — рівно в цьому порядку. */
     public abstract List<Ability> abilities();
 
-    /** Пастки на клавіші Z, X, C — рівно в цьому порядку. */
+    /** Пастки, з яких маньяк обирає до {@code trapsPerMatch} у меню; клавіші 5, 6, 7. */
     public abstract List<TrapArchetype> traps();
 
     // ── Спільна логіка ───────────────────────────────────────────────────
@@ -90,6 +90,16 @@ public abstract class ManiacArchetype {
     }
 
     /**
+     * Множник швидкості ходьби відносно ЗВИЧАЙНОЇ ходьби гравця. Маньяк
+     * не має спринту взагалі: це і є його «біг» (1.2 = на 20% швидше).
+     * За замовчуванням — з конфігу, тож одна правка змінює всіх;
+     * швидший чи повільніший маньяк перевизначає цей метод.
+     */
+    public double speedMultiplier() {
+        return ManiacConfigs.get(ConfigSchema.MANIAC_SPEED_MULTIPLIER);
+    }
+
+    /**
      * Здібність за номером клавіші 1–3. null, якщо слот порожній —
      * маньяк може мати й одну здібність.
      */
@@ -98,7 +108,7 @@ public abstract class ManiacArchetype {
         return slot >= 0 && slot < list.size() ? list.get(slot) : null;
     }
 
-    /** Пастка за номером слота 0–2 (Z, X, C). null, якщо слот порожній. */
+    /** Пастка за номером слота 0–2 (5, 6, 7). null, якщо слот порожній. */
     public final TrapArchetype trapAt(int slot) {
         List<TrapArchetype> list = traps();
         return slot >= 0 && slot < list.size() ? list.get(slot) : null;
@@ -112,7 +122,7 @@ public abstract class ManiacArchetype {
         }
         if (traps().size() > MAX_TRAP_SLOTS) {
             throw new IllegalStateException(id + ": пасток "
-                + traps().size() + ", а клавіш лише " + MAX_TRAP_SLOTS + " (Z/X/C).");
+                + traps().size() + ", а клавіш лише " + MAX_TRAP_SLOTS + " (5/6/7).");
         }
     }
 

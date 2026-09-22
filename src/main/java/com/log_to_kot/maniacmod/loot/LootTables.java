@@ -37,7 +37,11 @@ public final class LootTables {
         return new LootTable(List.of(
             new LootEntry(ModItems.get("fuel_canister").get(), 1, 1.0f),
             new LootEntry(ModItems.get("medkit").get(), 1, 0.5f),
-            new LootEntry(ModItems.get("splint").get(), 1, 0.5f)
+            new LootEntry(ModItems.get("splint").get(), 1, 0.5f),
+            // Лом потрібен лише тоді, коли хтось потрапив у капкан, тож він
+            // рідкісніший за пальне. Свіжий лом має 100% (немає тега = повна
+            // міцність, див. CrowbarItem#getDurability) — окремо не ініціалізується.
+            new LootEntry(ModItems.get("crowbar").get(), 1, 0.5f)
             // Нові предмети — сюди, тим самим рядком.
         ));
     }

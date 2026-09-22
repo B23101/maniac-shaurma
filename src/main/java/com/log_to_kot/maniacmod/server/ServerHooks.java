@@ -4,7 +4,6 @@ import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
-import com.log_to_kot.maniacmod.maniacs.ManiacCombatModule;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.PhaseSyncPacket;
 import dev.shaurmalib.forge.chat.ChatModule;
@@ -94,10 +93,16 @@ public final class ServerHooks {
      * Удар ЛКМ по будь-якій сутності. Тут вирішується, ХТО кого може бити.
      *
      * ── Правила (у порядку перевірки) ────────────────────────────────
-     * 1. Б'є МАНЬЯК → ванільний удар скасовується завжди: шкоду рахує
-     *    модуль удару за дальністю архетипу ({@code combat.onAttack}), а
-     *    не ванільний розрахунок за довжиною руки гравця. Чи фаза
-     *    дозволяє бити — перевіряється всередині ({@code damageAllowed}).
+     * 1. Б'є МАНЬЯК → ванільний удар скасовується завжди: подія тут
+     *    ЛИШЕ гасить ванільну шкоду й замах. Реальний удар (хто саме
+     *    постраждав, за якою дальністю) рахує {@code ManiacCombatModule
+     *    #onAttack} окремо, за {@code ManiacStrikePacket} — НЕ за
+     *    {@code event.getTarget()}. Причина: ванільна подія виникає
+     *    лише коли клієнтський raytrace знайшов сутність у межах
+     *    ванільного pick range (~3 блоки), а дальність архетипу може
+     *    бути й більшою (до 8 блоків у конфізі) — тоді подія для
+     *    далекої цілі просто ніколи не приходить. Див. докстрінг
+     *    {@code ManiacCombatModule} для повного пояснення.
      * 2. Б'є ВИЖИВИЙ по ГРАВЦЮ (виживий, маньяк чи будь-хто) →
      *    скасовується без винятків: PvP між тими, хто виживає, вимкнено.
      *    Раніше цього ніде не було — скасовувався лише удар маньяка, тож
@@ -117,10 +122,21 @@ public final class ServerHooks {
         if (match == null) return;
 
         if (match.isManiac(attacker.getUUID())) {
+            // Лише гасимо ванільний шлях — реальний удар обробляється
+            // окремо в ServerPacketHandler.onManiacStrike, ініційованому
+            // клієнтським ManiacStrikePacket (не цією подією).
             event.setCanceled(true);
-            if (!ManiacCombatModule.damageAllowed()) return;
+            return;
+        }
 
-            match.combat().onAttack(attacker, event.getTarget());
+        // Виживий б'є ЛОМОМ по капкану — звільнення (своє чи тімейта) або
+        // знешкодження. Ванільний удар скасовується завжди, коли ціль —
+        // капкан: шкоди йому бути не повинно, а що сталось (зараховано чи
+        // лом на перезарядці/зламаний), вирішує TrapModule.
+        if (event.getTarget() instanceof com.log_to_kot.maniacmod.entity.BearTrapEntity trap
+            && match.isSurvivor(attacker.getUUID())) {
+            event.setCanceled(true);
+            match.traps().onCrowbarHit(attacker, trap, attacker.getMainHandItem());
             return;
         }
 

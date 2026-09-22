@@ -34,6 +34,16 @@ public final class ClientMatchState {
     // ── Роль ─────────────────────────────────────────────────────────────
     private static RoleSyncPacket.Role role = RoleSyncPacket.Role.SPECTATOR;
     private static String archetypeId = "";
+    /**
+     * Дальність удару маньяка в блоках — синхронізована разом із роллю
+     * (див. {@link RoleSyncPacket}). Для не-маньяка не читається (0.0).
+     * Використовується {@code ManiacAttackGuardMixin}, щоб клієнт САМ
+     * визначив, чи є жертва в межах перед відправкою
+     * {@code ManiacStrikePacket} — інакше замах і звук ЛКМ грали б,
+     * навіть коли вдарити нікого (сервер відмовив би пакету мовчки,
+     * а гравець уже побачив би анімацію).
+     */
+    private static double attackRangeBlocks = 0.0;
 
     // ── Показники виживого ───────────────────────────────────────────────
     private static int hp = 0;
@@ -72,6 +82,15 @@ public final class ClientMatchState {
     private static boolean rescueAsVictim = false;
     private static long rescueUpdatedAtMs = 0;
 
+    // ── Пастки маньяка (TrapLoadoutPacket) ───────────────────────────────
+    // trapIds — що узяв маньяк, у порядку клавіш 5/6/7. trapPlaceRange —
+    // серверна дальність розміщення: клієнт НЕ читає конфіг, бо на
+    // виділеному сервері його файлу в клієнта немає.
+    // activeTrapSlot — який слот зараз у режимі розміщення (-1 = жодного).
+    private static List<String> trapIds = List.of();
+    private static double trapPlaceRange = 0.0;
+    private static int activeTrapSlot = -1;
+
     // ── Ростер (tab-екран) ───────────────────────────────────────────────
     private static List<RosterSyncPacket.RosterEntry> roster = List.of();
 
@@ -91,9 +110,10 @@ public final class ClientMatchState {
         if (next == GamePhase.LOBBY || next == GamePhase.RESET) reset();
     }
 
-    static void setRole(RoleSyncPacket.Role newRole, String newArchetypeId) {
+    static void setRole(RoleSyncPacket.Role newRole, String newArchetypeId, double newAttackRangeBlocks) {
         role = newRole;
         archetypeId = newArchetypeId;
+        attackRangeBlocks = newAttackRangeBlocks;
     }
 
     static void setVitals(int newHp, int newMaxHp, float newStamina,
@@ -144,6 +164,19 @@ public final class ClientMatchState {
         rescueUpdatedAtMs = System.currentTimeMillis();
     }
 
+    static void setTrapLoadout(List<String> ids, double placeRange) {
+        trapIds = List.copyOf(ids);
+        trapPlaceRange = placeRange;
+        // Слот, якого більше нема (новий набір коротший, або пастки зникли),
+        // не може лишатись активним: режим розміщення вказував би в порожнечу.
+        if (activeTrapSlot >= trapIds.size()) activeTrapSlot = -1;
+    }
+
+    /** Увійти в режим розміщення слота, або вийти (-1). Лише клієнтський стан. */
+    public static void setActiveTrapSlot(int slot) {
+        activeTrapSlot = (slot >= 0 && slot < trapIds.size()) ? slot : -1;
+    }
+
     static void setRoster(List<RosterSyncPacket.RosterEntry> entries) {
         roster = List.copyOf(entries);
     }
@@ -156,6 +189,7 @@ public final class ClientMatchState {
     public static void reset() {
         role = RoleSyncPacket.Role.SPECTATOR;
         archetypeId = "";
+        attackRangeBlocks = 0.0;
         hp = 0;
         maxHp = 0;
         stamina = 1f;
@@ -168,6 +202,9 @@ public final class ClientMatchState {
         highlight = List.of();
         highlightUntilTick = 0;
         roster = List.of();
+        trapIds = List.of();
+        trapPlaceRange = 0.0;
+        activeTrapSlot = -1;
         downed = List.of();
         downedMaxTicks.clear();
         rescueRequired = 0;
@@ -225,6 +262,7 @@ public final class ClientMatchState {
     public static boolean isSurvivor()         { return role == RoleSyncPacket.Role.SURVIVOR; }
     public static RoleSyncPacket.Role role()   { return role; }
     public static String archetypeId()         { return archetypeId; }
+    public static double attackRangeBlocks()   { return attackRangeBlocks; }
 
     public static int hp()                     { return hp; }
     public static int maxHp()                  { return maxHp; }
@@ -282,4 +320,11 @@ public final class ClientMatchState {
     public static List<RosterSyncPacket.RosterEntry> roster() {
         return roster;
     }
+
+    /** id обраних пасток у порядку клавіш 5/6/7. */
+    public static List<String> trapIds()          { return trapIds; }
+    public static double trapPlaceRange()         { return trapPlaceRange; }
+    /** Слот у режимі розміщення; -1, якщо режим не активний. */
+    public static int activeTrapSlot()            { return activeTrapSlot; }
+    public static boolean isPlacingTrap()         { return activeTrapSlot >= 0; }
 }

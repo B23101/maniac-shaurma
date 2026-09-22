@@ -29,6 +29,9 @@ public final class ManiacRegistry {
     private static final Map<String, ManiacArchetype> BY_ID = new LinkedHashMap<>();
 
     static {
+        // ТИМЧАСОВО: тестовий маньяк, поки немає справжнього. Замінити
+        // справжнім = прибрати цей рядок і додати свій (див. TestManiacArchetype).
+        register(new TestManiacArchetype());
         // register(new XxxArchetype());
     }
 

@@ -40,8 +40,8 @@ public final class ClientPacketHandler {
         }
     }
 
-    public static void onRole(RoleSyncPacket.Role role, String archetypeId) {
-        ClientMatchState.setRole(role, archetypeId);
+    public static void onRole(RoleSyncPacket.Role role, String archetypeId, double attackRangeBlocks) {
+        ClientMatchState.setRole(role, archetypeId, attackRangeBlocks);
     }
 
     /** Конфіг блиску предметів на землі ({@code loot.sparkleEnabled}), синхронізований із сервера. */
@@ -64,6 +64,35 @@ public final class ClientPacketHandler {
 
     public static void onStandUpProgress(int presses, int required) {
         ClientMatchState.setStandUpProgress(presses, required);
+    }
+
+    /**
+     * Застосований набір пасток. Якщо в цю мить відкритий екран вибору
+     * ({@link com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen}) —
+     * це підтвердження прийнято, закриваємо його. Прийти без відкритого
+     * екрана — звичайний випадок (RANDOM без вибору, чи автовибір на
+     * старті гри): тоді тут нема чого закривати.
+     */
+    public static void onTrapLoadout(java.util.List<String> trapIds, double placeRange) {
+        ClientMatchState.setTrapLoadout(trapIds, placeRange);
+        if (Minecraft.getInstance().screen instanceof com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen) {
+            Minecraft.getInstance().setScreen(null);
+        }
+    }
+
+    /**
+     * Сигнал відкрити екран вибору пасток. Якщо він УЖЕ відкритий
+     * (реконект, повторна відправка) — оновлюємо дані замість другого
+     * екрана поверх першого.
+     */
+    public static void onTrapCatalog(java.util.List<String> trapIds, int limit) {
+        var screen = Minecraft.getInstance().screen;
+        if (screen instanceof com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen choose) {
+            choose.onCatalogUpdated(trapIds, limit);
+        } else {
+            Minecraft.getInstance().setScreen(
+                new com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen(trapIds, limit));
+        }
     }
 
     public static void onAbilityCooldown(String abilityId, int totalTicks) {

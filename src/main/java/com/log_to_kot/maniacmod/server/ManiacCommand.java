@@ -35,6 +35,8 @@ import java.util.Map;
  *   /maniac stop                  — примусове завершення
  *   /maniac debug                 — увімкнути/вимкнути дебаг-режим
  *   /maniac debug role <auto|maniac|survivor> — роль для дебаг-старту
+ *   /maniac debug traps           — дебаг: примусово відкрити TrapChooseScreen виконавцю
+ *   /maniac debug unmorph         — дебаг: зняти роль маньяка з виконавця в БУДЬ-ЯКІЙ фазі (не лише лобі)
  *   /maniac morph <maniac|survivor|reset> — дебаг-перетворення в лобі
  *   /maniac phase <фаза>          — ручний перехід (налагодження)
  *   /maniac status                — хто в якій ролі, яка фаза, чи готова карта
@@ -80,8 +82,23 @@ public final class ManiacCommand {
         root.then(Commands.literal("settings")
             .executes(ctx -> openSettings(ctx.getSource())));
 
+        // ── /maniac debug ────────────────────────────────────────────────
+        // Піддерево дебаг-інструментів, згруповане в одному місці за
+        // єдиним стилем (кожна гілка = один сценарій тестування, коротке
+        // "чому" у docstring відповідного private-методу):
+        //   /maniac debug                       — статус (нічого не змінює)
+        //   /maniac debug on|off                 — явно увімк./вимк. (без вгадування з toggle)
+        //   /maniac debug role <auto|maniac|survivor>
+        //   /maniac debug swap maniac [гравець]  — гаряче перетворення, БУДЬ-ЯКА фаза, без spectator
+        //   /maniac debug swap survivor [гравець]
+        //   /maniac debug traps
+        //   /maniac debug unmorph [гравець]      — зняти роль, БУДЬ-ЯКА фаза
         root.then(Commands.literal("debug")
-            .executes(ctx -> toggleDebug(ctx.getSource()))
+            .executes(ctx -> debugStatus(ctx.getSource()))
+            .then(Commands.literal("on")
+                .executes(ctx -> setDebug(ctx.getSource(), true)))
+            .then(Commands.literal("off")
+                .executes(ctx -> setDebug(ctx.getSource(), false)))
             .then(Commands.literal("role")
                 .then(Commands.argument("role", StringArgumentType.word())
                     .suggests((ctx, builder) -> {
@@ -91,8 +108,32 @@ public final class ManiacCommand {
                         return builder.buildFuture();
                     })
                     .executes(ctx -> setDebugRole(ctx.getSource(),
-                        StringArgumentType.getString(ctx, "role"))))));
+                        StringArgumentType.getString(ctx, "role")))))
+            .then(Commands.literal("swap")
+                .then(Commands.literal("maniac")
+                    .executes(ctx -> debugSwapManiac(ctx.getSource(),
+                        ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null))
+                    .then(Commands.argument("player", EntityArgument.player())
+                        .executes(ctx -> debugSwapManiac(ctx.getSource(),
+                            EntityArgument.getPlayer(ctx, "player")))))
+                .then(Commands.literal("survivor")
+                    .executes(ctx -> debugSwapSurvivor(ctx.getSource(),
+                        ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null))
+                    .then(Commands.argument("player", EntityArgument.player())
+                        .executes(ctx -> debugSwapSurvivor(ctx.getSource(),
+                            EntityArgument.getPlayer(ctx, "player"))))))
+            .then(Commands.literal("traps")
+                .executes(ctx -> debugTraps(ctx.getSource())))
+            .then(Commands.literal("unmorph")
+                .executes(ctx -> debugUnmorph(ctx.getSource(),
+                    ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null))
+                .then(Commands.argument("player", EntityArgument.player())
+                    .executes(ctx -> debugUnmorph(ctx.getSource(),
+                        EntityArgument.getPlayer(ctx, "player"))))));
 
+        // /maniac morph — лобі-механіка "хто ким буде до старту матчу"
+        // (не дебаг-інструмент mid-match: для гарячого перетворення
+        // посеред матчу є /maniac debug swap).
         root.then(Commands.literal("morph")
             .then(Commands.literal("maniac")
                 .executes(ctx -> morphManiac(ctx.getSource(),
@@ -349,10 +390,41 @@ public final class ManiacCommand {
         return 1;
     }
 
-    private static int toggleDebug(CommandSourceStack source) {
-        boolean nowOn = DebugMode.toggleRuntime();
+    /**
+     * {@code /maniac debug} без аргументів — показує поточний стан
+     * замість того, щоб щось міняти наосліп. Раніше голе {@code /maniac
+     * debug} перемикало runtime-toggle (увімкнено/вимкнено) без жодного
+     * підтвердження, ким саме зараз керує режим (конфіг чи runtime), і
+     * без згадки поточної ролі — довелось би пам'ятати стан напам'ять
+     * або зазирати в конфіг-файл. Явні {@code on}/{@code off} нижче
+     * лишають toggle-семантику доступною, але свідомою, а не побічним
+     * ефектом виклику без аргументів.
+     */
+    private static int debugStatus(CommandSourceStack source) {
+        boolean enabled = DebugMode.enabled();
+        boolean runtimeOn = DebugMode.isRuntimeToggled();
+        boolean configOn = ManiacConfigs.get(ConfigSchema.DEBUG_MODE);
+        source.sendSuccess(() -> Component.literal(
+            "Дебаг-режим: " + (enabled ? "§aувімкнено" : "§7вимкнено")
+            + " (runtime=" + runtimeOn + ", конфіг=" + configOn + ")"
+            + " | роль: " + DebugMode.role().name().toLowerCase()), false);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug on} / {@code /maniac debug off} — явний
+     * перемикач runtime-toggle замість вгадування напряму зі старого
+     * {@code /maniac debug} без аргументів. Ідемпотентно: повторний
+     * {@code on}, коли вже увімкнено (через конфіг чи попередній
+     * runtime-toggle), не робить нічого зайвого — просто підтверджує
+     * стан.
+     */
+    private static int setDebug(CommandSourceStack source, boolean on) {
+        if (DebugMode.isRuntimeToggled() != on) {
+            DebugMode.toggleRuntime();
+        }
         source.sendSuccess(() -> Component.translatable(
-            nowOn ? "maniacmod.command.debug_on" : "maniacmod.command.debug_off"), true);
+            on ? "maniacmod.command.debug_on" : "maniacmod.command.debug_off"), true);
         return 1;
     }
 
@@ -374,6 +446,152 @@ public final class ManiacCommand {
         DebugMode.setRuntimeRole(role);
         source.sendSuccess(() -> Component.translatable(
             "maniacmod.command.debug_role_set", role.name()), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug traps} — UI-тест {@code TrapChooseScreen} без
+     * залежності від того, скільки пасток реально зареєстровано.
+     *
+     * ── Навіщо окрема команда ────────────────────────────────────────
+     * Звичайний шлях ({@code TrapModule#syncCatalogIfChoiceNeeded}) не
+     * шле каталог, якщо пасток архетипу ≤ ліміту (зараз завжди так,
+     * бо в {@code TrapRegistry} лише 1 пастка) — екран вибору просто
+     * не з'явиться, скільки не морф. Ця команда шле
+     * {@link com.log_to_kot.maniacmod.net.s2c.traps.TrapCatalogPacket}
+     * напряму через {@code TrapModule#debugForceCatalog}, в обхід тієї
+     * перевірки, — суто клієнтський UI-тест, ігрову логіку вибору не
+     * чіпає.
+     *
+     * ── Що робить крок за кроком ─────────────────────────────────────
+     *  1) Виконавець має бути гравцем (не консоль) і в матчі має йти
+     *     фаза LOBBY — так само, як {@code /maniac morph}, бо
+     *     {@link com.log_to_kot.maniacmod.core.match.MatchOrchestrator#morphManiac}
+     *     інакше нічого не робить.
+     *  2) Якщо виконавець ще не маньяк — морфимо його
+     *     (той самий шлях, що {@code /maniac morph maniac}), архетип =
+     *     перший з реєстру (або {@code TestManiacArchetype}, поки
+     *     справжнього нема). Якщо реєстр порожній — команда відмовляє:
+     *     без архетипу немає списку пасток, який можна було б показати.
+     *  3) Форсимо каталог. {@code debugForceCatalog} повертає 0, лише
+     *     якщо в архетипу взагалі немає жодної пастки в
+     *     {@code traps()} — тоді екрану нема що показувати навіть
+     *     примусово, і адмін отримує зрозуміле повідомлення, а не
+     *     порожній екран.
+     */
+    private static int debugTraps(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        if (!match.phases().is(GamePhase.LOBBY)) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_lobby_only"));
+            return 0;
+        }
+
+        ManiacArchetype archetype = match.maniacArchetype();
+        if (!match.isManiac(player.getUUID()) || archetype == null) {
+            if (ManiacRegistry.isEmpty()) {
+                source.sendFailure(Component.translatable("maniacmod.command.no_maniacs"));
+                return 0;
+            }
+            archetype = ManiacRegistry.all().values().iterator().next();
+            match.morphManiac(player, archetype);
+        }
+
+        int count = match.traps().debugForceCatalog(player, archetype);
+        if (count == 0) {
+            source.sendFailure(Component.translatable("maniacmod.command.debug_traps_empty"));
+            return 0;
+        }
+
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.debug_traps_opened", count), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug unmorph [гравець]} — дебаг-зняття ролі
+     * (маньяка чи виживого) з гравця в БУДЬ-ЯКІЙ фазі матчу, не лише в
+     * лобі (на відміну від {@code /maniac morph reset}, який лишається
+     * обмежений лобі — це звичайна лобі-механіка, її поведінку не
+     * чіпаємо). Без аргументу — виконавець сам собі; з аргументом —
+     * можна зняти роль будь-кому, як і решта дебаг-команд з опціональним
+     * гравцем.
+     *
+     * Стан самого матчу (фаза, чи лишився ще хтось маньяком) свідомо
+     * НЕ підлаштовується — команда для дебаг-зміни ролі, а не для
+     * ігрової здачі/капітуляції. Див. {@link MatchOrchestrator#debugUnmorph}
+     * щодо того, чому це окремий метод, а не просто зняте обмеження
+     * фази в {@code unmorph}.
+     */
+    private static int debugUnmorph(CommandSourceStack source, ServerPlayer player) {
+        if (player == null) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        match.debugUnmorph(player);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_reset"), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug swap maniac [гравець]} — гаряче перетворення
+     * на маньяка в БУДЬ-ЯКІЙ фазі матчу (на відміну від {@code /maniac
+     * morph maniac}, обмеженого лобі). Без аргументу — виконавець сам
+     * собі.
+     *
+     * ── Чому не через SPECTATOR ──────────────────────────────────────
+     * Раніше єдиний шлях перетворити виживого на маньяка мід-матч —
+     * спершу {@code /maniac debug unmorph} (виживий → глядач), і лише
+     * тоді {@code /maniac morph maniac} — але та команда сама обмежена
+     * LOBBY, тож і це не працювало поза лобі. Ця команда обходить
+     * SPECTATOR узагалі: {@link MatchOrchestrator#debugSwapToManiac}
+     * знімає стару роль (якщо була) і одразу призначає нову — гравець
+     * ніколи не бачить проміжного стану глядача.
+     *
+     * Архетип: якщо реєстр не порожній — перший зареєстрований (як і
+     * дебаг-старт "ти маньяк"); порожній реєстр — {@code null}, гравець
+     * обирає сам у меню, якщо фаза це дозволяє.
+     */
+    private static int debugSwapManiac(CommandSourceStack source, ServerPlayer player) {
+        if (player == null) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        ManiacArchetype archetype = ManiacRegistry.isEmpty()
+            ? null : ManiacRegistry.all().values().iterator().next();
+        match.debugSwapToManiac(player, archetype);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_maniac"), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug swap survivor [гравець]} — гаряче
+     * перетворення на виживого в БУДЬ-ЯКІЙ фазі матчу (на відміну від
+     * {@code /maniac morph survivor}, обмеженого лобі). Без аргументу —
+     * виконавець сам собі. Так само, як {@link #debugSwapManiac}, у
+     * жодний момент не проходить через SPECTATOR: якщо гравець щойно
+     * був маньяком, {@link MatchOrchestrator#debugSwapToSurvivor} знімає
+     * маньячі модифікатори і одразу видає роль виживого.
+     */
+    private static int debugSwapSurvivor(CommandSourceStack source, ServerPlayer player) {
+        if (player == null) {
+            source.sendFailure(Component.translatable("maniacmod.command.morph_need_player"));
+            return 0;
+        }
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        match.debugSwapToSurvivor(player);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_survivor"), true);
         return 1;
     }
 

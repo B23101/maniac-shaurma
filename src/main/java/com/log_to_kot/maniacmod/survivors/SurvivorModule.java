@@ -201,6 +201,7 @@ public final class SurvivorModule implements PhaseListener {
             rescueProgressTicks.clear();
             legRulesApplied.clear();
             pendingLegBreak.clear();
+            legIntegrity.clear();
             standUpPresses.clear();
             // Нова гра — підсвітка знову готова. Клієнтові окремо нічого
             // слати не треба: ClientMatchState.reset() гасить кулдауни
@@ -254,6 +255,7 @@ public final class SurvivorModule implements PhaseListener {
             if (!match().isSurvivor(player.getUUID())) continue;
 
             tickBrokenLegStamina(player);
+            tickLegIntegrity(player);
             float heartbeat = computeHeartbeat(player, maniac);
             sendVitals(player, heartbeat, false);
         }
@@ -410,6 +412,7 @@ public final class SurvivorModule implements PhaseListener {
         lastSentVitals.remove(player.getUUID());
         legRulesApplied.remove(player.getUUID());
         pendingLegBreak.remove(player.getUUID());
+        legIntegrity.remove(player.getUUID());
         standUpPresses.remove(player.getUUID());
         highlightCooldownTicks.remove(player.getUUID());
         bleedOutTicksLeft.remove(player.getUUID());
@@ -431,6 +434,7 @@ public final class SurvivorModule implements PhaseListener {
         UUID id = player.getUUID();
         unlockMovement(player);
         pendingLegBreak.remove(id);
+        legIntegrity.remove(id);
         standUpPresses.remove(id);
         legRulesApplied.remove(id);
         lastSentVitals.remove(id);
@@ -693,6 +697,75 @@ public final class SurvivorModule implements PhaseListener {
     /** UUID → чи зламається нога, коли гравець підведеться з поточного CRAWLING. */
     private final Map<UUID, Boolean> pendingLegBreak = new HashMap<>();
 
+    /**
+     * UUID → ПРИХОВАНА міцність ніг, 0..{@link #LEG_INTEGRITY_MAX}. Немає запису = повна.
+     *
+     * Клієнту не надсилається НІКОЛИ: за дизайном гравець не знає, скільки
+     * ще витримають ноги, — він дізнається лише коли хруснуло. Тому це
+     * окреме поле, а не частина {@code VitalsPacket}/{@code RosterEntry}.
+     * Живе поруч із {@link #pendingLegBreak}, бо це той самий домен —
+     * «що стається з ногою» — просто інше джерело: падіння вирішує
+     * ногу за ОДИН раз, пастки — накопичують шкоду.
+     */
+    private final Map<UUID, Float> legIntegrity = new HashMap<>();
+
+    /** Повна міцність ніг. */
+    public static final float LEG_INTEGRITY_MAX = 100f;
+
+    /**
+     * Пастка вдарила по ногах. Знімає {@code amount} з прихованої шкали;
+     * якщо вона дійшла до нуля і нога ще ціла — ламає її.
+     *
+     * Ламання йде тим самим шляхом, що й після падіння (стан
+     * {@code BROKEN_LEG} + звук), тож наслідки — без стаміни й стрибка —
+     * не дублюються. Лежачому/непритомному ногу не ламаємо: його стан
+     * уже важчий, а {@code BROKEN_LEG} перезаписав би CRAWLING.
+     * Шкала при цьому все одно зменшується — це «накопичена втома ніг».
+     *
+     * @return true, якщо саме цим ударом нога зламалась
+     */
+    public boolean onTrapLegDamage(ServerPlayer player, float amount) {
+        if (amount <= 0f) return false;
+        UUID id = player.getUUID();
+        if (!match().isSurvivor(id)) return false;
+
+        float next = Math.max(0f, legIntegrity.getOrDefault(id, LEG_INTEGRITY_MAX) - amount);
+        legIntegrity.put(id, next);
+        if (next > 0f) return false;
+
+        SurvivorState current = match().survivorStateOf(id);
+        if (current != SurvivorState.HEALTHY) return false; // уже BROKEN_LEG / лежить
+
+        match().setSurvivorState(id, SurvivorState.BROKEN_LEG);
+        player.level().playSound(null, player.blockPosition(),
+            ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+        sendVitals(player, true);
+        broadcastRosterFor(player);
+        return true;
+    }
+
+    /**
+     * Нога загоєна (шина): шкала повертається на максимум, інакше одразу
+     * після лікування наступний капкан зламав би ногу знову.
+     */
+    private void restoreLegIntegrity(UUID id) {
+        legIntegrity.remove(id);
+    }
+
+    /** Повільна регенерація прихованої шкали. Тікається раз на тік у {@link #onPhaseTick}. */
+    private void tickLegIntegrity(ServerPlayer player) {
+        UUID id = player.getUUID();
+        Float value = legIntegrity.get(id);
+        if (value == null) return;
+        if (match().traps().isTrapped(id)) return; // поки в пастці — не гоїться
+        double perSecond = ManiacConfigs.get(ConfigSchema.LEG_INTEGRITY_REGEN_PER_SECOND);
+        if (perSecond <= 0.0) return;
+
+        float next = (float) Math.min(LEG_INTEGRITY_MAX, value + perSecond / 20.0);
+        if (next >= LEG_INTEGRITY_MAX) legIntegrity.remove(id);
+        else legIntegrity.put(id, next);
+    }
+
     /** Накопичені натискання пробілу поточної спроби встати. */
     private final Map<UUID, Integer> standUpPresses = new HashMap<>();
 
@@ -759,6 +832,7 @@ public final class SurvivorModule implements PhaseListener {
      * іконку/розблоковану шкалу, не чекаючи throttled sendVitals.
      */
     public void onSplintApplied(ServerPlayer player) {
+        restoreLegIntegrity(player.getUUID());
         sendVitals(player, true);
     }
 
@@ -1207,7 +1281,7 @@ public final class SurvivorModule implements PhaseListener {
     private void becomeSpectator(ServerPlayer player) {
         gameModeBeforeSpectating.putIfAbsent(player.getUUID(), player.gameMode.getGameModeForPlayer());
         player.setGameMode(GameType.SPECTATOR);
-        ModNetwork.toPlayer(player, new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, ""));
+        ModNetwork.toPlayer(player, new RoleSyncPacket(RoleSyncPacket.Role.SPECTATOR, "", 0.0));
     }
 
     private void restoreGameModes(List<ServerPlayer> players) {

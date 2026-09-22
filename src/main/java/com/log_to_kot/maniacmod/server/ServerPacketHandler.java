@@ -51,7 +51,14 @@ public final class ServerPacketHandler {
         // AbilityCooldownPacket.abilityId(slot) ОДИН раз.
     }
 
-    /** Пастка за номером слота Z/X/C. */
+    /**
+     * Маньяк підтвердив розміщення пастки з обраного слота (ПКМ у режимі
+     * розміщення). Слот 0..2 = клавіші 5/6/7.
+     *
+     * Сюди приходить лише «слот N, підтверджую»: куди дивиться маньяк,
+     * дальність, фазу, перезарядку й валідність місця сервер перераховує
+     * сам у {@code TrapModule#onPlaceConfirmed}.
+     */
     public static void onTrapPlace(ServerPlayer player, int slot) {
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return;
@@ -59,13 +66,43 @@ public final class ServerPacketHandler {
         if (!match.isManiac(player.getUUID())) return;
         if (!match.phases().allows(PhaseRule.TRAPS)) return;
 
-        ManiacArchetype archetype = match.maniacArchetype();
-        if (archetype == null) return;
-        if (archetype.trapAt(slot) == null) return;
+        match.traps().onPlaceConfirmed(player, slot);
+    }
 
-        // TODO(міграція traps): порахувати позицію по погляду гравця,
-        // перевірити TrapPlacementRules і кулдаун слота.
-        // Позиція навмисно рахується тут, а не приходить у пакеті.
+    /**
+     * Маньяк обрав пастки в меню. Уся валідація (реальні індекси, без
+     * дублів, не більше ліміту) — у {@code TrapModule#onTrapsChosen}; тут
+     * лише перевірка ролі й фази. Обирати можна тільки до початку
+     * полювання: посеред матчу міняти набір пасток не можна.
+     */
+    public static void onTrapsChosen(ServerPlayer player, java.util.List<Integer> indices) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        if (!match.isManiac(player.getUUID())) return;
+        if (!match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.ROLE_REVEAL)
+            && !match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY)) return;
+
+        match.traps().onTrapsChosen(player, indices);
+        match.traps().syncLoadout(player);
+    }
+
+    /**
+     * Маньяк тиснув ЛКМ ({@code ManiacStrikePacket}) — БЕЗ цілі від
+     * клієнта. Ціль (якщо є) шукає сам {@code ManiacCombatModule#onAttack}
+     * у конусі погляду на дистанції архетипу — див. докстрінг модуля
+     * щодо того, чому не можна довіряти клієнтському raytrace/цілі.
+     *
+     * Роль перевіряється тут теж (не лише всередині {@code onAttack}) —
+     * той самий стиль, що решта хендлерів: мовчки ігноруємо намір від
+     * того, хто зараз не маньяк, а не покладаємось, що виклик усередині
+     * модуля один прибере проблему.
+     */
+    public static void onManiacStrike(ServerPlayer player) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        if (!match.isManiac(player.getUUID())) return;
+
+        match.combat().onAttack(player);
     }
 
     public static void onManiacSelected(ServerPlayer player, String maniacId) {

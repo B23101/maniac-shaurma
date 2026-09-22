@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod.spawn;
 
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
+import com.log_to_kot.maniacmod.core.match.DebugMode;
 import net.minecraft.core.BlockPos;
 
 import java.util.ArrayList;
@@ -34,6 +35,16 @@ import java.util.UUID;
  *   4. Якщо комусь не вистачило — послаблюємо обидві дистанції на
  *      RELAXATION_STEP і пробуємо ще раз (до MAX_RELAXATION_PASSES).
  *      Умова "1 точка = 1 гравець" НІКОЛИ не послаблюється.
+ *
+ * ── Генератори та лут не залежать від того, скільки виживих ─────────
+ * {@code survivorIds} може бути порожнім (дебаг-режим «лише маньяк») —
+ * це впливає ЛИШЕ на {@link #tryAssign} (нема кого розставляти по
+ * SURVIVOR-точках). Вибір точок генераторів ({@link #pickGeneratorPoints})
+ * і луту ({@link #pickItemPoints}) від survivorIds не залежить узагалі:
+ * одиночний тест «я маньяк, виживих немає» усе одно отримує повний
+ * набір генераторів і предметів на карті. Єдине, від чого не звільнений
+ * дебаг, — розмітка самої карти: генератор фізично не з'явиться там, де
+ * немає жодної розміченої GENERATOR-точки.
  */
 public final class SpawnPlanner {
 
@@ -206,11 +217,24 @@ public final class SpawnPlanner {
         int required = ManiacConfigs.get(ConfigSchema.GENERATORS_REQUIRED);
         int bonusPerManiac = ManiacConfigs.get(ConfigSchema.BONUS_GENERATORS_PER_MANIAC);
         int desired = required + bonusPerManiac * Math.max(0, numManiacs);
+
         if (pool.size() < desired) {
-            throw new SpawnPlanFailure("Потрібно щонайменше " + desired
-                + " точок генераторів (" + required + " на ремонт + "
-                + bonusPerManiac + "×" + numManiacs + " бонусних), а налаштовано "
-                + pool.size() + ".");
+            // Дебаг: розмітки генераторів бракує — не валимо ВЕСЬ план
+            // (і разом з ним предмети та спавн гравців) через це. Беремо
+            // стільки генераторів, скільки реально розмічено (навіть 0) —
+            // одиночний тест маньяка без жодної точки генератора мусить
+            // усе одно отримати свій спавн і свій лут, а не порожній
+            // SpawnPlan.empty(). Звичайний (не дебаг) режим лишається
+            // суворим: нестача розмітки тут завжди помилка налаштування
+            // карти, яку краще побачити в лобі, ніж посеред матчу.
+            if (DebugMode.enabled()) {
+                desired = pool.size();
+            } else {
+                throw new SpawnPlanFailure("Потрібно щонайменше " + desired
+                    + " точок генераторів (" + required + " на ремонт + "
+                    + bonusPerManiac + "×" + numManiacs + " бонусних), а налаштовано "
+                    + pool.size() + ".");
+            }
         }
 
         return GeneratorPointSelector.select(

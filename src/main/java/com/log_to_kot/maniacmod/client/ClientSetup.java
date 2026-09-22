@@ -12,12 +12,15 @@ import com.log_to_kot.maniacmod.client.overlay.actionprogress.RescueOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.DownedSurvivorMarker;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacHotbarOverlay;
+import com.log_to_kot.maniacmod.client.overlay.hotbar.TrapPanelOverlay;
 import com.log_to_kot.maniacmod.client.overlay.roster.TabRosterOverlay;
 import com.log_to_kot.maniacmod.client.overlay.debug.DebugOverlay;
 import com.log_to_kot.maniacmod.client.overlay.vitals.SurvivorVitalsOverlay;
 import com.log_to_kot.maniacmod.client.overlay.vitals.LowHpVignetteOverlay;
+import com.log_to_kot.maniacmod.client.renderer.CrowbarDurabilityDecorator;
 import com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator;
 import com.log_to_kot.maniacmod.client.renderer.GroundItemRenderer;
+import com.log_to_kot.maniacmod.client.renderer.BearTrapRenderer;
 import com.log_to_kot.maniacmod.client.renderer.GeneratorRenderer;
 import com.log_to_kot.maniacmod.registry.ModEntityTypes;
 import com.log_to_kot.maniacmod.registry.ModItems;
@@ -127,6 +130,7 @@ public final class ClientSetup {
     public static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {
         event.registerEntityRenderer(ModEntityTypes.GROUND_ITEM.get(), GroundItemRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.GENERATOR.get(), GeneratorRenderer::new);
+        event.registerEntityRenderer(ModEntityTypes.BEAR_TRAP.get(), BearTrapRenderer::new);
         // TODO(міграція maniacs): рендерер маньяка додається сюди.
     }
 
@@ -139,6 +143,7 @@ public final class ClientSetup {
     @SubscribeEvent
     public static void onRegisterItemDecorations(RegisterItemDecorationsEvent event) {
         event.register(ModItems.get("fuel_canister").get(), new FuelCanisterChargeDecorator());
+        event.register(ModItems.get("crowbar").get(), new CrowbarDurabilityDecorator());
     }
 
     @SubscribeEvent
@@ -167,6 +172,9 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_rescue",
             (gui, graphics, partialTick, width, height) ->
                 RescueOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "maniac_trap_panel",
+            (gui, graphics, partialTick, width, height) ->
+                TrapPanelOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "maniac_survivor_vitals",
             (gui, graphics, partialTick, width, height) ->
                 SurvivorVitalsOverlay.render(graphics));

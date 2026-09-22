@@ -9,7 +9,6 @@ import com.log_to_kot.maniacmod.net.c2s.hold.RescueHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.AbilityActivatePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.HighlightTogglePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.StandUpPacket;
-import com.log_to_kot.maniacmod.net.c2s.intent.TrapPlacePacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import net.minecraft.client.Minecraft;
@@ -145,7 +144,12 @@ public final class ClientInputHandler {
         }
     }
 
-    /** Клавіші Z, X, C — пастки маньяка. */
+    /**
+     * Клавіші 5, 6, 7 — пастки маньяка. Натиск НЕ ставить пастку, а
+     * відкриває режим розміщення ({@code TrapPlacementController}):
+     * маньяк наводить приціл на блок і підтверджує ПКМ. Повторне
+     * натискання того ж слота вимикає режим.
+     */
     private static void handleTraps() {
         if (!ClientMatchState.isManiac()) return;
         if (!ClientMatchState.allows(PhaseRule.TRAPS)) return;
@@ -155,8 +159,11 @@ public final class ClientInputHandler {
             while (ManiacKeybinds.TRAPS[slot].consumeClick()) pressed = true;
             if (!pressed) continue;
 
+            // Слот без пастки (маньяк узяв менше трьох) чи на перезарядці —
+            // режим не відкриваємо: підтвердити в ньому однаково нічого.
+            if (slot >= ClientMatchState.trapIds().size()) continue;
             if (onCooldown(AbilityCooldownPacket.trapId(slot))) continue;
-            ModNetwork.toServer(new TrapPlacePacket(slot));
+            com.log_to_kot.maniacmod.client.traps.TrapPlacementController.toggle(slot);
         }
     }
 
