@@ -50,8 +50,8 @@ public final class ClientPacketHandler {
     }
 
     public static void onVitals(int hp, int maxHp, float stamina,
-                                SurvivorState state, float heartbeat) {
-        ClientMatchState.setVitals(hp, maxHp, stamina, state, heartbeat);
+                                SurvivorState state, float heartbeat, boolean trapped) {
+        ClientMatchState.setVitals(hp, maxHp, stamina, state, heartbeat, trapped);
     }
 
     public static void onDownedSurvivors(List<com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket.Entry> entries) {
@@ -191,6 +191,18 @@ public final class ClientPacketHandler {
     /** Генератор вибухнув — червоний маркер на екрані, див. {@code GeneratorExplosionMarker}. */
     public static void onGeneratorExplosion(net.minecraft.core.BlockPos pos, int durationTicks) {
         com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.show(pos, durationTicks);
+    }
+
+    /**
+     * Маньяк оглушений ударом лома (чи оглушення скінчилось). Просто
+     * записуємо в клієнтський стан — рендер (HUD-зірочки для себе,
+     * world-зірочки над головою для всіх) читає
+     * {@code ClientMatchState.isManiacStunned(...)} самостійно кожен
+     * кадр, тут нема кого "показати" одноразово (див. докстрінг
+     * {@code ManiacStunPacket}).
+     */
+    public static void onManiacStun(java.util.UUID maniacId, boolean stunned, int totalTicks) {
+        ClientMatchState.setManiacStun(maniacId, stunned, totalTicks);
     }
 
     // ── Меню налаштувань ─────────────────────────────────────────────────

@@ -11,6 +11,8 @@ import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.RescueOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.DownedSurvivorMarker;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker;
+import com.log_to_kot.maniacmod.client.overlay.notify.ManiacStunWorldMarker;
+import com.log_to_kot.maniacmod.client.overlay.notify.ManiacStunOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacHotbarOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.TrapPanelOverlay;
 import com.log_to_kot.maniacmod.client.overlay.roster.TabRosterOverlay;
@@ -169,6 +171,12 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_downed_marker",
             (gui, graphics, partialTick, width, height) ->
                 DownedSurvivorMarker.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_stun_world_marker",
+            (gui, graphics, partialTick, width, height) ->
+                ManiacStunWorldMarker.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_stun_overlay",
+            (gui, graphics, partialTick, width, height) ->
+                ManiacStunOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_rescue",
             (gui, graphics, partialTick, width, height) ->
                 RescueOverlay.render(graphics));

@@ -101,6 +101,16 @@ public final class MatchOrchestrator {
         new com.log_to_kot.maniacmod.traps.TrapModule(() -> this);
 
     /**
+     * Стан «оглушений маньяк» від удару ломом ПО МАНЬЯКУ. Тримається
+     * полем, бо хук AttackEntityEvent (лом по маньяку) і
+     * ServerPacketHandler (перевірка «чи можна активувати здібність/
+     * поставити пастку зараз») звертаються до нього напряму — той
+     * самий патерн, що combat/traps вище.
+     */
+    private final com.log_to_kot.maniacmod.maniacs.ManiacStunModule maniacStun =
+        new com.log_to_kot.maniacmod.maniacs.ManiacStunModule(() -> this);
+
+    /**
      * Розкладає предмети по ITEM-точках. Не PhaseListener: спавн луту —
      * частина {@link #applySpawnPlan} (як і спавн генераторів), у нього
      * немає власного життєвого циклу. Прибирання лежачих предметів
@@ -139,6 +149,7 @@ public final class MatchOrchestrator {
         phases.register(generators);
         phases.register(combat);
         phases.register(traps);
+        phases.register(maniacStun);
         phases.register(maniacSpeed);
         phases.register(survivors);
         phases.register(worldEnvironment);
@@ -152,6 +163,11 @@ public final class MatchOrchestrator {
     /** Модуль удару — для хука AttackEntityEvent. */
     public ManiacCombatModule combat() {
         return combat;
+    }
+
+    /** Стан «оглушений маньяк» від удару ломом — для хука AttackEntityEvent і ServerPacketHandler. */
+    public com.log_to_kot.maniacmod.maniacs.ManiacStunModule maniacStun() {
+        return maniacStun;
     }
 
     /** Модуль швидкості маньяка — для дебаг-зняття ролі поза лобі (debugUnmorph). */
@@ -1196,6 +1212,7 @@ public final class MatchOrchestrator {
         // Лок руху, прогрес вставання, правила стаміни — усе за UUID.
         survivors.onPlayerLeft(player);
         traps.onPlayerLeft(player);
+        maniacStun.onPlayerLeft(player);
         maniacSpeed.onPlayerLeft(player);
 
         List<ServerPlayer> online = player.getServer().getPlayerList().getPlayers();

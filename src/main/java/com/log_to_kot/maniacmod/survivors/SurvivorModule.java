@@ -16,6 +16,8 @@ import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.forge.stamina.StaminaRules;
 import dev.shaurmalib.forge.stamina.StaminaService;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
@@ -739,6 +741,7 @@ public final class SurvivorModule implements PhaseListener {
         match().setSurvivorState(id, SurvivorState.BROKEN_LEG);
         player.level().playSound(null, player.blockPosition(),
             ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+        spawnLegBreakParticles(player);
         sendVitals(player, true);
         broadcastRosterFor(player);
         return true;
@@ -750,6 +753,24 @@ public final class SurvivorModule implements PhaseListener {
      */
     private void restoreLegIntegrity(UUID id) {
         legIntegrity.remove(id);
+    }
+
+    /**
+     * Партиклі перелому ноги — одна крапка виклику для ОБОХ джерел
+     * (капкан {@link #onTrapLegDamage} і падіння {@link #onStandUpAttempt}),
+     * щоб не дублювати рендер-код у двох місцях. Той самий підхід, що
+     * {@code GeneratorModule#burst}: {@code sendParticles(player, ...)}
+     * з примусовою видимістю для гравців поруч, а не покладання на те,
+     * що клієнт сам вирішить малювати частинки на такій дистанції.
+     */
+    private void spawnLegBreakParticles(ServerPlayer player) {
+        if (!(player.level() instanceof ServerLevel level)) return;
+        for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
+            if (viewer.serverLevel() != level) continue;
+            level.sendParticles(viewer, ParticleTypes.DAMAGE_INDICATOR, true,
+                player.getX(), player.getY() + 1.0, player.getZ(),
+                15, 0.3, 0.5, 0.3, 0.08);
+        }
     }
 
     /** Повільна регенерація прихованої шкали. Тікається раз на тік у {@link #onPhaseTick}. */
@@ -803,6 +824,7 @@ public final class SurvivorModule implements PhaseListener {
             // бути чутна всім поруч, а не лише самому гравцю.
             player.level().playSound(null, player.blockPosition(),
                 ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+            spawnLegBreakParticles(player);
         }
         // Гравець встав — рухається знову, з поламаною ногою чи без.
         unlockMovement(player);
@@ -1441,7 +1463,9 @@ public final class SurvivorModule implements PhaseListener {
                 ? StaminaService.getStamina(player) / StaminaService.getMaxStamina(player)
                 : 0f;
 
-        SurvivorVitalsPacket packet = new SurvivorVitalsPacket(Math.max(hp, 0), Math.max(maxHp, 0), stamina, state, heartbeat);
+        boolean trapped = match().traps().isTrapped(id);
+        SurvivorVitalsPacket packet = new SurvivorVitalsPacket(
+            Math.max(hp, 0), Math.max(maxHp, 0), stamina, state, heartbeat, trapped);
         if (!force && packet.equals(lastSentVitals.get(id))) return;
 
         lastSentVitals.put(id, packet);

@@ -157,6 +157,12 @@ public final class ManiacCombatModule implements PhaseListener {
         if (!match.isManiac(attacker.getUUID())) return false;
         if (!damageAllowed()) return false;
         if (cooldownTicks > 0) return false;
+        // Оглушений ударом лома — «нічого не може» включає атаку.
+        // LockType.ATTACK уже стоїть (ManiacStunModule.beginStun), але,
+        // як і cooldownTicks вище, справжнє блокування тут — явна
+        // перевірка стану, а не сам факт локу (лок — додатковий шар для
+        // бібліотеки/HUD, не єдине джерело правди в цьому модулі).
+        if (match.maniacStun().isStunned(attacker.getUUID())) return false;
 
         ManiacArchetype archetype = match.maniacArchetype();
         if (archetype == null) return false;

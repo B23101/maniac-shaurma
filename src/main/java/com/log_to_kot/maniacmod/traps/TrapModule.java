@@ -396,6 +396,14 @@ public final class TrapModule implements PhaseListener {
             .lock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
 
         info.type().applyEffect(victim, trap.blockPosition());
+
+        // Форс-знімок HUD одразу, а не на наступному throttled тіку:
+        // клієнтський блок руху (MixinKeyboardInputTrapped) читає поле
+        // trapped із SurvivorVitalsPacket і має спрацювати в той самий
+        // момент, що серверний лок, інакше жертва встигає на кадр-два
+        // зрушити з місця до прильоту пакета.
+        MatchOrchestrator m = match();
+        if (m != null) m.survivors().forceVitalsRefresh(victim);
     }
 
     // ── Звільнення ───────────────────────────────────────────────────────
@@ -460,6 +468,12 @@ public final class TrapModule implements PhaseListener {
         ManiacMod.lib().interactionLockModule()
             .unlock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
         immunity.put(victim.getUUID(), RELEASE_IMMUNITY_TICKS);
+
+        // Той самий форс-знімок, що в trigger(): trapped має злетіти на
+        // клієнті миттєво, звільнений гравець рухається одразу після удару
+        // ломом, а не через кадр-два.
+        MatchOrchestrator m = match();
+        if (m != null) m.survivors().forceVitalsRefresh(victim);
     }
 
     private UUID victimOf(UUID trapId) {

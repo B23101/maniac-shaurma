@@ -102,13 +102,25 @@ public class CrowbarItem extends Item implements GeoItem {
     }
 
     /**
-     * Списує міцність за один удар по капкану.
+     * Списує міцність за один удар по капкану ({@code crowbarHitWearPercent}).
      *
      * @return залишок після удару (0..100)
      */
     public static int wear(ItemStack stack) {
-        int cost = ManiacConfigs.get(ConfigSchema.CROWBAR_HIT_WEAR_PERCENT);
-        int next = Math.max(0, getDurability(stack) - cost);
+        return wear(stack, ManiacConfigs.get(ConfigSchema.CROWBAR_HIT_WEAR_PERCENT));
+    }
+
+    /**
+     * Списує міцність за один удар на довільний відсоток. Використовує
+     * {@code ManiacStunModule} для удару ПО МАНЬЯКУ —
+     * {@code crowbarStunHitWearPercent} відрізняється від звичайного
+     * зносу по капкану, тому відсоток приходить параметром, а не
+     * читається тут із конфігу вдруге.
+     *
+     * @return залишок після удару (0..100)
+     */
+    public static int wear(ItemStack stack, int costPercent) {
+        int next = Math.max(0, getDurability(stack) - costPercent);
         setDurability(stack, next);
         return next;
     }

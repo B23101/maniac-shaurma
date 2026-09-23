@@ -39,6 +39,11 @@ public final class ServerPacketHandler {
         if (slot < 0 || slot >= ManiacArchetype.MAX_ABILITIES) return;
         if (!match.isManiac(player.getUUID())) return;
         if (!match.phases().allows(PhaseRule.ABILITIES)) return;
+        // Оглушений ударом лома — «нічого не може» включає здібності.
+        // LockType не покриває цю дію (лише MOVEMENT/ATTACK), тому тут
+        // прямий прапор замість InteractionLock — див. ManiacStunModule
+        // докстрінг, розділ про блокування здібностей/пасток.
+        if (match.maniacStun().isStunned(player.getUUID())) return;
 
         ManiacArchetype archetype = match.maniacArchetype();
         if (archetype == null) return;
@@ -65,6 +70,9 @@ public final class ServerPacketHandler {
         if (slot < 0 || slot >= ManiacArchetype.MAX_TRAP_SLOTS) return;
         if (!match.isManiac(player.getUUID())) return;
         if (!match.phases().allows(PhaseRule.TRAPS)) return;
+        // Оглушений ударом лома — «нічого не може» включає розміщення
+        // пасток. Той самий прямий прапор, що onAbilityActivate вище.
+        if (match.maniacStun().isStunned(player.getUUID())) return;
 
         match.traps().onPlaceConfirmed(player, slot);
     }

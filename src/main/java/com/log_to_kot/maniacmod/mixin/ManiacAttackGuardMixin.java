@@ -103,6 +103,13 @@ public abstract class ManiacAttackGuardMixin {
         // і глушився тільки кулдаун усередині самої гри.
         if (!ClientMatchState.allows(PhaseRule.DAMAGE)) return;
 
+        // Оглушений ударом лома — той самий принцип, що кулдаун нижче:
+        // ні замаху, ні звуку, ні пакета. Сервер і так відхилив би удар
+        // через LockType.ATTACK (ManiacStunModule.beginStun ставить
+        // його поруч із MOVEMENT), але маньяк не повинен бачити анімацію
+        // удару, якого не станеться.
+        if (ClientMatchState.isManiacStunned()) return;
+
         Minecraft mc = Minecraft.getInstance();
         long tick = mc.level != null ? mc.level.getGameTime() : 0L;
 

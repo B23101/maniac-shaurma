@@ -51,6 +51,32 @@ public final class ClientMatchState {
     private static float stamina = 1f;
     private static SurvivorState survivorState = SurvivorState.HEALTHY;
     private static float heartbeat = 0f;
+    /**
+     * Затиснений у капкані ЗАРАЗ. Дзеркалить серверний
+     * {@code TrapModule.isTrapped}; читається клієнтським міксином
+     * блокування руху (той самий підхід, що CRAWLING/UNCONSCIOUS у
+     * {@code MixinKeyboardInputDownedMovement}) — рух глушиться і на
+     * клієнті, не чекаючи ресинку позиції від серверного локу.
+     */
+    private static boolean trapped = false;
+
+    /**
+     * Стан «оглушений маньяк» (удар ломом). На відміну від капкана,
+     * цей стан має ДВА різних глядачі (див. докстрінг
+     * {@code ManiacStunPacket}), тому тут два незалежних записи:
+     *   • {@link #maniacStunSelf} — чи Я, поточний клієнт, оглушений
+     *     (лише коли {@code isManiac()}), з тіком завершення для
+     *     власного блокування руху/камери й локального відліку HUD;
+     *   • {@link #maniacStunUntilTick} — мапа UUID→тік-завершення для
+     *     БУДЬ-ЯКОГО гравця матчу, що зараз оглушений, для world-рендеру
+     *     зірочок над головою (малює для кожного гравця, чий UUID є в
+     *     мапі, незалежно від того, я це чи хтось інший).
+     * Обидва оновлюються з ОДНОГО пакета — просто різні клієнти
+     * перевіряють різне поле залежно від того, чи це "я".
+     */
+    private static long maniacStunSelfUntilTick = 0;
+    private static int maniacStunSelfTotalTicks = 0;
+    private static final Map<UUID, Long> maniacStunUntilTick = new java.util.HashMap<>();
 
     // ── Прогрес вставання після падіння (StandUpProgressPacket) ──────────
     // required == 0 означає "вставання не триває" — шкалу не малювати.
@@ -117,12 +143,46 @@ public final class ClientMatchState {
     }
 
     static void setVitals(int newHp, int newMaxHp, float newStamina,
-                          SurvivorState state, float newHeartbeat) {
+                          SurvivorState state, float newHeartbeat, boolean newTrapped) {
         hp = newHp;
         maxHp = newMaxHp;
         stamina = newStamina;
         survivorState = state;
         heartbeat = newHeartbeat;
+        trapped = newTrapped;
+    }
+
+    /**
+     * @param maniacId    хто оглушений/звільнений
+     * @param stunned     true — почалось, false — скінчилось
+     * @param totalTicks  тривалість у тіках (0, коли stunned == false)
+     */
+    static void setManiacStun(UUID maniacId, boolean stunned, int totalTicks) {
+        long currentTick = currentGameTick();
+        if (!stunned || totalTicks <= 0) {
+            maniacStunUntilTick.remove(maniacId);
+            if (maniacId.equals(selfId())) {
+                maniacStunSelfUntilTick = 0;
+                maniacStunSelfTotalTicks = 0;
+            }
+            return;
+        }
+        long readyAt = currentTick + totalTicks;
+        maniacStunUntilTick.put(maniacId, readyAt);
+        if (maniacId.equals(selfId())) {
+            maniacStunSelfUntilTick = readyAt;
+            maniacStunSelfTotalTicks = totalTicks;
+        }
+    }
+
+    private static long currentGameTick() {
+        var level = net.minecraft.client.Minecraft.getInstance().level;
+        return level != null ? level.getGameTime() : 0L;
+    }
+
+    private static UUID selfId() {
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        return player != null ? player.getUUID() : null;
     }
 
     static void setStandUpProgress(int presses, int required) {
@@ -195,6 +255,10 @@ public final class ClientMatchState {
         stamina = 1f;
         survivorState = SurvivorState.HEALTHY;
         heartbeat = 0f;
+        trapped = false;
+        maniacStunSelfUntilTick = 0;
+        maniacStunSelfTotalTicks = 0;
+        maniacStunUntilTick.clear();
         standUpPresses = 0;
         standUpRequired = 0;
         abilityReadyAt.clear();
@@ -269,6 +333,30 @@ public final class ClientMatchState {
     public static float stamina()              { return stamina; }
     public static SurvivorState survivorState() { return survivorState; }
     public static float heartbeat()            { return heartbeat; }
+    /** Затиснений у капкані ЗАРАЗ — для клієнтського блокування руху/повороту. */
+    public static boolean isTrapped()          { return trapped; }
+
+    /** Я, поточний клієнт, оглушений ЗАРАЗ ударом лома — для блокування руху/камери/атаки й власного HUD. */
+    public static boolean isManiacStunned() {
+        return maniacStunSelfTotalTicks > 0 && currentGameTick() < maniacStunSelfUntilTick;
+    }
+
+    /** Частка часу оглушення, що лишилась: 1.0 щойно вдарили, 0.0 — щойно скінчилось. Для обертання зірочок на HUD. */
+    public static float maniacStunSelfFraction() {
+        if (maniacStunSelfTotalTicks <= 0) return 0f;
+        long left = maniacStunSelfUntilTick - currentGameTick();
+        if (left <= 0) return 0f;
+        return Math.min(1f, (float) left / maniacStunSelfTotalTicks);
+    }
+
+    /** Скільки тіків тривав власний стан оглушення — знаменник для анімації обертання (період один на весь стан). */
+    public static int maniacStunSelfTotalTicks() { return maniacStunSelfTotalTicks; }
+
+    /** Чи ЦЕЙ гравець (будь-який) оглушений ЗАРАЗ — для world-рендеру зірочок над головою. */
+    public static boolean isManiacStunned(UUID playerId) {
+        Long until = maniacStunUntilTick.get(playerId);
+        return until != null && currentGameTick() < until;
+    }
 
     public static boolean groundItemSparkleEnabled() { return groundItemSparkleEnabled; }
 

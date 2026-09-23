@@ -509,9 +509,9 @@ public final class ConfigSchema {
 
     // ── bear trap (капкан): наслідки для жертви ─────────────────────────
 
-    /** Шкода від захлопнення капкана, у хп. «Трохи» за дизайном: не наближає до 0 різко. */
+    /** Шкода від захлопнення капкана, у хп. */
     public static final ConfigKey<Integer> BEAR_TRAP_DAMAGE =
-        ConfigKey.integer("maniac", "bearTrapDamage", 1, 0, 100);
+        ConfigKey.integer("maniac", "bearTrapDamage", 15, 0, 100);
 
     /**
      * Скільки ПРИХОВАНОЇ міцності ніг (0–100) знімає один капкан.
@@ -539,6 +539,45 @@ public final class ConfigSchema {
     /** Дальність, з якої лом дістає до капкана (блоків від очей). */
     public static final ConfigKey<Double> CROWBAR_RANGE_BLOCKS =
         ConfigKey.decimal("maniac", "crowbarRangeBlocks", 3.5, 1.0, 8.0);
+
+    // ── crowbar (лом): удар по маньяку, стан "оглушений" ─────────────────
+
+    /**
+     * Скільки тіків триває стан "оглушений маньяк" після влучання ломом.
+     * 100 = 5 с. Протягом цього часу маньяк не може рухатись, стрибати,
+     * повертати камеру, бити, ставити пастки й активувати здібності.
+     */
+    public static final ConfigKey<Integer> CROWBAR_STUN_DURATION_TICKS =
+        ConfigKey.integer("maniac", "crowbarStunDurationTicks", 100, 20, 600);
+
+    /**
+     * Перезарядка лома між ударами ПО МАНЬЯКУ, у тіках. Окремо від
+     * {@link #CROWBAR_COOLDOWN_TICKS} (той — для ударів по капкану):
+     * оглушення маньяка — значно сильніший ефект, тому перезарядка
+     * довша за замовчуванням і налаштовується незалежно.
+     */
+    public static final ConfigKey<Integer> CROWBAR_STUN_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "crowbarStunCooldownTicks", 600, 0, 12000);
+
+    /** Дальність, з якої лом дістає до маньяка (блоків від очей виживого). */
+    public static final ConfigKey<Double> CROWBAR_STUN_RANGE_BLOCKS =
+        ConfigKey.decimal("maniac", "crowbarStunRangeBlocks", 3.5, 1.0, 8.0);
+
+    /**
+     * Скільки % міцності лом втрачає за удар по маньяку. Окремий від
+     * {@link #CROWBAR_HIT_WEAR_PERCENT} (удар по капкану) — оглушення
+     * маньяка є сильнішою дією, тому дизайн дозволяє інший знос.
+     */
+    public static final ConfigKey<Integer> CROWBAR_STUN_HIT_WEAR_PERCENT =
+        ConfigKey.integer("maniac", "crowbarStunHitWearPercent", 50, 1, 100);
+
+    /**
+     * Рівень ефекту нудоти (ванільний {@code MobEffects.CONFUSION}),
+     * що накладається на маньяка на час оглушення. 0 = amplifier I
+     * (перший рівень) за дизайном "нудота 1".
+     */
+    public static final ConfigKey<Integer> CROWBAR_STUN_NAUSEA_AMPLIFIER =
+        ConfigKey.integer("maniac", "crowbarStunNauseaAmplifier", 0, 0, 4);
 
     // ── maniac_selection ─────────────────────────────────────────────────
 
@@ -664,7 +703,9 @@ public final class ConfigSchema {
         MANIAC_SPEED_MULTIPLIER, BEAR_TRAP_PLACE_COOLDOWN_TICKS,
         TRAP_PLACE_RANGE_BLOCKS, TRAPS_PER_MATCH,
         CROWBAR_HIT_WEAR_PERCENT, CROWBAR_COOLDOWN_TICKS, CROWBAR_RANGE_BLOCKS,
-        BEAR_TRAP_DAMAGE, BEAR_TRAP_LEG_DAMAGE, LEG_INTEGRITY_REGEN_PER_SECOND);
+        BEAR_TRAP_DAMAGE, BEAR_TRAP_LEG_DAMAGE, LEG_INTEGRITY_REGEN_PER_SECOND,
+        CROWBAR_STUN_DURATION_TICKS, CROWBAR_STUN_COOLDOWN_TICKS, CROWBAR_STUN_RANGE_BLOCKS,
+        CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER);
 
     public static final ConfigBlock MANIAC_SELECTION = ConfigBlock.settings("maniac_selection", "maniacs.yml",
         "Хто стає маньяком і як обирається персонаж.",

@@ -10,6 +10,9 @@
   "client": [
     "ManiacAttackGuardMixin",
     "MixinKeyboardInputDownedMovement",
+    "MixinKeyboardInputTrapped",
+    "MixinKeyboardInputManiacStunned",
+    "MixinMouseHandlerManiacStunned",
     "GeneratorRepairSwingGuardMixin",
     "ManiacSprintGuardMixin"
   ],

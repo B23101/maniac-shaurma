@@ -28,6 +28,7 @@ import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.CountdownPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorExplosionPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.ManiacStunPacket;
 import com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorProgressPacket;
@@ -108,6 +109,7 @@ public final class ModNetwork {
         s2c(RescueProgressPacket.class,           RescueProgressPacket::new);
         s2c(TrapCatalogPacket.class,              TrapCatalogPacket::new);
         s2c(TrapLoadoutPacket.class,              TrapLoadoutPacket::new);
+        s2c(ManiacStunPacket.class,               ManiacStunPacket::new);
 
         // ── Клієнт → сервер ─────────────────────────────────────────────
         c2s(AbilityActivatePacket.class,    AbilityActivatePacket::new);

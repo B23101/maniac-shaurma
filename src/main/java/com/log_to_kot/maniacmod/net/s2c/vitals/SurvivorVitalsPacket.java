@@ -30,13 +30,19 @@ import net.minecraft.network.FriendlyByteBuf;
  * @param stamina       0.0–1.0
  * @param state         поточний стан (HEALTHY / BROKEN_LEG / ...)
  * @param heartbeat     0.0–1.0, наскільки близько маньяк (0 = не чути)
+ * @param trapped       затиснений у капкані ЗАРАЗ — клієнт додатково
+ *                      глушить рух і поворот камери самостійно, не
+ *                      чекаючи ресинку позиції від серверного локу
+ *                      (див. {@code MixinKeyboardInputDownedMovement}
+ *                      для того самого підходу зі станом лежачого).
  */
 public record SurvivorVitalsPacket(int hp, int maxHp, float stamina,
-                                    SurvivorState state, float heartbeat) implements S2CPacket {
+                                    SurvivorState state, float heartbeat,
+                                    boolean trapped) implements S2CPacket {
 
     public SurvivorVitalsPacket(FriendlyByteBuf buf) {
         this(buf.readVarInt(), buf.readVarInt(), buf.readFloat(),
-             buf.readEnum(SurvivorState.class), buf.readFloat());
+             buf.readEnum(SurvivorState.class), buf.readFloat(), buf.readBoolean());
     }
 
     @Override
@@ -46,11 +52,12 @@ public record SurvivorVitalsPacket(int hp, int maxHp, float stamina,
         buf.writeFloat(stamina);
         buf.writeEnum(state);
         buf.writeFloat(heartbeat);
+        buf.writeBoolean(trapped);
     }
 
     @Override
     public void clientHandle() {
         com.log_to_kot.maniacmod.client.ClientPacketHandler
-            .onVitals(hp, maxHp, stamina, state, heartbeat);
+            .onVitals(hp, maxHp, stamina, state, heartbeat, trapped);
     }
 }

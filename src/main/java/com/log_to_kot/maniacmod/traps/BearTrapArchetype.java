@@ -72,12 +72,31 @@ public class BearTrapArchetype extends TrapArchetype {
         var match = ManiacMod.match();
         if (match == null) return;
 
+        spawnTriggerParticles(victim);
+
         int damage = ManiacConfigs.get(ConfigSchema.BEAR_TRAP_DAMAGE);
         if (damage > 0 && match.damageSurvivor(victim.getUUID(), damage)) {
             match.survivors().onSurvivorDowned(victim);
         }
         match.survivors().onTrapLegDamage(victim,
             ManiacConfigs.get(ConfigSchema.BEAR_TRAP_LEG_DAMAGE));
+    }
+
+    /**
+     * Партиклі самого попадання (захлопування) — окремо від партиклів
+     * перелому ноги в {@code SurvivorModule#spawnLegBreakParticles}:
+     * ця подія стається щоразу, коли капкан спрацював, незалежно від
+     * того, чи вистачило шкали цілісності ніг для реального перелому
+     * цим конкретним ударом.
+     */
+    private static void spawnTriggerParticles(ServerPlayer victim) {
+        if (!(victim.level() instanceof ServerLevel level)) return;
+        for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
+            if (viewer.serverLevel() != level) continue;
+            level.sendParticles(viewer, net.minecraft.core.particles.ParticleTypes.SWEEP_ATTACK, true,
+                victim.getX(), victim.getY() + 0.3, victim.getZ(),
+                6, 0.25, 0.1, 0.25, 0.0);
+        }
     }
 
     /** Спрацьовує лише на живого виживого, який ще не в пастці й не лежить. */
