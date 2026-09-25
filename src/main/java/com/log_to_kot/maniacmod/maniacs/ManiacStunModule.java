@@ -11,11 +11,13 @@ import com.log_to_kot.maniacmod.items.CrowbarItem;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ManiacStunPacket;
+import com.log_to_kot.maniacmod.registry.ModSounds;
 import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.common.overlay.ActionBarMessageType;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.ItemStack;
@@ -218,6 +220,12 @@ public final class ManiacStunModule implements PhaseListener {
         notify(hitter, left > 0 ? ActionBarMessageType.INFO : ActionBarMessageType.ERROR,
             left > 0 ? "maniacmod.stun.crowbar_used" : "maniacmod.trap.crowbar_broke",
             String.valueOf(left));
+
+        // Звук удару ломом — той самий, що й по капкану: для вуха це одна
+        // дія (залізо б'є по залізу). Грає з СЕРВЕРА й з місця маньяка,
+        // тож чути всім поблизу — оглушеного маньяка потрібно помітити.
+        hitter.level().playSound(null, maniac.blockPosition(),
+            ModSounds.CROWBAR_HIT.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
 
         if (alreadyStunned) return true;
 

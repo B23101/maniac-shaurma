@@ -93,7 +93,10 @@ public final class DownedSurvivorMarker {
         int meters = (int) Math.round(WorldToScreen.distanceXZ(wx, wz));
         long seconds = (leftMs + 999) / 1000;
         String label = meters + " м · " + (seconds / 60) + ":" + String.format("%02d", seconds % 60);
-        int textColor = (Math.max(110, alpha) << 24) | (urgent ? URGENT_RGB : 0xFFFFFF);
+        // Таймер до смерті — ЗАВЖДИ червоні цифри (а не лише в останні
+        // секунди): лежачий має бачити, скільки йому лишилось, з першого
+        // кадру, і це має читатись на всю карту без пояснень.
+        int textColor = (Math.max(140, alpha) << 24) | URGENT_RGB;
         graphics.drawCenteredString(mc.font, label, cx, cy + RADIUS + 5, textColor);
     }
 

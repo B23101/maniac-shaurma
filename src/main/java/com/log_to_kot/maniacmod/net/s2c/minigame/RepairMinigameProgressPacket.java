@@ -5,12 +5,20 @@ import net.minecraft.network.FriendlyByteBuf;
 
 /**
  * Сервер → клієнт: часткове просування всередині вже відкритої
- * міні-гри — TARGET-влучення зараховано (ще не останнє) або
- * WIRES-дріт під'єднано правильно (ще не всі 4). Успіх/провал усієї
- * міні-гри — окремий {@link RepairMinigameResultPacket}, бо тоді
- * екран ще й закривається.
+ * міні-гри — поточний лічильник влучень (міні-гра «ціль», чи то ремонт
+ * генератора, чи визволення з капкана) або WIRES-дріт під'єднано
+ * правильно (ще не всі 4). Успіх/провал усієї міні-гри — окремий
+ * {@link RepairMinigameResultPacket}, бо тоді екран ще й закривається.
  *
- * @param hitsSoFar     для TARGET: скільки влучень уже зараховано.
+ * ── Чому «лічильник», а не «влучання» ────────────────────────────────
+ * Капкан карає за промах не провалом, а ЗНЯТТЯМ влучень
+ * (див. {@code TrapEscapeMinigame}), тож те саме поле несе і більше, і
+ * менше число. Клієнту цього досить: він просто показує те, що прислав
+ * сервер, і розморожує повзунок для наступної спроби (див.
+ * {@code TargetMinigameScreen#onHit}) — окремий «пакет промаху» не дав
+ * би нічого, крім ще одного поля в протоколі.
+ *
+ * @param hitsSoFar     для TARGET: скільки влучень зараз зараховано.
  * @param leftSlot      для WIRES: який лівий контакт щойно правильно
  *                      з'єднано (клієнт малює цей дріт як
  *                      "підтверджений").
@@ -18,8 +26,11 @@ import net.minecraft.network.FriendlyByteBuf;
  */
 public record RepairMinigameProgressPacket(int hitsSoFar, int leftSlot, int rightSlot) implements S2CPacket {
 
-    /** TARGET: чергове влучення зараховано. */
-    public static RepairMinigameProgressPacket targetHit(int hitsSoFar) {
+    /**
+     * TARGET: стан лічильника після спроби — влучання (число більшає)
+     * або промах зі штрафом у капкані (число меншає).
+     */
+    public static RepairMinigameProgressPacket attempt(int hitsSoFar) {
         return new RepairMinigameProgressPacket(hitsSoFar, -1, -1);
     }
 

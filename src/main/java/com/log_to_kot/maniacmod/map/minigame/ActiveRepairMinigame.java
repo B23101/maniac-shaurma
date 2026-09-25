@@ -9,8 +9,9 @@ import net.minecraft.core.BlockPos;
  * дистанції). Поки ця сесія існує, {@link com.log_to_kot.maniacmod.map.GeneratorModule}
  * НЕ додає REPAIR-прогрес від імені цього гравця через звичайне
  * утримання ПКМ — його внесок призупинений (див. клас-докстрінг
- * {@link com.log_to_kot.maniacmod.map.zones.GeneratorPoi}), інші
- * гравці на тому самому генераторі тим часом лагодять як завжди.
+ * {@link com.log_to_kot.maniacmod.map.zones.GeneratorPoi}), а решта
+ * гравців не можуть лагодити ЦЕЙ генератор, доки гра триває (див.
+ * {@code ConfigSchema.MINIGAME_BLOCKS_REPAIR}).
  */
 public final class ActiveRepairMinigame {
 

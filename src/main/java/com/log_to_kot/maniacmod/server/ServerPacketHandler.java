@@ -199,14 +199,25 @@ public final class ServerPacketHandler {
 
     /**
      * Клік у міні-грі "ціль". Перевірка ролі/фази тут не потрібна —
-     * {@link com.log_to_kot.maniacmod.map.GeneratorModule} сам мовчки
-     * ігнорує клік, якщо в цього гравця немає активної TARGET-міні-гри
-     * (а її й не могло бути в маньяка чи поза REPAIR-фазою).
+     * кожен модуль сам мовчки ігнорує клік, якщо в цього гравця немає
+     * ЙОГО міні-гри (а її й не могло бути в маньяка чи поза потрібною
+     * фазою).
+     *
+     * ── Чому дві адреси на один пакет ────────────────────────────────
+     * Клієнт шле одну й ту саму позицію повзунка, бо для нього це той
+     * самий екран; але міні-гра може належати ремонту генератора АБО
+     * визволенню з капкана ({@code TrapEscapeMinigame}). Обидва модулі
+     * тримають стан за UUID гравця, і одночасно обидва стани в одного
+     * гравця існувати не можуть (капкан закриває міні-гру генератора
+     * через {@code GeneratorModule.abandonMinigame}), тому достатньо
+     * запитати їх послідовно: хто перший упізнав свій стан — той і
+     * обробив клік.
      */
     public static void onTargetMinigameClick(ServerPlayer player, double cursorPosition) {
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return;
-        match.generatorModule().onTargetMinigameClick(player, cursorPosition);
+        if (match.generatorModule().onTargetMinigameClick(player, cursorPosition)) return;
+        match.traps().onEscapeAttempt(player, cursorPosition);
     }
 
     /** Дріт перетягнуто в міні-грі "дроти". Та сама логіка ігнорування, що й вище. */

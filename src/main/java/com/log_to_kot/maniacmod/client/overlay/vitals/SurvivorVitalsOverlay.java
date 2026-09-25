@@ -1,6 +1,7 @@
 package com.log_to_kot.maniacmod.client.overlay.vitals;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -15,15 +16,28 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 
 /**
  * Постійний HUD зліва внизу за референсом: круглий медальйон із серцем,
- * справа від нього — дві шкали (хп зверху червоним, стаміна знизу синім),
- * під усім цим — іконки стану (поламана нога, повзання, непритомність).
+ * справа від нього — дві шкали (хп зверху червоним, стаміна знизу
+ * синім), НАД усім цим (над панеллю, над HP) — іконки стану (поламана
+ * нога, повзання, непритомність): раніше стояли під стаміною, знизу,
+ * де їх легко пропустити; тепер — над HP, де гравець побачить їх
+ * першими.
  *
  * ── PNG-шари замість примітивів ───────────────────────────────────────
  * Уся панель — один спільний канвас {@link #PANEL_W}×{@link #PANEL_H},
- * кожен шар (фон, серце, кожна шкала) — окрема текстура ТОГО САМОГО
- * розміру канвасу, що malюється в ту саму позицію (0,0) відносно лівого
- * верхнього кута панелі — вирівнювання дає сам однаковий розмір текстур,
- * без ручного підбору зсувів під кожен шар.
+ * кожен шар (фон, серце, кожна шкала, декоративний оверлей) — окрема
+ * текстура ТОГО САМОГО розміру канвасу, що malюється в ту саму позицію
+ * (0,0) відносно лівого верхнього кута панелі — вирівнювання дає сам
+ * однаковий розмір текстур, без ручного підбору зсувів під кожен шар.
+ *
+ * Порядок шарів (знизу вгору): фон → серце → HP-шкала → стамінa-шкала
+ * → ДЕКОРАТИВНИЙ ОВЕРЛЕЙ (рамка/скло, {@link #TEX_PANEL_OVERLAY}).
+ * Оверлей малюється ОСТАННІМ і лягає поверх усього — це "скло" чи
+ * рамка, що закриває решту шарів (наприклад, медальйон серця виглядає,
+ * ніби він під випуклим склом), а не декор поруч із ними.
+ *
+ * Іконка стану (поламана нога/повзання/непритомність) — НАД усією
+ * панеллю (над HP), а не під стаміною: це те, що гравець має помітити
+ * першим.
  *
  * Виняток — серце: воно пульсує (росте/зменшується), тому для нього
  * рівний розмір канвасу зламав би пульсацію (довелось би або тягнути
@@ -41,8 +55,9 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * ── Текстури-заповнювачі ────────────────────────────────────────────
  * Усі файли нижче — плейсхолдери (розміри зафіксовані остаточно, вміст
  * замінити 1:1 на фінальний арт того самого розміру):
- *   vitals_panel_bg.png     {@link #PANEL_W}×{@link #PANEL_H}
- *   heart_icon.png          {@link #HEART_ICON_SIZE}×{@link #HEART_ICON_SIZE}
+ *   vitals_panel_bg.png       {@link #PANEL_W}×{@link #PANEL_H}
+ *   vitals_panel_overlay.png  {@link #PANEL_W}×{@link #PANEL_H} (декоративний шар — рамка/скло, малюється останнім)
+ *   heart_icon.png            {@link #HEART_ICON_SIZE}×{@link #HEART_ICON_SIZE}
  *   hp_bar_full.png / _empty.png         {@link #BAR_INNER_W}×{@link #BAR_INNER_H}
  *   stamina_bar_full.png / _empty.png    {@link #BAR_INNER_W}×{@link #BAR_INNER_H}
  *   status_icon_broken_leg/crawling/unconscious.png   {@link #ICON_SIZE}×{@link #ICON_SIZE} (ще не намальовані — плейсхолдер-рамка лишається для них)
@@ -100,6 +115,17 @@ public final class SurvivorVitalsOverlay {
     private static final ResourceLocation ICON_UNCONSCIOUS =
         new ResourceLocation("maniacmod", "textures/gui/vitals/status_icon_unconscious.png");
 
+    // ── Декоративний шар поверх усього (рамка/скло) ───────────────────────
+    // Малюється ОСТАННІМ, поверх фону, серця й обох шкал — той самий
+    // канвас PANEL_W×PANEL_H, та сама позиція (panelLeft, panelTop), що
+    // й фон: візуальне "скло", що ЗАКРИВАЄ решту шарів (наприклад,
+    // серце під випуклим склом медальйона), а не декор поруч із ними.
+    // Прозорі пікселі текстури лишають нижні шари видимими як завжди;
+    // рудиментарний плейсхолдер тут, як і в status_icon_*, — суцільно
+    // прозорий PNG, поки немає фінального арту.
+    private static final ResourceLocation TEX_PANEL_OVERLAY =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/vitals_panel_overlay.png");
+
     public static void render(GuiGraphics graphics) {
         if (!ClientMatchState.isSurvivor()) return;
         // Видимість — за дозволом фази HUD, а не за "чи фаза ігрова":
@@ -150,8 +176,17 @@ public final class SurvivorVitalsOverlay {
         renderCroppedBar(graphics, panelLeft + BAR_LEFT + BAR_FRAME_THICKNESS, panelTop + STA_TOP + BAR_FRAME_THICKNESS,
             TEX_STAMINA_FULL, TEX_STAMINA_EMPTY, staminaLocked ? 0f : staminaFraction);
 
+        // 4) Декоративний шар поверх усього (рамка/скло) — той самий
+        // розмір і позиція, що фон (п. 1), малюється ОСТАННІМ із усіх
+        // шарів усередині канвасу панелі, щоб лягти поверх серця й
+        // обох шкал (не лише фону).
+        blitFull(graphics, TEX_PANEL_OVERLAY, panelLeft, panelTop, PANEL_W, PANEL_H, PANEL_W, PANEL_H);
+
         if (hasIcons) {
-            int iconsTop = panelTop + STA_TOP + BAR_FRAME_H + ICONS_GAP;
+            // Над HP (над усією панеллю), а не під стаміною: іконка стану —
+            // те, що гравець має помітити першим, тому вона йде НАД
+            // медальйоном/шкалами, а не похована знизу під ними.
+            int iconsTop = panelTop - ICONS_GAP - ICON_SIZE;
             int iconsLeft = panelLeft + BAR_LEFT;
             renderStatusIcon(graphics, mc, iconsLeft, iconsTop, state);
         }
@@ -244,18 +279,20 @@ public final class SurvivorVitalsOverlay {
      * перемикати текстуру за heartbeat > 0, а не лише розмір).
      */
     private static void renderHeart(GuiGraphics graphics, int centerX, int centerY, float heartbeat) {
-        int size = HEART_BASE_DRAW_SIZE;
+        // Серце «стукає» ЗАВЖДИ — навіть коли маньяка поруч немає, це тихий
+        // базовий пульс (амплітуда 0.10). Близькість маньяка не вмикає
+        // пульсацію, а лише підсилює її (до 0.32 впритул) і прискорює
+        // період — той самий принцип, що й у звуку серцебиття
+        // ({@code HeartbeatSoundHandler}), з яким візуал б'ється в такт.
+        long periodMs = Math.round(900 - 640 * heartbeat);
+        long now = System.currentTimeMillis();
+        float phase = (now % periodMs) / (float) periodMs;
+        float pulse = phase < 0.18f
+            ? phase / 0.18f
+            : Math.max(0f, 1f - (phase - 0.18f) / 0.82f);
 
-        if (heartbeat > 0f) {
-            long periodMs = Math.round(900 - 640 * heartbeat);
-            long now = System.currentTimeMillis();
-            float phase = (now % periodMs) / (float) periodMs;
-            float pulse = phase < 0.18f
-                ? phase / 0.18f
-                : Math.max(0f, 1f - (phase - 0.18f) / 0.82f);
-
-            size = Math.round(HEART_BASE_DRAW_SIZE + pulse * HEART_BASE_DRAW_SIZE * 0.25f * heartbeat);
-        }
+        float amplitude = 0.10f + 0.22f * heartbeat;
+        int size = Math.round(HEART_BASE_DRAW_SIZE + pulse * HEART_BASE_DRAW_SIZE * amplitude);
 
         int drawX = centerX - size / 2;
         int drawY = centerY - size / 2;
@@ -311,61 +348,94 @@ public final class SurvivorVitalsOverlay {
         blitFull(graphics, icon, x, y, ICON_SIZE, ICON_SIZE, ICON_SIZE, ICON_SIZE);
     }
 
-    // ── Шкала вставання під час CRAWLING ──────────────────────────────────
+    // ── Шкала вставання (CRAWLING) — ВЕРТИКАЛЬНА ──────────────────────────
 
-    private static final int STAND_UP_PANEL_WIDTH = 260;
-    private static final int STAND_UP_PANEL_HEIGHT = 58;
-    private static final int STAND_UP_PANEL_MARGIN = 14;
-    private static final int STAND_UP_BAR_HEIGHT = 14;
-    /** Відступ панелі від центру екрана вниз — нижче приціла, щоб не заважала. */
-    private static final int STAND_UP_OFFSET_FROM_CENTER = 40;
+    // ── Чому вертикальна, а не як у генератора ───────────────────────────
+    // За вимогою дизайну: підняття на ноги — це стан САМОГО ГРАВЦЯ, і
+    // шкала стоїть ПРАВОРУЧ від приціла, як «смуга навантаження» біля
+    // персонажа, а не як панель роботи з об'єктом у світі (генератор,
+    // підняття тіла). Горизонтальна панель на всю ширину екрана тут ще й
+    // фізично заважала б: вона лягає рівно туди, куди дивиться лежачий
+    // гравець.
+    //
+    // Палітра й фактура лишаються генераторні — {@link GeneratorFuelUiTheme}:
+    // той самий фон панелі, рамка, заглиблений трек із фаскою й те саме
+    // сріблясте заповнення. Вертикальним є СКЛАД, не стиль.
+    private static final int STAND_UP_BAR_WIDTH = 12;
+    private static final int STAND_UP_BAR_HEIGHT = 90;
+    private static final int STAND_UP_PANEL_PADDING = 6;
+    /** Відступ шкали від центру екрана ВПРАВО — щоб не закривати приціл. */
+    private static final int STAND_UP_OFFSET_FROM_CENTER = 26;
+    /** Проміжок між шкалою та її підписами (відсоток зверху, підказка знизу). */
+    private static final int STAND_UP_TEXT_GAP = 4;
 
     /**
-     * Панель "ТИСНИ ПРОБІЛ, ЩОБ ВСТАТИ" з прогрес-баром і лічильником
-     * n/N. Раніше тут був лише напис без шкали, а сервер рахував
-     * натискання втемну — гравець тиснув пробіл і не бачив, чи це взагалі
-     * щось дає.
+     * Шкала вставання — вертикальна, заповнюється ЗНИЗУ ВГОРУ.
      *
-     * Стилі — ті самі, що в {@code GeneratorProgressOverlay}
-     * (ManiacUiTheme): панель, роздільник, прямокутний бар. Дані —
-     * лише з {@code ClientMatchState} (StandUpProgressPacket); шкала
-     * нічого не рахує сама.
+     * ── Знизу вгору, а не зверху вниз ────────────────────────────────
+     * Заповнення росте до гори: це «піднятися», тобто рух угору, і
+     * останній відсоток шкали збігається з моментом, коли гравець уже
+     * встає. Горизонтальна шкала ремонту читалась «зліва направо», тут
+     * такої осі немає.
+     *
+     * Дані лише з {@code ClientMatchState} (StandUpProgressPacket): сервер
+     * тримає джерело правди (у нього прогрес щотіка згасає, тож встати
+     * одним натисканням не можна — треба спамити пробіл), а клієнт лише
+     * малює те, що прийшло.
      */
     private static void renderStandUpBar(GuiGraphics graphics, Minecraft mc) {
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
 
-        int required = ClientMatchState.standUpRequired();
         int presses = ClientMatchState.standUpPresses();
-
-        int panelX = screenW / 2 - STAND_UP_PANEL_WIDTH / 2;
-        int panelY = screenH / 2 + STAND_UP_OFFSET_FROM_CENTER;
-
-        graphics.fill(panelX, panelY, panelX + STAND_UP_PANEL_WIDTH, panelY + STAND_UP_PANEL_HEIGHT,
-            ManiacUiTheme.PANEL_BG);
-        ManiacUiTheme.border1px(graphics, panelX, panelY, STAND_UP_PANEL_WIDTH, STAND_UP_PANEL_HEIGHT,
-            ManiacUiTheme.BORDER);
-
-        Component title = Component.translatable("maniacmod.hud.stand_up_prompt");
-        int titleY = panelY + STAND_UP_PANEL_MARGIN - 4;
-        graphics.drawCenteredString(mc.font, title, screenW / 2, titleY, ManiacUiTheme.TEXT_TITLE);
-        ManiacUiTheme.divider(graphics, panelX + STAND_UP_PANEL_MARGIN,
-            titleY + mc.font.lineHeight + 4, STAND_UP_PANEL_WIDTH - STAND_UP_PANEL_MARGIN * 2);
-
-        int barX = panelX + STAND_UP_PANEL_MARGIN;
-        int barY = panelY + STAND_UP_PANEL_HEIGHT - STAND_UP_BAR_HEIGHT - STAND_UP_PANEL_MARGIN + 2;
-        int barW = STAND_UP_PANEL_WIDTH - STAND_UP_PANEL_MARGIN * 2;
-
-        // required == 0 — пакет прогресу ще не дійшов (перший кадр
-        // після падіння): малюємо порожню шкалу, а не ділимо на нуль.
+        int required = ClientMatchState.standUpRequired();
+        // required == 0 — пакет прогресу ще не дійшов (перший кадр після
+        // падіння): малюємо порожню шкалу, а не ділимо на нуль.
         float fraction = required > 0 ? clamp01((float) presses / required) : 0f;
-        ManiacUiTheme.drawProgressBar(graphics, barX, barY, barW, STAND_UP_BAR_HEIGHT, fraction,
-            ManiacUiTheme.BAR_FILL_WARN);
+        int percent = Math.round(fraction * 100f);
 
-        if (required > 0) {
-            Component counter = Component.translatable("maniacmod.hud.stand_up_progress", presses, required);
-            graphics.drawCenteredString(mc.font, counter, screenW / 2,
-                barY + (STAND_UP_BAR_HEIGHT - mc.font.lineHeight) / 2, ManiacUiTheme.TEXT_BODY);
+        int panelW = STAND_UP_BAR_WIDTH + STAND_UP_PANEL_PADDING * 2;
+        int panelH = STAND_UP_BAR_HEIGHT + STAND_UP_PANEL_PADDING * 2;
+        int panelX = screenW / 2 + STAND_UP_OFFSET_FROM_CENTER;
+        int panelY = screenH / 2 - panelH / 2;
+
+        GeneratorFuelUiTheme.drawPanel(graphics, panelX, panelY, panelW, panelH);
+
+        int barX = panelX + STAND_UP_PANEL_PADDING;
+        int barY = panelY + STAND_UP_PANEL_PADDING;
+        drawStandUpBarVertical(graphics, barX, barY, STAND_UP_BAR_WIDTH, STAND_UP_BAR_HEIGHT, fraction);
+
+        String percentText = percent + "%";
+        String prompt = Component.translatable("maniacmod.hud.stand_up_prompt").getString();
+        int centerX = panelX + panelW / 2;
+
+        // Відсоток — НАД шкалою, підказка — ПІД нею. Обидва підписи
+        // центруються по шкалі, бо вона тепер сама собі окремий елемент, а
+        // не рядок у панелі з заголовком.
+        graphics.drawString(mc.font, percentText,
+            centerX - mc.font.width(percentText) / 2, panelY - 10, GeneratorFuelUiTheme.TEXT, true);
+        graphics.drawString(mc.font, prompt,
+            centerX - mc.font.width(prompt) / 2, panelY + panelH + STAND_UP_TEXT_GAP,
+            GeneratorFuelUiTheme.TEXT, true);
+    }
+
+    /**
+     * Трек вертикальної шкали: заглиблення + заповнення ЗНИЗУ ВГОРУ.
+     *
+     * Дзеркальний до {@link GeneratorFuelUiTheme#drawBar} набір операцій із
+     * тими самими кольорами: ванільний {@code fill(x1, y1, x2, y2)} бере
+     * прямокутник за двома кутами, тож «висота» заливки тут рахується від
+     * НИЖНЬОГО краю вгору (у горизонтальному барі — від лівого праворуч).
+     */
+    private static void drawStandUpBarVertical(GuiGraphics graphics, int x, int y,
+                                                 int w, int h, float fraction) {
+        graphics.fill(x, y, x + w, y + h, GeneratorFuelUiTheme.INSET_BG);
+        GeneratorFuelUiTheme.bevelBorderInset(graphics, x, y, w, h);
+
+        int filled = Math.round((h - 2) * clamp01(fraction));
+        if (filled > 0) {
+            graphics.fill(x + 1, y + h - 1 - filled, x + w - 1, y + h - 1,
+                GeneratorFuelUiTheme.FILL);
         }
     }
 }

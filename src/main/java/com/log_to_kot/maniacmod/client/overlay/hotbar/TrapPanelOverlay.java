@@ -16,8 +16,10 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 import java.util.List;
 
 /**
- * Панель пасток маньяка — вертикальна колонка слотів на лівому краю
- * екрана (клавіші 5/6/7).
+ * Панель пасток маньяка — вертикальна колонка слотів у ЛІВОМУ НИЖНЬОМУ
+ * куті екрана (клавіші 5/6/7), той самий відступ від низу, що хотбар
+ * маньяка ({@link ManiacHotbarOverlay#MARGIN_BOTTOM}) — раніше стояла
+ * по центру вертикалі, заважаючи огляду й прицілюванню.
  *
  * ── Чому окремо від {@link ManiacHotbarOverlay} ──────────────────────
  * Хотбар-оверлей малює слоти, які lib видає з {@code InventorySlotAllocation};
@@ -46,6 +48,8 @@ public final class TrapPanelOverlay {
     private static final int ICON = 28;
     private static final int GAP = 6;
     private static final int MARGIN_LEFT = 14;
+    /** Той самий відступ від низу екрана, що {@code ManiacHotbarOverlay.MARGIN_BOTTOM}. */
+    private static final int MARGIN_BOTTOM = 14;
 
     /** Активний слот — той самий жовтогарячий акцент, що й пастки в хотбарі маньяка. */
     private static final int ACTIVE_BORDER = 0xFFFF9838;
@@ -64,7 +68,10 @@ public final class TrapPanelOverlay {
 
         int screenH = mc.getWindow().getGuiScaledHeight();
         int total = ids.size() * SLOT + (ids.size() - 1) * GAP;
-        int top = (screenH - total) / 2; // по центру вертикалі
+        // Знизу зліва (той самий MARGIN_BOTTOM, що хотбар маньяка), не по
+        // центру вертикалі: панель пасток — периферійний HUD-елемент, а не
+        // те, на що дивляться постійно, і центр екрана заважав приціленню.
+        int top = screenH - MARGIN_BOTTOM - total;
         long tick = mc.level != null ? mc.level.getGameTime() : 0L;
 
         for (int slot = 0; slot < ids.size(); slot++) {

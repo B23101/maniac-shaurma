@@ -53,7 +53,12 @@ public abstract class ItemArchetype extends Item {
 
     @Override
     public final InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        if (level.isClientSide) return InteractionResultHolder.pass(player.getItemInHand(hand));
+        if (level.isClientSide) {
+            // Клієнтська реакція НА СВІЙ клік (анімація geo-моделі в руці).
+            // Саме тут, бо далі — серверна гілка, а сервер не малює.
+            onUseClient(player, player.getItemInHand(hand));
+            return InteractionResultHolder.pass(player.getItemInHand(hand));
+        }
         if (!(player instanceof ServerPlayer sp)) return InteractionResultHolder.fail(player.getItemInHand(hand));
 
         // Непритомний (0 хп) не користується предметами. Без цього він міг
@@ -81,6 +86,28 @@ public abstract class ItemArchetype extends Item {
 
     /** Конкретний ефект предмета — підклас реалізує тільки це. */
     protected abstract InteractionResultHolder<ItemStack> onUse(ServerPlayer player, ItemStack stack);
+
+    /**
+     * Клієнтська реакція на ВЛАСНИЙ правий клік предметом. Порожньо за
+     * замовчуванням.
+     *
+     * ── Навіщо окремий метод, а не клієнтська гілка в {@link #onUse} ──
+     * {@code onUse} серверний за побудовою (він змінює стан матчу), а
+     * анімацію в руці малює ЛИШЕ клієнт — змішувати ці дві речі в одному
+     * методі означало б постійні {@code level.isClientSide()} всередині
+     * логіки предметів. Клієнтський хук викликається до серверної гілки й
+     * нічого не повертає.
+     *
+     * ⚠ Це ПРОГНОЗ клієнта, а не факт: предмет може не спрацювати на
+     * сервері (немає ресурсу, не та фаза), а анімація вже зіграє. Так
+     * само поводиться ванільний замах рукою на будь-який правий клік — і
+     * це свідомо прийнятно: підтверджувати використання окремим пакетом
+     * означало б чекати круглий обмін мережею заради анімації.
+     *
+     * @param player гравець, що клікнув (на клієнті це завжди свій LocalPlayer)
+     * @param stack  предмет у руці на момент кліку
+     */
+    protected void onUseClient(Player player, ItemStack stack) {}
 
     // ── Спільна логіка кулдауну/лічильника (ОДНА реалізація для всіх предметів) ──
 

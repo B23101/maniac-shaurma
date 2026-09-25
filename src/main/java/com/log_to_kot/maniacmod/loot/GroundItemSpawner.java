@@ -104,8 +104,13 @@ public final class GroundItemSpawner {
     /** Висота появи предмета над підлогою тіла: лежачий гравець низько. */
     private static final double BODY_DROP_HEIGHT = 0.35;
 
-    /** Горизонтальний розліт, блоків/тік. Мале — предмети лягають «поколу», а не летять. */
-    private static final double BODY_DROP_SPREAD_SPEED = 0.10;
+    /**
+     * Горизонтальний розліт, блоків/тік. Підібрано так, щоб речі з трупа
+     * лягали ДОВКОЛА (радіус ~1.3 блока), а не купою під ногами: занадто
+     * мале значення (було 0.10) давало «одну купу», з якої важко вибрати
+     * потрібне, тому піднято.
+     */
+    private static final double BODY_DROP_SPREAD_SPEED = 0.55;
 
     /** Невеликий підкид угору, щоб предмет не «прилипав» до тіла. */
     private static final double BODY_DROP_UP_SPEED = 0.18;

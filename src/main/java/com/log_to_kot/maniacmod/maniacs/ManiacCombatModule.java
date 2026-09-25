@@ -171,7 +171,14 @@ public final class ManiacCombatModule implements PhaseListener {
         if (victim == null) return false;
 
         boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
-        if (downed) match.survivors().onSurvivorDowned(victim);
+        if (downed) {
+            // Удар збив із ніг — жертва непритомна, адреналін їй не потрібен.
+            match.survivors().onSurvivorDowned(victim);
+        } else {
+            // Живий після удару отримує швидкість I і повну стаміну —
+            // шанс утекти (див. SurvivorModule.onManiacHit).
+            match.survivors().onManiacHit(victim);
+        }
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
     }

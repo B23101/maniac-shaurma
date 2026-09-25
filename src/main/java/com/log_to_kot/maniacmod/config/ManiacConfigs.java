@@ -181,7 +181,10 @@ public final class ManiacConfigs {
      * Лікування файлу, на двох рівнях.
      *
      * ── Рівень 1: файлу немає взагалі ────────────────────────────────
-     * Створюється повністю з дефолту в jar.
+     * Створюється повністю з дефолту в jar. Якщо самого блока в jar
+     * немає (динамічний блок архетипу: {@code maniac_stats/<id>.yml} —
+     * його фізично не може бути в ресурсах, бо маньяки описані кодом),
+     * дефолти беруться зі схеми — інакше адмін отримав би порожній файл.
      *
      * ── Рівень 2: файл є, але в ньому бракує ключів схеми ────────────
      * Тільки для {@link ConfigBlock.Kind#SETTINGS}. Це той випадок, коли
@@ -209,9 +212,16 @@ public final class ManiacConfigs {
     private static void heal(ConfigBlock block, Path file, Map<String, Object> defaults,
                              ConfigDiagnostics diag) {
         if (!Files.exists(file)) {
+            // Файла немає → пишемо його з дефолтів у jar. Для блока, якого
+            // в jar немає взагалі (динамічний блок архетипу:
+            // maniac_stats/<id>.yml), джерелом дефолтів лишається схема —
+            // інакше адмін отримав би ПОРОЖНІЙ файл, а значення жили б
+            // тільки в пам'яті (і жодного рядка, щоб їх побачити й
+            // поправити). Ключі динамічного блока все одно зі схеми.
+            Map<String, Object> content = defaults.isEmpty() ? schemaDefaults(block) : defaults;
             try {
                 Files.createDirectories(file.getParent());
-                Files.writeString(file, YAML.dump(defaults), StandardCharsets.UTF_8);
+                Files.writeString(file, YAML.dump(content), StandardCharsets.UTF_8);
                 LOADER.invalidate(file);
                 diag.healedBlock(file.getFileName().toString());
             } catch (IOException e) {
@@ -221,6 +231,19 @@ public final class ManiacConfigs {
         }
         if (block.kind() != ConfigBlock.Kind.SETTINGS) return;
         healMissingKeys(block, file, defaults, diag);
+    }
+
+    /**
+     * Блок у вигляді ПЛОСКОЇ мапи {@code ім'я ключа → дефолт схеми}. Той
+     * самий формат, що адмін бачить у плоских файлах ({@code generators.yml}),
+     * і той, на який розраховані {@link #healMissingKeys} та
+     * {@link #readSection} (блок без вкладеної обгортки читається з
+     * кореня файлу).
+     */
+    private static Map<String, Object> schemaDefaults(ConfigBlock block) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (ConfigKey<?> key : block.keys()) map.put(key.name(), key.defaultValue());
+        return map;
     }
 
     /**

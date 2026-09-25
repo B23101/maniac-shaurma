@@ -11,6 +11,8 @@ import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.StandUpProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
+import dev.shaurmalib.common.overlay.ActionBarMessageType;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.forge.stamina.StaminaRules;
@@ -20,6 +22,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -142,8 +146,24 @@ public final class SurvivorModule implements PhaseListener {
     /** Непритомний → скільки тіків лишилось до смерті. Ключі = хто зараз лежить. */
     private final Map<UUID, Integer> bleedOutTicksLeft = new HashMap<>();
 
+    /**
+     * Лічильник тіків, що йдуть разом із {@link #tickDowned}: використовується
+     * лише як throttle для підказки маньяку (раз на секунду), щоб той не
+     * отримував actionbar щотік.
+     */
+    private long downedTickCounter = 0;
+
     /** Склад списку, який клієнти бачили востаннє: за ним видно, що список ЗМІНИВСЯ. */
     private final Set<UUID> lastBroadcastDowned = new HashSet<>();
+
+    /**
+     * Лежачі, чий таймер ЗАРАЗ стоїть (маньяк у радіусі милосердя).
+     * Перебудовується щотіка в {@link #tickDowned} — потрібна, щоб клієнт
+     * показував зафіксований час, а не власний відлік.
+     */
+    private final Set<UUID> mercyPaused = new HashSet<>();
+    /** Стан пауз, який клієнти бачили востаннє (разом із {@link #lastBroadcastDowned}). */
+    private final Set<UUID> lastBroadcastPaused = new HashSet<>();
     private int downedBroadcastCounter = 0;
 
     /** Хто вже в процесі смерті — щоб удар/таймер не запустили її вдруге, поки йде анімація. */
@@ -214,7 +234,9 @@ public final class SurvivorModule implements PhaseListener {
             // мітки/позу в усіх клієнтів явним порожнім списком.
             bleedOutTicksLeft.clear();
             dying.clear();
+            mercyPaused.clear();
             lastBroadcastDowned.clear();
+            lastBroadcastPaused.clear();
             ModNetwork.toPlayers(players, new DownedSurvivorsPacket(List.of()));
 
             // Глядачі повертаються в свій звичайний режим лише коли гру
@@ -267,6 +289,7 @@ public final class SurvivorModule implements PhaseListener {
 
         if (phase.allows(PhaseRule.RESCUE)) tickRescues();
         tickDowned(players);
+        tickStandUpProgress(players);
         if (phase.allows(PhaseRule.ESCAPE)) tickEscapes(players);
 
         // Throttled: hp міняється поступово (урон/лікування), не
@@ -787,8 +810,14 @@ public final class SurvivorModule implements PhaseListener {
         else legIntegrity.put(id, next);
     }
 
-    /** Накопичені натискання пробілу поточної спроби встати. */
-    private final Map<UUID, Integer> standUpPresses = new HashMap<>();
+    /**
+     * Накопичений прогрес спроби встати. Дробовий, а не цілий: поки гравець
+     * спамить пробіл, прогрес щотіка ЗГАСАЄ рівною швидкістю
+     * ({@code standUpPresses / standUpDecayTicks} за тік), тож одним-двома
+     * натисканнями встати неможливо — шкала встигає впасти назад, поки
+     * палець не тисне знову. Це і є «спамити пробіл» замість «натисни N разів».
+     */
+    private final Map<UUID, Double> standUpPresses = new HashMap<>();
 
     /**
      * Спроба встати (пробіл). Викликається з {@code ServerPacketHandler}
@@ -803,10 +832,10 @@ public final class SurvivorModule implements PhaseListener {
     public void onStandUpAttempt(ServerPlayer player) {
         UUID id = player.getUUID();
         int required = ManiacConfigs.get(ConfigSchema.STAND_UP_PRESSES);
-        int presses = standUpPresses.merge(id, 1, Integer::sum);
+        double presses = standUpPresses.merge(id, 1.0, Double::sum);
 
         if (presses < required) {
-            sendStandUpProgress(player, presses);
+            sendStandUpProgress(player, (int) presses);
             return;
         }
 
@@ -1179,6 +1208,9 @@ public final class SurvivorModule implements PhaseListener {
     private void tickDowned(List<ServerPlayer> players) {
         List<UUID> expired = new ArrayList<>();
         List<UUID> stale = new ArrayList<>();
+        downedTickCounter++;
+        mercyPaused.clear();
+        int mercyRadius = ManiacConfigs.get(ConfigSchema.MANIAC_MERCY_RADIUS_BLOCKS);
 
         for (var entry : bleedOutTicksLeft.entrySet()) {
             UUID id = entry.getKey();
@@ -1194,6 +1226,16 @@ public final class SurvivorModule implements PhaseListener {
             // Ідемпотентно й дешево: повертає повільність після респавну/
             // релогу, які transient-модифікатор не переживають.
             ensureCrawlSpeed(player);
+
+            // Маньяк стоїть над непритомним — час до смерті СТОЇТЬ, а маньяк
+            // отримує підказку відійти. Так добити лежачого не можна, стоячи
+            // поряд: треба фізично відпустити й перечекати поза радіусом.
+            ServerPlayer maniac = maniacNear(player, players, mercyRadius);
+            if (maniac != null) {
+                mercyPaused.add(id);
+                notifyManiacToStepAway(maniac, mercyRadius);
+                continue;
+            }
 
             int left = entry.getValue() - 1;
             if (left <= 0) {
@@ -1214,6 +1256,75 @@ public final class SurvivorModule implements PhaseListener {
     }
 
     /**
+     * Онлайн-маньяк у радіусі {@code radius} блоків від {@code victim}, або
+     * {@code null}. Ітеруємо саме переданий список тіку, а не серверний — це
+     * дешевше й не тягне новий пошук щоразу.
+     */
+    private ServerPlayer maniacNear(ServerPlayer victim, List<ServerPlayer> players, int radius) {
+        if (radius <= 0) return null;
+        MatchOrchestrator match = match();
+        double radiusSq = (double) radius * radius;
+        for (ServerPlayer candidate : players) {
+            if (!match.isManiac(candidate.getUUID())) continue;
+            if (candidate.level() != victim.level()) continue;
+            if (candidate.distanceToSqr(victim) <= radiusSq) return candidate;
+        }
+        return null;
+    }
+
+    /**
+     * Підказка маньяку в actionbar (shaurma-lib) — раз на секунду, поки він
+     * стоїть над непритомним. Мова береться з клієнта (пакет несе ключ і
+     * аргументи, не готовий текст) — той самий контракт, що в
+     * {@code ManiacStunModule.notify}.
+     */
+    private void notifyManiacToStepAway(ServerPlayer maniac, int radius) {
+        if (downedTickCounter % 20 != 0) return;
+        ModNetwork.toPlayer(maniac, new ActionBarPacket(
+            ActionBarMessageType.INFO, "maniacmod.maniac.step_away",
+            new String[] { String.valueOf(radius) }));
+    }
+
+    /**
+     * Згасання прогресу вставання. Поки гравець у CRAWLING і не тисне пробіл,
+     * прогрес щотіка спадає й за {@code standUpDecayTicks} доходить до нуля;
+     * саме тому встати одним-двома натисканнями неможливо. Прогрес
+     * надсилається клієнту лише коли змінюється ЙОГО ЦІЛА частина (те, що
+     * видно на шкалі), а не щотік.
+     */
+    private void tickStandUpProgress(List<ServerPlayer> players) {
+        if (standUpPresses.isEmpty()) return;
+        int required = ManiacConfigs.get(ConfigSchema.STAND_UP_PRESSES);
+        double decayPerTick = required
+            / (double) Math.max(1, ManiacConfigs.get(ConfigSchema.STAND_UP_DECAY_TICKS));
+
+        var it = standUpPresses.entrySet().iterator();
+        while (it.hasNext()) {
+            var entry = it.next();
+            UUID id = entry.getKey();
+            ServerPlayer player = match().onlinePlayer(id);
+            // Стан змінився (встав/збили) або гравець зник — прогрес більше
+            // нічого не значить.
+            if (player == null || match().survivorStateOf(id) != SurvivorState.CRAWLING) {
+                it.remove();
+                continue;
+            }
+
+            double next = entry.getValue() - decayPerTick;
+            if (next <= 0.0) {
+                it.remove();
+                hideStandUpProgress(player);
+                continue;
+            }
+
+            int before = entry.getValue().intValue();
+            int after = (int) next;
+            entry.setValue(next);
+            if (after != before) sendStandUpProgress(player, after);
+        }
+    }
+
+    /**
      * Шле всім клієнтам список лежачих: одразу, коли склад змінився, і раз на
      * {@link #DOWNED_BROADCAST_INTERVAL_TICKS}, поки він непорожній (щоб
      * позиції й таймери не застарівали). Порожній список, що змінився
@@ -1221,7 +1332,11 @@ public final class SurvivorModule implements PhaseListener {
      */
     private void broadcastDowned(List<ServerPlayer> players) {
         Set<UUID> current = bleedOutTicksLeft.keySet();
-        boolean changed = !current.equals(lastBroadcastDowned);
+        // Стан паузи — теж частина «що бачать клієнти»: щойно маньяк підійшов,
+        // треба негайно повідомити клієнтам зафіксувати таймер, не чекаючи
+        // наступного разу, коли зміниться склад лежачих.
+        boolean changed = !current.equals(lastBroadcastDowned)
+            || !mercyPaused.equals(lastBroadcastPaused);
         if (!changed) {
             if (current.isEmpty()) return;
             if (++downedBroadcastCounter < DOWNED_BROADCAST_INTERVAL_TICKS) return;
@@ -1229,13 +1344,16 @@ public final class SurvivorModule implements PhaseListener {
         downedBroadcastCounter = 0;
         lastBroadcastDowned.clear();
         lastBroadcastDowned.addAll(current);
+        lastBroadcastPaused.clear();
+        lastBroadcastPaused.addAll(mercyPaused);
 
         List<DownedSurvivorsPacket.Entry> entries = new ArrayList<>();
         for (var entry : bleedOutTicksLeft.entrySet()) {
             ServerPlayer player = match().onlinePlayer(entry.getKey());
             if (player == null) continue;
             entries.add(new DownedSurvivorsPacket.Entry(
-                entry.getKey(), player.getX(), player.getY(), player.getZ(), entry.getValue()));
+                entry.getKey(), player.getX(), player.getY(), player.getZ(), entry.getValue(),
+                mercyPaused.contains(entry.getKey())));
         }
         ModNetwork.toPlayers(players, new DownedSurvivorsPacket(entries));
     }
@@ -1470,6 +1588,39 @@ public final class SurvivorModule implements PhaseListener {
 
         lastSentVitals.put(id, packet);
         ModNetwork.toPlayer(player, packet);
+    }
+
+    /**
+     * Маньяк щойно вдарив виживого (не добив до непритомності).
+     *
+     * ── Дизайн ────────────────────────────────────────────────────────
+     * Удар дає жертві коротке вікно адреналіну: ефект швидкості I
+     * ({@code maniacHitSpeedTicks}, за замовчуванням 5 с) і ПОВНУ стаміну.
+     * Поранений може рвонути геть — саме тому удар вигідний маньяку лише
+     * тоді, коли поруч немає куди тікати.
+     *
+     * Для непритомного не застосовується: його стаміна все одно замкнена
+     * на нулі ({@link #staminaLocked}), а швидкість ходьби замінена на
+     * повзання — ефект був би невидимим і лише збивав би стан.
+     */
+    public void onManiacHit(ServerPlayer victim) {
+        UUID id = victim.getUUID();
+        if (!match().isSurvivor(id)) return;
+        SurvivorState state = match().survivorStateOf(id);
+        if (state == null || state.isCrawlOnly() || state.isTerminal()) return;
+
+        int speedTicks = ManiacConfigs.get(ConfigSchema.MANIAC_HIT_SPEED_TICKS);
+        if (speedTicks > 0) {
+            // ambient=false, visible=false, showIcon=true: у куточку ефектів
+            // гравець має бачити, що отримав прискорення, але без частинок навколо.
+            victim.addEffect(new MobEffectInstance(
+                MobEffects.MOVEMENT_SPEED, speedTicks, 0, false, false, true));
+        }
+
+        if (StaminaService.isEnabled() && StaminaService.getMaxStamina(victim) > 0) {
+            StaminaService.setStamina(victim, StaminaService.getMaxStamina(victim), true);
+        }
+        sendVitals(victim, true);
     }
 
     /**

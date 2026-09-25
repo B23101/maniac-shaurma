@@ -1,7 +1,4 @@
 maniac:
-  attackRangeBlocks: 3.5
-  attackCooldownTicks: 120
-  attackDamage: 50
   trapPlaceCooldownTicks: 500
   trapMinDistanceToPlayerBlocks: 3
 maniac_selection:

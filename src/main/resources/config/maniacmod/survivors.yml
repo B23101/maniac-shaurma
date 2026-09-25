@@ -15,5 +15,8 @@ legBreakMinHeightBlocks: 6
 legBreakChanceAtMinHeight: 0.2
 legBreakMaxHeightBlocks: 10
 legBreakChanceAtMaxHeight: 0.9
-standUpPresses: 10
+standUpPresses: 25
 heartbeatRangeBlocks: 12
+standUpDecayTicks: 80
+maniacMercyRadiusBlocks: 15
+maniacHitSpeedTicks: 100

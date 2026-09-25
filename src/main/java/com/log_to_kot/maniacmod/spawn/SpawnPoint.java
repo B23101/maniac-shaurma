@@ -20,7 +20,7 @@ public final class SpawnPoint {
     private final float yaw;
     private final SpawnPointKind kind;
 
-    /** Для MANIAC — id архетипу ("chucky"); для решти null. */
+    /** Для MANIAC — id архетипу ("test_maniac"); для решти null. */
     private final String ownerId;
 
     /** Чи точка задіяна в поточному матчі (для ITEM частина навмисно порожня). */

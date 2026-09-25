@@ -9,10 +9,12 @@
   ],
   "client": [
     "ManiacAttackGuardMixin",
+    "EntityGlowMixin",
     "MixinKeyboardInputDownedMovement",
     "MixinKeyboardInputTrapped",
     "MixinKeyboardInputManiacStunned",
     "MixinMouseHandlerManiacStunned",
+    "MixinEntityTurnManiacStunned",
     "GeneratorRepairSwingGuardMixin",
     "ManiacSprintGuardMixin"
   ],

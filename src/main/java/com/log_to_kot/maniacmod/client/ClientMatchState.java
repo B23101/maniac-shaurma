@@ -276,7 +276,7 @@ public final class ClientMatchState {
         com.log_to_kot.maniacmod.client.overlay.WorldToScreen.invalidate();
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
         com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.reset();
-        com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker.reset();
+        com.log_to_kot.maniacmod.client.glow.GeneratorHighlightGlow.reset();
     }
 
     // ── Читання ──────────────────────────────────────────────────────────
@@ -293,6 +293,9 @@ public final class ClientMatchState {
 
     /** Скільки мс лишилось лежачому: серверне значення мінус те, що минуло від пакета. */
     public static long downedMillisLeft(DownedSurvivorsPacket.Entry entry) {
+        // Таймер на паузі (маньяк стоїть над лежачим) — відлік НЕ ведемо
+        // взагалі: показуємо рівно те, що прислав сервер.
+        if (entry.paused()) return Math.max(0L, entry.ticksLeft() * 50L);
         long elapsed = System.currentTimeMillis() - downedReceivedAtMs;
         return Math.max(0L, entry.ticksLeft() * 50L - elapsed);
     }

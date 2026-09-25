@@ -100,7 +100,7 @@ public final class SpawnPlanner {
      * Будує план. Нікого не телепортує — лише рахує.
      *
      * @param allPoints   уся розмітка карти
-     * @param maniacId    id архетипу маньяка ("chucky") — визначає його точки
+     * @param maniacId    id архетипу маньяка ("test_maniac") — визначає його точки
      * @param survivorIds UUID усіх виживих
      * @param numManiacs  скільки маньяків у цьому матчі (зараз завжди 1 —
      *                    параметр існує заздалегідь, щоб підтримку 2+

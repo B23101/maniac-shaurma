@@ -95,6 +95,16 @@ public class GroundItemEntity extends Entity {
     private static final EntityDataAccessor<Boolean> SETTLED =
         SynchedEntityData.defineId(GroundItemEntity.class, EntityDataSerializers.BOOLEAN);
 
+    /**
+     * id гравця, у чию руку зараз летить предмет (0 — не летить).
+     *
+     * Синхронізується, а не передається пакетом позиції щотік: клієнт сам
+     * домалює той самий політ, що й сервер, і рух буде плавним навіть при
+     * стандартному {@code updateInterval} трекера.
+     */
+    private static final EntityDataAccessor<Integer> VACUUM_OWNER =
+        SynchedEntityData.defineId(GroundItemEntity.class, EntityDataSerializers.INT);
+
     /** Поворот по Y. Завжди 0 — константа, не синхронізується. */
     public static final float ROTATION_Y = 0f;
 
@@ -125,6 +135,24 @@ public class GroundItemEntity extends Entity {
     /** Наскільки сильно гравець зсуває предмет одним дотиком, блоків/тік. */
     private static final double PUSH_STRENGTH = 0.02;
 
+    // ── «Полетіло в руку» (після підбору) ────────────────────────────────
+    // Підбір НЕ знищує сутність миттєво: вона летить до долоні гравця
+    // кілька тіків і лише потім зникає — замість «предмет просто зник із
+    // землі». Рух рахується і на сервері (джерело правди), і на клієнті
+    // (плавність між пакетами), тією самою формулою.
+
+    /** Скільки тіків триває політ до руки на сервері. */
+    private static final int VACUUM_TICKS = 6;
+
+    /** Частка шляху до руки за один тік. */
+    private static final double VACUUM_PULL = 0.55;
+
+    /** Поріг «уже в руці», блок² — ближче цього вважаємо доставленим. */
+    private static final double VACUUM_DONE_SQR = 0.09;
+
+    /** Відступ цілі від очей — «долоня» перед грудьми, а не обличчя. */
+    private static final double VACUUM_HAND_DROP = 0.35;
+
     /** Позиція, куди повертаємо предмет із порожнечі. null = ще не задана. */
     private Vec3 anchor;
 
@@ -133,6 +161,9 @@ public class GroundItemEntity extends Entity {
 
     /** Лічильник для рідкісних перевірок опори. Лише сервер. */
     private int recheckCounter = 0;
+
+    /** Скільки тіків лишилось летіти в руку. Лише сервер. */
+    private int vacuumTicksLeft = 0;
 
     public GroundItemEntity(EntityType<? extends GroundItemEntity> type, Level level) {
         super(type, level);
@@ -213,6 +244,7 @@ public class GroundItemEntity extends Entity {
         this.entityData.define(STACK, ItemStack.EMPTY);
         this.entityData.define(ROTATION_X, 0f);
         this.entityData.define(SETTLED, false);
+        this.entityData.define(VACUUM_OWNER, 0);
     }
 
     /**
@@ -230,6 +262,15 @@ public class GroundItemEntity extends Entity {
 
     public float rotationX() {
         return this.entityData.get(ROTATION_X);
+    }
+
+    /** Чи предмет зараз летить у чиюсь руку (після підбору). */
+    public boolean isVacuuming() {
+        return this.entityData.get(VACUUM_OWNER) != 0;
+    }
+
+    private int vacuumOwnerId() {
+        return this.entityData.get(VACUUM_OWNER);
     }
 
     /** Чи фізика спить (предмет лежить нерухомо). */
@@ -253,8 +294,16 @@ public class GroundItemEntity extends Entity {
         // (див. tickClientPrediction).
         if (level().isClientSide) {
             super.tick();
-            tickClientPrediction();
+            // Під час польоту в руку фізика не рахується взагалі: предмет веде
+            // сам політ, і гравітація лише стягувала б його вниз.
+            if (isVacuuming()) tickVacuum();
+            else tickClientPrediction();
             tickClient();
+            return;
+        }
+
+        if (isVacuuming()) {
+            tickVacuum();
             return;
         }
 
@@ -337,6 +386,50 @@ public class GroundItemEntity extends Entity {
     private void tickClientPrediction() {
         if (isSettled()) return;
         stepPhysics();
+    }
+
+    // ── Політ у руку ─────────────────────────────────────────────────────
+
+    /**
+     * Запускає політ предмета до руки гравця. Стек УЖЕ в інвентарі — ця
+     * сутність на час польоту лише візуальна, тому фізика їй більше не
+     * потрібна.
+     */
+    private void beginVacuum(ServerPlayer owner) {
+        this.entityData.set(VACUUM_OWNER, owner.getId());
+        this.vacuumTicksLeft = VACUUM_TICKS;
+        setDeltaMovement(Vec3.ZERO);
+    }
+
+    /**
+     * Один тік польоту. Рух — той самий і на сервері, і на клієнті
+     * (лінійне наближення до долоні з {@link #VACUUM_PULL}), а знищення
+     * сутності робить лише сервер — клієнт усього лише візуально доганяє.
+     *
+     * На відміну від решти руху тут НЕМАЄ передбачення з гравітацією:
+     * дуга була б кривою, а треба рівно «притягнути до руки».
+     */
+    private void tickVacuum() {
+        Entity owner = level().getEntity(vacuumOwnerId());
+        if (owner == null) {
+            // Гравець зник (вийшов/помер) — предмет уже в інвентарі, лишати
+            // його в світі нема сенсу.
+            if (!level().isClientSide) discard();
+            return;
+        }
+
+        Vec3 target = new Vec3(owner.getX(), owner.getEyeY() - VACUUM_HAND_DROP, owner.getZ());
+        Vec3 pos = position();
+        Vec3 next = pos.add(target.subtract(pos).scale(VACUUM_PULL));
+        setPos(next.x, next.y, next.z);
+
+        if (level().isClientSide) return;
+        // hasImpulse змушує трекер надіслати позицію на найближчому тіку, а не
+        // через updateInterval — інакше політ виглядав би ривками.
+        hasImpulse = true;
+        if (--vacuumTicksLeft <= 0 || next.distanceToSqr(target) < VACUUM_DONE_SQR) {
+            discard();
+        }
     }
 
     private void fallAsleep() {
@@ -461,7 +554,9 @@ public class GroundItemEntity extends Entity {
 
         level().playSound(null, getX(), getY(), getZ(), SoundEvents.ITEM_PICKUP,
             SoundSource.PLAYERS, 0.3f, 1.0f + this.random.nextFloat() * 0.4f);
-        discard();
+        // Не discard() одразу: сутність відіграє політ у руку й зникне сама
+        // (див. beginVacuum) — предмет «лине в руки», а не просто зникає.
+        beginVacuum(serverPlayer);
         return InteractionResult.SUCCESS;
     }
 

@@ -25,6 +25,14 @@ import java.util.List;
  *   Винести їх у yml означало б дати адміну зламати розкладку клавіш
  *   значенням, яке нема куди подіти.
  *
+ * ── Блоки, яких тут немає: параметри маньяка ─────────────────────────
+ * Блок {@code maniac_stats_<id>} (файл {@code maniac_stats/<id>.yml})
+ * оголошує не цей клас, а сам архетип — див. {@code ManiacStats}. Це
+ * єдиний виняток із правила «схема в одному файлі», і він вимушений:
+ * набір ключів залежить від того, які маньяки зареєстровані кодом.
+ * Правила ті самі — діапазони, дефолти, лікування, діагностика, — бо
+ * ключі будуються тими самими фабриками {@link ConfigKey}.
+ *
  * ── Що таке DATA-блок ────────────────────────────────────────────────
  * Блоки {@link #SPAWN_POINTS} і {@link #ZONES} наповнюють команди, а не
  * людина з переліком ключів. Вони лікуються тільки цілком: якщо блок
@@ -186,11 +194,12 @@ public final class ConfigSchema {
     /**
      * Шанс за один тік утримання ПКМ, що на гравця, який зараз активно
      * лагодить (стадія REPAIR), впаде міні-гра. Перевіряється окремо
-     * для КОЖНОГО гравця, що зараз лагодить цей генератор — випадання
-     * в одного не чіпає інших: вони продовжують накопичувати прогрес,
-     * поки цей один розбирається з міні-грою. Малий дефолт навмисно:
-     * при декількох гравцях на одному генераторі сумарний шанс за
-     * секунду росте пропорційно їхній кількості.
+     * для КОЖНОГО гравця, що зараз лагодить цей генератор — кому саме
+     * випала міні-гра, вирішується по кожному окремо (гра відкривається
+     * лише йому), але сам ремонт генератора на цей час ЗУПИНЯЄТЬСЯ для
+     * всіх (див. {@link #MINIGAME_BLOCKS_REPAIR}). Малий дефолт
+     * навмисно: при декількох гравцях на одному генераторі сумарний
+     * шанс за секунду росте пропорційно їхній кількості.
      */
     public static final ConfigKey<Double> MINIGAME_TRIGGER_CHANCE_PER_TICK =
         ConfigKey.decimal("generators", "minigameTriggerChancePerTick", 0.0015, 0.0, 1.0);
@@ -215,6 +224,22 @@ public final class ConfigSchema {
      */
     public static final ConfigKey<Integer> MINIGAME_COOLDOWN_TICKS =
         ConfigKey.integer("generators", "minigameCooldownTicks", 100, 0, 1200);
+
+    /**
+     * Чи блокує міні-гра ремонт генератора для ВСІХ гравців (дефолт —
+     * так). Поки хтось розбирається з міні-грою, решта не може рухати
+     * прогрес цього генератора його утриманням ПКМ: замість «кожен сам
+     * за себе» генератор стає спільною точкою, яку не можна протягнути
+     * повз міні-гру силою інших рук. Решта гравців отримують
+     * actionbar-повідомлення, а самого гравця з міні-грою це блокування
+     * не чіпає (його внесок і без того заморожений, поки гра не
+     * скінчиться).
+     *
+     * Вимкнено ({@code false}) — стара поведінка: внесок заморожується
+     * лише в того, кому випала міні-гра, а інші лагодять як завжди.
+     */
+    public static final ConfigKey<Boolean> MINIGAME_BLOCKS_REPAIR =
+        ConfigKey.bool("generators", "minigameBlocksRepair", true);
 
     /**
      * Скільки влучень треба в міні-грі "ціль" (Generator Startup — рухомий
@@ -328,11 +353,12 @@ public final class ConfigSchema {
      * стадією REPAIR і виражена в секундах на стадію, а тут — прямий темп
      * у відсотках за секунду, як просив дизайн.
      *
-     * Дефолт 2: повна каністра (100%) спорожнюється за 50 с, а генератор
-     * (200%) заливається за 100 с.
+     * Дефолт 4 (раніше було 2 — залив пришвидшено вдвічі): повна
+     * каністра (100%) спорожнюється за 25 с, а генератор (200%)
+     * заливається за 50 с.
      */
     public static final ConfigKey<Integer> FUEL_PERCENT_PER_SECOND =
-        ConfigKey.integer("generators", "fuelPercentPerSecond", 2, 1, 100);
+        ConfigKey.integer("generators", "fuelPercentPerSecond", 4, 1, 200);
 
     public static final ConfigKey<Double> SCREWDRIVER_SPEED_BONUS =
         ConfigKey.decimal("generators", "screwdriverSpeedBonus", 0.25, 0.0, 5.0);
@@ -441,44 +467,55 @@ public final class ConfigSchema {
      * вставання не було чого показувати. Тепер це число дизайну.
      */
     public static final ConfigKey<Integer> STAND_UP_PRESSES =
-        ConfigKey.integer("survivors", "standUpPresses", 10, 1, 100);
+        ConfigKey.integer("survivors", "standUpPresses", 25, 1, 200);
+
+    /**
+     * За скільки тіків повний прогрес вставання згасає до нуля, якщо
+     * пробіл не спамити (80 тіків = 4 с). Швидкість згасання стала: від
+     * неповного прогресу він скидається відповідно швидше. При
+     * {@code standUpPresses = 25} це згасання ≈0.31/тік, тобто встати
+     * можна лише тиснучи частіше ніж ~6 разів на секунду — саме
+     * «спамити пробіл», а не «натиснути N разів».
+     */
+    public static final ConfigKey<Integer> STAND_UP_DECAY_TICKS =
+        ConfigKey.integer("survivors", "standUpDecayTicks", 80, 1, 6000);
 
     public static final ConfigKey<Integer> HEARTBEAT_RANGE_BLOCKS =
         ConfigKey.integer("survivors", "heartbeatRangeBlocks", 12, 0, 128);
 
-    // ── maniac ───────────────────────────────────────────────────────────
+    /**
+     * На якій відстані (блоки) маньяк вважається «надто близько» до
+     * непритомного: поки він у цьому радіусі, таймер до смерті СТОЇТЬ,
+     * а маньяку в actionbar приходить підказка відійти. Так добити
+     * лежачого можна лише перечекавши, а не стоячи над ним.
+     */
+    public static final ConfigKey<Integer> MANIAC_MERCY_RADIUS_BLOCKS =
+        ConfigKey.integer("survivors", "maniacMercyRadiusBlocks", 15, 0, 64);
 
     /**
-     * Дальність удару маньяка. Саме те, що просили редагувати —
-     * різні маньяки можуть перевизначати її у своєму архетипі, а це
-     * базове значення.
+     * Скільки тіків тримається ефект швидкості I на виживому після того,
+     * як його вдарив маньяк (100 тіків = 5 с). Стаміна при ударі
+     * відновлюється повністю — тому поранений може рвонути геть.
      */
-    public static final ConfigKey<Double> ATTACK_RANGE_BLOCKS =
-        ConfigKey.decimal("maniac", "attackRangeBlocks", 1.0, 1.0, 8.0);
+    public static final ConfigKey<Integer> MANIAC_HIT_SPEED_TICKS =
+        ConfigKey.integer("survivors", "maniacHitSpeedTicks", 100, 0, 6000);
 
-    public static final ConfigKey<Integer> ATTACK_COOLDOWN_TICKS =
-        ConfigKey.integer("maniac", "attackCooldownTicks", 120, 10, 600);
-
-    public static final ConfigKey<Integer> ATTACK_DAMAGE =
-        ConfigKey.integer("maniac", "attackDamage", 50, 1, 1000);
+    // ── maniac ───────────────────────────────────────────────────────────
+    //
+    // Тут НЕМАЄ ключів, які описують конкретного маньяка: дальність
+    // удару, шкода, перезарядка, множник швидкості, габарити й висота
+    // очей. Вони переїхали в блок КОЖНОГО маньяка (див. ManiacStats):
+    // ключ, спільний на всіх, змушував би правити один файл, щоб
+    // змінити одного, а різні маньяки за дизайном різні за всіма цими
+    // числами. Те, що тут лишилось, — справді спільне для режиму
+    // (розміщення пасток, лом, оглушення), бо воно не залежить від
+    // того, ХТО саме полює.
 
     public static final ConfigKey<Integer> TRAP_PLACE_COOLDOWN_TICKS =
         ConfigKey.integer("maniac", "trapPlaceCooldownTicks", 500, 20, 6000);
 
     public static final ConfigKey<Integer> TRAP_MIN_DISTANCE_TO_PLAYER =
         ConfigKey.integer("maniac", "trapMinDistanceToPlayerBlocks", 3, 0, 32);
-
-    /**
-     * Множник швидкості руху маньяка відносно ЗВИЧАЙНОЇ ходьби гравця.
-     *
-     * <p>Маньяк не має спринту взагалі: його «бігом» і є ця підвищена
-     * ходьба. 1.2 = на 20% швидше за звичайну ходьбу виживого. Числа
-     * живуть тут, а не в архетипі, бо швидкість — це налаштування
-     * балансу, яке адмін має правити без перекомпіляції; конкретний
-     * маньяк може перевизначити її в {@code ManiacArchetype#speedMultiplier()}.</p>
-     */
-    public static final ConfigKey<Double> MANIAC_SPEED_MULTIPLIER =
-        ConfigKey.decimal("maniac", "speedMultiplier", 1.2, 0.5, 3.0);
 
     /**
      * Перезарядка ПІСЛЯ встановлення капкана, у тіках. 800 = 40 с.
@@ -510,6 +547,43 @@ public final class ConfigSchema {
     // ── bear trap (капкан): наслідки для жертви ─────────────────────────
 
     /** Шкода від захлопнення капкана, у хп. */
+    // ── Міні-гра визволення з капкана ───────────────────────────────────
+    // Свої значення, а не ключі генератора: капкан і ремонт — різні за
+    // відчуттям події (капкан карає за помилку не вибухом, а втратою
+    // прогресу), тому адміністратор мусить мати змогу настроїти їх
+    // незалежно. Спільною лишається тільки геометрія траєкторії —
+    // код {@code TargetMinigameSpec}, а не конфіг.
+
+    /** Скільки влучань треба, щоб вибратися з капкана власними силами. */
+    public static final ConfigKey<Integer> TRAP_ESCAPE_HITS_REQUIRED =
+        ConfigKey.integer("maniac", "trapEscapeHitsRequired", 5, 1, 20);
+
+    /**
+     * Скільки влучань ЗНИМАЄ промах (не нижче нуля). На відміну від
+     * міні-гри генератора, де промах — це одразу провал із вибухом, тут
+     * промах лише відкидає назад: капкан не вибухає й не карає гру
+     * вибухом, а просто не відпускає. 0 вимикає штраф.
+     */
+    public static final ConfigKey<Integer> TRAP_ESCAPE_MISS_PENALTY =
+        ConfigKey.integer("maniac", "trapEscapeMissPenalty", 2, 0, 10);
+
+    /** Швидкість повзунка в міні-грі визволення з капкана (часток смуги за секунду). */
+    public static final ConfigKey<Double> TRAP_ESCAPE_CURSOR_SPEED =
+        ConfigKey.decimal("maniac", "trapEscapeCursorSpeed", 0.9, 0.05, 5.0);
+
+    /** Ширина зони влучання в міні-грі визволення з капкана (часток смуги). */
+    public static final ConfigKey<Double> TRAP_ESCAPE_HIT_ZONE_WIDTH =
+        ConfigKey.decimal("maniac", "trapEscapeHitZoneWidth", 0.10, 0.01, 0.5);
+
+    /**
+     * Скільки тіків дано на спробу вибратися з капкана. Час вийшов —
+     * екран закривається, гравець лишається в капкані й чекає на
+     * товариша з ломом: спроба одна на захлопування (інакше капкан не
+     * тримав би нікого — гравець просто чекав би вдалого раунду).
+     */
+    public static final ConfigKey<Integer> TRAP_ESCAPE_TICKS =
+        ConfigKey.integer("maniac", "trapEscapeTicks", 300, 20, 1200);
+
     public static final ConfigKey<Integer> BEAR_TRAP_DAMAGE =
         ConfigKey.integer("maniac", "bearTrapDamage", 15, 0, 100);
 
@@ -679,6 +753,7 @@ public final class ConfigSchema {
         "Ремонт, бензин, міні-ігри й підсвітка генераторів.",
         GENERATORS_REQUIRED, BONUS_GENERATORS_PER_MANIAC,
         MINIGAME_TRIGGER_CHANCE_PER_TICK, MINIGAME_GRACE_TICKS, MINIGAME_COOLDOWN_TICKS,
+        MINIGAME_BLOCKS_REPAIR,
         TARGET_MINIGAME_HITS_REQUIRED, TARGET_MINIGAME_CURSOR_SPEED, TARGET_MINIGAME_HIT_ZONE_WIDTH,
         WIRE_MINIGAME_TICKS, TARGET_MINIGAME_LAG_TOLERANCE_MS,
         FUEL_REQUIRED_PERCENT, FUEL_PERCENT_PER_SECOND,
@@ -694,15 +769,17 @@ public final class ConfigSchema {
         DOWNED_BLEED_OUT_TICKS, RESCUE_DECAY_TICKS, REVIVE_HP, DOWNED_CRAWL_SPEED, RESCUE_RANGE_BLOCKS,
         RESCUE_HELPER_BONUS, STAMINA_DRAIN_PER_TICK, STAMINA_REGEN_PER_TICK,
         FALL_KNOCKDOWN_HEIGHT, LEG_BREAK_MIN_HEIGHT, LEG_BREAK_CHANCE_AT_MIN,
-        LEG_BREAK_MAX_HEIGHT, LEG_BREAK_CHANCE_AT_MAX, STAND_UP_PRESSES, HEARTBEAT_RANGE_BLOCKS);
+        LEG_BREAK_MAX_HEIGHT, LEG_BREAK_CHANCE_AT_MAX, STAND_UP_PRESSES, STAND_UP_DECAY_TICKS,
+        HEARTBEAT_RANGE_BLOCKS, MANIAC_MERCY_RADIUS_BLOCKS, MANIAC_HIT_SPEED_TICKS);
 
     public static final ConfigBlock MANIAC = ConfigBlock.settings("maniac", "maniacs.yml",
-        "Базові параметри маньяка. Архетип може перевизначити їх для себе.",
-        ATTACK_RANGE_BLOCKS, ATTACK_COOLDOWN_TICKS, ATTACK_DAMAGE,
+        "Спільні для всіх маньяків правила полювання.",
         TRAP_PLACE_COOLDOWN_TICKS, TRAP_MIN_DISTANCE_TO_PLAYER,
-        MANIAC_SPEED_MULTIPLIER, BEAR_TRAP_PLACE_COOLDOWN_TICKS,
+        BEAR_TRAP_PLACE_COOLDOWN_TICKS,
         TRAP_PLACE_RANGE_BLOCKS, TRAPS_PER_MATCH,
         CROWBAR_HIT_WEAR_PERCENT, CROWBAR_COOLDOWN_TICKS, CROWBAR_RANGE_BLOCKS,
+        TRAP_ESCAPE_HITS_REQUIRED, TRAP_ESCAPE_MISS_PENALTY,
+        TRAP_ESCAPE_CURSOR_SPEED, TRAP_ESCAPE_HIT_ZONE_WIDTH, TRAP_ESCAPE_TICKS,
         BEAR_TRAP_DAMAGE, BEAR_TRAP_LEG_DAMAGE, LEG_INTEGRITY_REGEN_PER_SECOND,
         CROWBAR_STUN_DURATION_TICKS, CROWBAR_STUN_COOLDOWN_TICKS, CROWBAR_STUN_RANGE_BLOCKS,
         CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER);
@@ -728,9 +805,35 @@ public final class ConfigSchema {
         "Зони карти (втеча, лут). Наповнюється командами. "
         + "Вміст ніколи не відновлюється з дефолту.");
 
-    /** Порядок = порядок блоків у згенерованому файлі. */
-    public static final List<ConfigBlock> BLOCKS = List.of(
-        GAME, WORLD, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT, INVENTORY);
+    /**
+     * Порядок = порядок блоків у згенерованому файлі та порядок табів у
+     * меню налаштувань. Список мутабельний ЛИШЕ заради
+     * {@link #registerManiacBlock}: статичні блоки перелічені тут, а
+     * блоки параметрів маньяків дописуються при реєстрації архетипів
+     * (їх фізично не може бути в цьому рядку — вони з'являються разом із
+     * класом маньяка). Чому всередині такого блока ключі теж не
+     * статичні — див. док класу {@link ConfigBlock}.
+     */
+    public static final List<ConfigBlock> BLOCKS = new java.util.ArrayList<>(List.of(
+        GAME, WORLD, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT, INVENTORY));
+
+    /**
+     * Реєструє блок параметрів маньяка, ставлячи його одразу після
+     * {@link #MANIAC} — так у меню налаштувань параметри йдуть поруч зі
+     * спільними правилами полювання, а не в кінці списку через те, що
+     * маньяка зареєстрували пізніше за лут.
+     *
+     * Викликається з {@code ManiacStats.ensureRegistered} під час
+     * реєстрації архетипу, тобто ДО {@code ManiacConfigs.init}: перше ж
+     * завантаження конфігу мусить бачити всі ключі, інакше файл маньяка
+     * не створився б до наступного reload.
+     */
+    public static void registerManiacBlock(ConfigBlock block) {
+        if (blockById(block.id()) != null) {
+            throw new IllegalStateException("Блок конфігу '" + block.id() + "' уже зареєстрований.");
+        }
+        BLOCKS.add(BLOCKS.indexOf(MANIAC) + 1, block);
+    }
 
     public static ConfigBlock blockById(String id) {
         for (ConfigBlock block : BLOCKS) {

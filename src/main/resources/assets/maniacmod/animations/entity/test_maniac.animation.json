@@ -1,0 +1,290 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.test_maniac.idle": {
+      "loop": true,
+      "animation_length": 2.0,
+      "comment": "Спокій. Легке 'дихання' торса й голови — модель жива, але не рухається з місця. Ім'я мусить бути animation.<id>.<коротке ім'я з ManiacAnimationSet>, бо GeckoLib сам додає префікс.",
+      "bones": {
+        "body": {
+          "position": {
+            "0.0": { "vector": [0, 0, 0] },
+            "1.0": { "vector": [0, 0.8, 0] },
+            "2.0": { "vector": [0, 0, 0] }
+          }
+        },
+        "head": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, 0] },
+            "1.0": { "vector": [-2, 0, 0] },
+            "2.0": { "vector": [0, 0, 0] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.walk": {
+      "loop": true,
+      "animation_length": 1.0,
+      "comment": "Ходьба. Ноги/руки в протифазі; період 1.0с — швидкість кроку задає сама анімація, а рух гравця приходить зі швидкості сутності, тому не синхронізуємо їх жорстко (перехід 3 тіки згладжує різницю).",
+      "bones": {
+        "left_leg": {
+          "rotation": {
+            "0.0": { "vector": [-28, 0, 0] },
+            "0.5": { "vector": [28, 0, 0] },
+            "1.0": { "vector": [-28, 0, 0] }
+          }
+        },
+        "right_leg": {
+          "rotation": {
+            "0.0": { "vector": [28, 0, 0] },
+            "0.5": { "vector": [-28, 0, 0] },
+            "1.0": { "vector": [28, 0, 0] }
+          }
+        },
+        "left_arm": {
+          "rotation": {
+            "0.0": { "vector": [24, 0, 0] },
+            "0.5": { "vector": [-24, 0, 0] },
+            "1.0": { "vector": [24, 0, 0] }
+          }
+        },
+        "right_arm": {
+          "rotation": {
+            "0.0": { "vector": [-24, 0, 0] },
+            "0.5": { "vector": [24, 0, 0] },
+            "1.0": { "vector": [-24, 0, 0] }
+          }
+        },
+        "body": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, 2] },
+            "0.5": { "vector": [0, 0, -2] },
+            "1.0": { "vector": [0, 0, 2] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.run": {
+      "loop": true,
+      "animation_length": 0.6,
+      "comment": "Біг (у маньяка це підвищена ходьба). Той самий малюнок, що walk, але розмах більший і корпус нахилений уперед — читається як 'тисне'.",
+      "bones": {
+        "body": {
+          "rotation": {
+            "0.0": { "vector": [10, 0, 3] },
+            "0.3": { "vector": [10, 0, -3] },
+            "0.6": { "vector": [10, 0, 3] }
+          }
+        },
+        "left_leg": {
+          "rotation": {
+            "0.0": { "vector": [-48, 0, 0] },
+            "0.3": { "vector": [48, 0, 0] },
+            "0.6": { "vector": [-48, 0, 0] }
+          }
+        },
+        "right_leg": {
+          "rotation": {
+            "0.0": { "vector": [48, 0, 0] },
+            "0.3": { "vector": [-48, 0, 0] },
+            "0.6": { "vector": [48, 0, 0] }
+          }
+        },
+        "left_arm": {
+          "rotation": {
+            "0.0": { "vector": [42, 0, 0] },
+            "0.3": { "vector": [-42, 0, 0] },
+            "0.6": { "vector": [42, 0, 0] }
+          }
+        },
+        "right_arm": {
+          "rotation": {
+            "0.0": { "vector": [-42, 0, 0] },
+            "0.3": { "vector": [42, 0, 0] },
+            "0.6": { "vector": [-42, 0, 0] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.jump": {
+      "loop": true,
+      "animation_length": 0.5,
+      "comment": "У повітрі. Ноги підтягнуті, руки розведені — читається як стрибок і не конфліктує з walk/run при переході.",
+      "bones": {
+        "left_leg": {
+          "rotation": {
+            "0.0": { "vector": [22, 0, 0] },
+            "0.5": { "vector": [18, 0, 0] }
+          }
+        },
+        "right_leg": {
+          "rotation": {
+            "0.0": { "vector": [10, 0, 0] },
+            "0.5": { "vector": [14, 0, 0] }
+          }
+        },
+        "left_arm": {
+          "rotation": {
+            "0.0": { "vector": [-18, 0, -22] },
+            "0.5": { "vector": [-22, 0, -26] }
+          }
+        },
+        "right_arm": {
+          "rotation": {
+            "0.0": { "vector": [-18, 0, 22] },
+            "0.5": { "vector": [-22, 0, 26] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.sneak": {
+      "loop": true,
+      "animation_length": 2.0,
+      "comment": "Присідання на місці: корпус опускається (position y -7px) і нахиляється вперед, ноги згинаються.",
+      "bones": {
+        "body": {
+          "position": {
+            "0.0": { "vector": [0, -7, 0] },
+            "1.0": { "vector": [0, -6, 0] },
+            "2.0": { "vector": [0, -7, 0] }
+          },
+          "rotation": {
+            "0.0": { "vector": [16, 0, 0] },
+            "1.0": { "vector": [18, 0, 0] },
+            "2.0": { "vector": [16, 0, 0] }
+          }
+        },
+        "head": {
+          "rotation": {
+            "0.0": { "vector": [-14, 0, 0] },
+            "2.0": { "vector": [-14, 0, 0] }
+          }
+        },
+        "left_leg": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, -8] },
+            "2.0": { "vector": [0, 0, -8] }
+          }
+        },
+        "right_leg": {
+          "rotation": {
+            "0.0": { "vector": [0, 0, 8] },
+            "2.0": { "vector": [0, 0, 8] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.sneak_walk": {
+      "loop": true,
+      "animation_length": 1.2,
+      "comment": "Переміщення присідаючи (закладання пастки). База — sneak, зверху доданий крок ніг.",
+      "bones": {
+        "body": {
+          "position": {
+            "0.0": { "vector": [0, -7, 0] },
+            "1.2": { "vector": [0, -7, 0] }
+          },
+          "rotation": {
+            "0.0": { "vector": [16, 0, 0] },
+            "1.2": { "vector": [16, 0, 0] }
+          }
+        },
+        "head": {
+          "rotation": {
+            "0.0": { "vector": [-14, 0, 0] },
+            "1.2": { "vector": [-14, 0, 0] }
+          }
+        },
+        "left_leg": {
+          "rotation": {
+            "0.0": { "vector": [-16, 0, -8] },
+            "0.6": { "vector": [16, 0, -8] },
+            "1.2": { "vector": [-16, 0, -8] }
+          }
+        },
+        "right_leg": {
+          "rotation": {
+            "0.0": { "vector": [16, 0, 8] },
+            "0.6": { "vector": [-16, 0, 8] },
+            "1.2": { "vector": [16, 0, 8] }
+          }
+        },
+        "left_arm": {
+          "rotation": {
+            "0.0": { "vector": [-14, 0, 0] },
+            "0.6": { "vector": [14, 0, 0] },
+            "1.2": { "vector": [-14, 0, 0] }
+          }
+        },
+        "right_arm": {
+          "rotation": {
+            "0.0": { "vector": [14, 0, 0] },
+            "0.6": { "vector": [-14, 0, 0] },
+            "1.2": { "vector": [14, 0, 0] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.attack": {
+      "loop": false,
+      "animation_length": 0.5,
+      "comment": "Одноразовий замах. Грається, поки діє латч удару в ManiacAnimatable (ATTACK_TICKS ≈ 8 тіків), потім контролер сам повертає стан ходьби/стояння — тому 'loop': false і жодного прапорця 'анімація скінчилась' не потрібно.",
+      "bones": {
+        "body": {
+          "rotation": {
+            "0.0": { "vector": [0, 12, 0] },
+            "0.25": { "vector": [0, -14, 0] },
+            "0.5": { "vector": [0, 0, 0] }
+          }
+        },
+        "right_arm": {
+          "rotation": {
+            "0.0": { "vector": [-120, 0, 0] },
+            "0.25": { "vector": [30, 0, 0] },
+            "0.5": { "vector": [0, 0, 0] }
+          }
+        },
+        "left_arm": {
+          "rotation": {
+            "0.0": { "vector": [10, 0, 0] },
+            "0.5": { "vector": [0, 0, 0] }
+          }
+        }
+      }
+    },
+
+    "animation.test_maniac.interact": {
+      "loop": false,
+      "animation_length": 0.6,
+      "comment": "Взаємодія: грається, поки гравець використовує предмет (isUsingItem) — так виглядає закладання пастки. Обидві руки йдуть уперед і трохи вниз.",
+      "bones": {
+        "left_arm": {
+          "rotation": {
+            "0.0": { "vector": [-65, 0, -10] },
+            "0.3": { "vector": [-72, 0, -14] },
+            "0.6": { "vector": [-65, 0, -10] }
+          }
+        },
+        "right_arm": {
+          "rotation": {
+            "0.0": { "vector": [-65, 0, 10] },
+            "0.3": { "vector": [-72, 0, 14] },
+            "0.6": { "vector": [-65, 0, 10] }
+          }
+        },
+        "body": {
+          "rotation": {
+            "0.0": { "vector": [8, 0, 0] },
+            "0.6": { "vector": [8, 0, 0] }
+          }
+        }
+      }
+    }
+  }
+}

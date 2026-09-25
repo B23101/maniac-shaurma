@@ -46,8 +46,12 @@ public class CrowbarItem extends Item implements GeoItem {
 
     public static final int MAX_DURABILITY = 100;
 
+    /** Вигляд предмета: шляхи за id (див. {@link ItemVisuals}). */
+    private static final ItemVisuals VISUALS = ItemVisuals.of("crowbar");
+
     private static final String CONTROLLER_NAME = "crowbarController";
-    private static final RawAnimation ANIM_IDLE = RawAnimation.begin().thenLoop("idle");
+    private static final RawAnimation ANIM_IDLE =
+        RawAnimation.begin().thenLoop(VISUALS.animationSet().idle());
 
     private final AnimatableInstanceCache geoCache = new SingletonAnimatableInstanceCache(this);
 
@@ -57,17 +61,10 @@ public class CrowbarItem extends Item implements GeoItem {
 
     @Override
     public void initializeClient(Consumer<IClientItemExtensions> consumer) {
-        consumer.accept(new IClientItemExtensions() {
-            private com.log_to_kot.maniacmod.client.renderer.CrowbarItemRenderer renderer;
-
-            @Override
-            public net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer getCustomRenderer() {
-                if (renderer == null) {
-                    renderer = new com.log_to_kot.maniacmod.client.renderer.CrowbarItemRenderer();
-                }
-                return renderer;
-            }
-        });
+        // Спільний хелпер: один ліниво створений рендерер, шляхи — з VISUALS.
+        // Свого класу-рендерера й класу-моделі лом більше не має.
+        com.log_to_kot.maniacmod.client.renderer.ItemGeoRenderer
+            .attach(consumer, () -> new com.log_to_kot.maniacmod.client.renderer.ItemGeoRenderer<>(VISUALS));
     }
 
     @Override

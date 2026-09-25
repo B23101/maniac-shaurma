@@ -28,8 +28,18 @@ public final class ModSounds {
 
     // ── Генератор ────────────────────────────────────────────────────────
     public static final RegistryObject<SoundEvent> GENERATOR_REPAIR = register("generator_repair");
-    public static final RegistryObject<SoundEvent> GENERATOR_ON     = register("generator_on");
     public static final RegistryObject<SoundEvent> POWER_ON         = register("power_on");
+
+    // Запуск і гул роботи генератора. Обидва грає СЕРВЕР, у своєму радіусі
+    // (10 і 5 блоків) — див. GeneratorSoundscape. Гул — не «звук із
+    // прапорцем loop»: сервер програє файл знову рівно тоді, коли
+    // скінчився попередній, а довжину бере з самого ogg.
+    public static final RegistryObject<SoundEvent> GENERATOR_START = register("generator_start");
+    public static final RegistryObject<SoundEvent> GENERATOR_LOOP  = register("generator_loop");
+
+    // Луп заливу бензину (радіус 5): чується лише тоді, коли хтось справді
+    // заливає, тож знати про нього більше нікому не треба.
+    public static final RegistryObject<SoundEvent> FUEL_FILL = register("fuel_fill");
 
     // ── Вихід ────────────────────────────────────────────────────────────
     public static final RegistryObject<SoundEvent> EXIT_OPEN        = register("exit_open");
@@ -39,8 +49,18 @@ public final class ModSounds {
     public static final RegistryObject<SoundEvent> MANIAC_NEARBY = register("maniac_nearby");
 
     // ── Пастки ───────────────────────────────────────────────────────────
-    public static final RegistryObject<SoundEvent> TRAP_SNAP = register("trap_snap");
-    public static final RegistryObject<SoundEvent> WIRE_ZAP  = register("wire_zap");
+    // trap_place    — маньяк поставив пастку (звук із місця пастки);
+    // trap_snap     — капкан захлопнувся на жертві;
+    // trap_struggle — жертва смикається в капкані, ПОВТОРЮЄТЬСЯ поки тримає
+    //                 (період = довжина файлу, тож без шва на стику —
+    //                 див. TrapModule.tickStruggle);
+    // crowbar_hit   — удар ломом (і по капкану, і по маньяку — той самий
+    //                 звук, бо для вуха це одна дія).
+    public static final RegistryObject<SoundEvent> TRAP_SNAP     = register("trap_snap");
+    public static final RegistryObject<SoundEvent> TRAP_PLACE    = register("trap_place");
+    public static final RegistryObject<SoundEvent> TRAP_STRUGGLE = register("trap_struggle");
+    public static final RegistryObject<SoundEvent> CROWBAR_HIT   = register("crowbar_hit");
+    public static final RegistryObject<SoundEvent> WIRE_ZAP      = register("wire_zap");
 
     // ── Стаміна ──────────────────────────────────────────────────────────
     // 3 варіації важкого дихання, коли стаміна на нулі — sounds.json
@@ -65,9 +85,8 @@ public final class ModSounds {
     // Хрускіт кісток при переломі ноги (onStandUpAttempt → BROKEN_LEG).
     public static final RegistryObject<SoundEvent> BONE_BREAK = register("bone_break");
 
-    // TODO(асети): за дизайном ще потрібні — провал міні-гри генератора
-    // (minigame_fail), залив бензину (fuel_pour). Реєструвати після
-    // додавання .ogg.
+    // TODO(асети): за дизайном ще потрібен провал міні-гри генератора
+    // (minigame_fail). Реєструвати після додавання .ogg.
 
     private static RegistryObject<SoundEvent> register(String name) {
         return SOUNDS.register(name, () -> SoundEvent.createVariableRangeEvent(

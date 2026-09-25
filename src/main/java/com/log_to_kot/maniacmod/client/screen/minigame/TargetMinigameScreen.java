@@ -110,9 +110,17 @@ public final class TargetMinigameScreen extends Screen {
      */
     private boolean spaceHeld;
 
-    public TargetMinigameScreen(long seed, double cursorSpeed, double hitZoneWidth,
+    /**
+     * @param titleKey      ключ локалізації заголовка. Екран ОДИН на дві
+     *                      міні-гри (ремонт генератора й визволення з
+     *                      капкана — та сама механіка), але заголовок у
+     *                      них різний, тож його вибирає той, хто відкриває
+     *                      екран ({@code ClientPacketHandler}) за своїм
+     *                      станом, а не сама механіка.
+     */
+    public TargetMinigameScreen(String titleKey, long seed, double cursorSpeed, double hitZoneWidth,
                                  double targetPosition, int hitsRequired) {
-        super(Component.translatable("maniacmod.minigame.target.title"));
+        super(Component.translatable(titleKey));
         this.seed = seed;
         this.cursorSpeed = cursorSpeed;
         this.hitZoneWidth = hitZoneWidth;

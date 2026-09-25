@@ -40,8 +40,12 @@ public record DownedSurvivorsPacket(List<Entry> entries) implements S2CPacket {
      * @param id        UUID лежачого
      * @param x         позиція тіла (для мітки на всю карту)
      * @param ticksLeft скільки тіків лишилось до смерті
+     * @param paused    {@code true}, якщо таймер ЗАРАЗ стоїть — маньяк у
+     *                  радіусі милосердя. Клієнт тоді показує зафіксоване
+     *                  значення замість власного відліку, інакше таймер
+     *                  «тікав» би всупереч серверу.
      */
-    public record Entry(UUID id, double x, double y, double z, int ticksLeft) {}
+    public record Entry(UUID id, double x, double y, double z, int ticksLeft, boolean paused) {}
 
     public DownedSurvivorsPacket(FriendlyByteBuf buf) {
         this(read(buf));
@@ -52,7 +56,7 @@ public record DownedSurvivorsPacket(List<Entry> entries) implements S2CPacket {
         List<Entry> list = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
             list.add(new Entry(buf.readUUID(), buf.readDouble(), buf.readDouble(),
-                buf.readDouble(), buf.readVarInt()));
+                buf.readDouble(), buf.readVarInt(), buf.readBoolean()));
         }
         return list;
     }
@@ -66,6 +70,7 @@ public record DownedSurvivorsPacket(List<Entry> entries) implements S2CPacket {
             buf.writeDouble(e.y());
             buf.writeDouble(e.z());
             buf.writeVarInt(e.ticksLeft());
+            buf.writeBoolean(e.paused());
         }
     }
 

@@ -45,9 +45,9 @@ public final class ItemRegistry {
         //   register("adrenaline",   AdrenalineItem::new,   Group.SURVIVOR);
 
         // ── Зброя маньяків ──────────────────────────────────────────────
-        // TODO(міграція maniacs):
-        //   register("chucky_knife",     ChuckyKnifeItem::new,     Group.MANIAC_WEAPON);
-        //   register("slender_tentacle", SlenderTentacleItem::new, Group.MANIAC_WEAPON);
+        // TODO(міграція maniacs): назви предметів беруться з id архетипу
+        //   (<id>_<щось>), щоб зброя читалась разом із маньяком:
+        //   register("<id>_knife", <Id>KnifeItem::new, Group.MANIAC_WEAPON);
 
         // ── Пастки ──────────────────────────────────────────────────────
         // TODO(міграція traps):

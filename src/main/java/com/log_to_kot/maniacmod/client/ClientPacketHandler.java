@@ -102,9 +102,9 @@ public final class ClientPacketHandler {
     public static void onGeneratorHighlight(int durationTicks,
                                             List<GeneratorHighlightPacket.Entry> entries) {
         ClientMatchState.setHighlight(entries, durationTicks, clientTick());
-        // Малює саме маркер: ClientMatchState лише тримає дані. Раніше
-        // підсвітку не малював ніхто, тож клавіша 5 нічого не показувала.
-        com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker
+        // Реальна підсвітка — контур сутності генератора крізь стіни,
+        // лише на цьому клієнті (див. GeneratorHighlightGlow).
+        com.log_to_kot.maniacmod.client.glow.GeneratorHighlightGlow
             .show(entries, durationTicks);
     }
 
@@ -117,8 +117,16 @@ public final class ClientPacketHandler {
     public static void onTargetMinigameOpen(
             com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket packet) {
         ClientInputHandler.forceReleaseRepairHold();
+        // Заголовок вибирається ТУТ, а не береться з пакета: механіка в
+        // обох випадках однакова (той самий екран), а належність екрана
+        // клієнт знає зі свого стану — я зараз у капкані чи біля
+        // генератора. Пакет лишається про механіку, а не про місце
+        // (див. TargetMinigameOpenPacket).
+        String titleKey = ClientMatchState.isTrapped()
+            ? "maniacmod.minigame.trap.title"
+            : "maniacmod.minigame.target.title";
         Minecraft.getInstance().setScreen(new com.log_to_kot.maniacmod.client.screen.minigame.TargetMinigameScreen(
-            packet.seed(), packet.cursorSpeed(), packet.hitZoneWidth(),
+            titleKey, packet.seed(), packet.cursorSpeed(), packet.hitZoneWidth(),
             packet.targetPosition(), packet.hitsRequired()));
     }
 
@@ -138,6 +146,10 @@ public final class ClientPacketHandler {
             com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket packet) {
         var screen = Minecraft.getInstance().screen;
         if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.TargetMinigameScreen target) {
+            // Сам лічильник, без тлумачення «влучив чи промахнувся»: у
+            // капкані число може й зменшитись (штраф за промах), а екран
+            // у обох випадках робить те саме — показує нове число й дає
+            // спробу ще раз.
             target.onHit(packet.hitsSoFar());
         } else if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.WireMinigameScreen wires) {
             wires.onWireConnected(packet.leftSlot(), packet.rightSlot());

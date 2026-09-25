@@ -21,7 +21,7 @@ import net.minecraft.network.FriendlyByteBuf;
  * він у грі.
  *
  * @param role             роль локального гравця
- * @param archetypeId      id архетипу: маньяка ("chucky") або ролі виживого
+ * @param archetypeId      id архетипу: маньяка ("test_maniac") або ролі виживого
  *                         ("default"); порожній рядок для глядача
  * @param attackRangeBlocks дальність удару маньяка в блоках, з якої
  *                         клієнт сам вирішує, чи зіграти замах ЛКМ

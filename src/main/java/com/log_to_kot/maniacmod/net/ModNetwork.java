@@ -73,7 +73,7 @@ public final class ModNetwork {
      * з різними версіями просто не з'єднаються — це краще, ніж
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
      */
-    private static final String PROTOCOL_VERSION = "8";
+    private static final String PROTOCOL_VERSION = "9";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),

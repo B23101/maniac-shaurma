@@ -36,25 +36,51 @@ import java.util.UUID;
  * Надсилається на ПОДІЮ (хтось приєднався/вибув/змінив стан/хп), а не
  * щотік — та сама логіка, що вже є в SurvivorVitalsPacket.
  *
+ * ── Навіщо тут габарити маньяка ─────────────────────────────────────
+ * Хітбокс і висота очей маньяка тепер налаштовуються в його власному
+ * yml ({@code maniac_stats/<id>.yml}) і читаються з ОБОХ боків — на
+ * сервері {@code ManiacBodyEvents}, на клієнті
+ * {@code ClientManiacBodyEvents}. На виділеному сервері це два РІЗНІ
+ * файли: клієнт створить собі свій з дефолтів і розійдеться з
+ * сервером розмірами (чужий клієнт бив би в порожнечу повз триблочного
+ * маньяка). Тому розміри, як і дальність удару в {@code RoleSyncPacket},
+ * їдуть із сервера — джерелом правди лишається сервер, а локальний
+ * конфіг працює лише як фолбек до першого ростеру.
+ *
  * @param entries усі гравці матчу станом на момент відправки
  */
 public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
 
     /**
+     * Габарити маньяка в грі: те, що сервер реально застосував до
+     * гравця (тобто з його конфігу, а не з дефолтів схеми).
+     *
+     * @param width      ширина хітбокса
+     * @param height     висота хітбокса
+     * @param eyeHeight  висота очей
+     */
+    public record ManiacBody(float width, float height, float eyeHeight) {}
+
+    /**
      * @param playerId    UUID гравця — посилання, не дублікат даних
      * @param displayName ім'я для відображення в таб-таблиці
      * @param role        роль гравця (та сама емуляція, що й RoleSyncPacket.Role)
-     * @param archetypeId маньяк: id архетипу ("chucky") — таб показує, ЯКИЙ саме маньяк;
+     * @param archetypeId маньяк: id архетипу ({@code "test_maniac"}) — таб показує, ЯКИЙ саме маньяк;
      *                    виживий/глядач: порожній рядок
      * @param state       стан виживого (HEALTHY/.../ELIMINATED/ESCAPED);
      *                    для маньяка/глядача — HEALTHY (не читається)
      * @param hp          поточне хп виживого; для маньяка/глядача і для
      *                    ELIMINATED/ESCAPED (уже вибув) — 0, не читається
      * @param maxHp       максимум хп виживого; той самий виняток, що й hp
+     * @param maniacBody  габарити маньяка; null для виживих і глядачів —
+     *                    саме null, а не три нулі: відсутність габаритів
+     *                    і нульовий хітбокс — різні речі, і клієнт не має
+     *                    випадково застосувати другий
      */
     public record RosterEntry(UUID playerId, String displayName,
                                RoleSyncPacket.Role role, String archetypeId,
-                               SurvivorState state, int hp, int maxHp) {}
+                               SurvivorState state, int hp, int maxHp,
+                               ManiacBody maniacBody) {}
 
     public RosterSyncPacket(FriendlyByteBuf buf) {
         this(readEntries(buf));
@@ -64,14 +90,18 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
         int size = buf.readVarInt();
         List<RosterEntry> list = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
-            list.add(new RosterEntry(
+            RosterEntry entry = new RosterEntry(
                 buf.readUUID(),
                 buf.readUtf(),
                 buf.readEnum(RoleSyncPacket.Role.class),
                 buf.readUtf(),
                 buf.readEnum(SurvivorState.class),
                 buf.readVarInt(),
-                buf.readVarInt()));
+                buf.readVarInt(),
+                buf.readBoolean()
+                    ? new ManiacBody(buf.readFloat(), buf.readFloat(), buf.readFloat())
+                    : null);
+            list.add(entry);
         }
         return list;
     }
@@ -87,6 +117,12 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
             buf.writeEnum(e.state());
             buf.writeVarInt(e.hp());
             buf.writeVarInt(e.maxHp());
+            buf.writeBoolean(e.maniacBody() != null);
+            if (e.maniacBody() != null) {
+                buf.writeFloat(e.maniacBody().width());
+                buf.writeFloat(e.maniacBody().height());
+                buf.writeFloat(e.maniacBody().eyeHeight());
+            }
         }
     }
 

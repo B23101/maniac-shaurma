@@ -10,7 +10,6 @@ import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorCompletedOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.RescueOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.DownedSurvivorMarker;
-import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorHighlightMarker;
 import com.log_to_kot.maniacmod.client.overlay.notify.ManiacStunWorldMarker;
 import com.log_to_kot.maniacmod.client.overlay.notify.ManiacStunOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacHotbarOverlay;
@@ -24,6 +23,7 @@ import com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator;
 import com.log_to_kot.maniacmod.client.renderer.GroundItemRenderer;
 import com.log_to_kot.maniacmod.client.renderer.BearTrapRenderer;
 import com.log_to_kot.maniacmod.client.renderer.GeneratorRenderer;
+import com.log_to_kot.maniacmod.client.renderer.maniac.ManiacRenderHandler;
 import com.log_to_kot.maniacmod.registry.ModEntityTypes;
 import com.log_to_kot.maniacmod.registry.ModItems;
 import dev.shaurmalib.forge.ShaurmaLib;
@@ -133,7 +133,11 @@ public final class ClientSetup {
         event.registerEntityRenderer(ModEntityTypes.GROUND_ITEM.get(), GroundItemRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.GENERATOR.get(), GeneratorRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.BEAR_TRAP.get(), BearTrapRenderer::new);
-        // TODO(міграція maniacs): рендерер маньяка додається сюди.
+        // Рендерер маньяка не реєструється за EntityType (усі маньяки —
+        // звичайні Player), тому тут лише будується його контекст; саме
+        // малювання підміняє ванільний рендер гравця через
+        // RenderPlayerEvent.Pre (див. ManiacRenderHandler).
+        ManiacRenderHandler.init();
     }
 
     /**
@@ -165,9 +169,6 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_explosion",
             (gui, graphics, partialTick, width, height) ->
                 GeneratorExplosionMarker.render(graphics));
-        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_highlight",
-            (gui, graphics, partialTick, width, height) ->
-                GeneratorHighlightMarker.render(graphics));
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_downed_marker",
             (gui, graphics, partialTick, width, height) ->
                 DownedSurvivorMarker.render(graphics));

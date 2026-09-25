@@ -6,6 +6,7 @@ repairSecondsPerStage: 90
 repairMaxDistanceBlocks: 5.0
 repairMaxLookAngleDegrees: 60
 minigameTriggerChancePerTick: 0.0015
+minigameBlocksRepair: true
 targetMinigameHitsRequired: 3
 targetMinigameCursorSpeed: 0.7
 targetMinigameHitZoneWidth: 0.08
@@ -14,7 +15,7 @@ wireMinigameTicks: 200
 minigameFailLossPercent: 10
 failFlashTicks: 100
 fuelRequiredPercent: 200
-fuelPercentPerSecond: 2
+fuelPercentPerSecond: 4
 highlightDurationTicks: 100
 screwdriverSpeedBonus: 0.25
 screwdriverMinigameReduction: 0.25

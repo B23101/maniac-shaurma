@@ -19,9 +19,11 @@ import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameResultPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.WireMinigameOpenPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorExplosionPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import dev.shaurmalib.common.overlay.ActionBarMessageType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
@@ -69,9 +71,14 @@ import java.util.function.Supplier;
  * на всіх, хто лагодить той самий генератор) відкривається одна з
  * двох міні-ігор {@link RepairMinigameType} (рівноймовірно), і його
  * REPAIR-сесія позначається "заморожено" — {@link #tickOne} перестає
- * додавати прогрес від його імені, доки міні-гра не завершиться, а
- * решта гравців на тому самому генераторі продовжують як завжди
- * (кожна сесія — незалежний запис у {@link #sessions}).
+ * додавати прогрес від його імені, доки міні-гра не завершиться. Решта
+ * ж гравців на тому самому генераторі цей час теж НЕ лагодять: поки на
+ * генераторі висить чужа міні-гра, ремонт заблоковано для всіх (див.
+ * {@link ConfigSchema#MINIGAME_BLOCKS_REPAIR}), бо інакше скілл-чек
+ * одного гравця нічого не важив би — генератор протягнули б чужі руки.
+ * Їм самим у цей час іде actionbar-повідомлення
+ * («тут іде міні-гра»), і лише коли гра скінчиться, їхні сесії
+ * продовжують рух прогресу — кожної власне, зі свого місця.
  *
  * Одна активна міні-гра на гравця зберігається в {@link #activeMinigames}
  * окремо від RepairSession — міні-гра прив'язана до гравця, а не до
@@ -98,6 +105,13 @@ public final class GeneratorModule implements PhaseListener {
 
     /** UUID гравця → активна міні-гра (якщо зараз розбирається з нею). */
     private final Map<UUID, ActiveRepairMinigame> activeMinigames = new HashMap<>();
+
+    /**
+     * Звук генераторів: старт, гул роботи, гул заливу. Живе окремим
+     * об'єктом, бо розклад озвучення не має нічого спільного з прогресом
+     * ремонта — див. {@link GeneratorSoundscape}.
+     */
+    private final GeneratorSoundscape sounds = new GeneratorSoundscape();
 
     private long tick = 0;
 
@@ -157,6 +171,16 @@ public final class GeneratorModule implements PhaseListener {
          */
         int minigameCooldownTicks = 0;
 
+        /**
+         * Скільки тіків лишилось до наступного повтору повідомлення
+         * «на цьому генераторі йде міні-гра». Гасить спам щотіка: гравець,
+         * що тримає кнопку біля заблокованого генератора, бачить причину
+         * одразу, а далі — раз на {@link #BLOCKED_NOTICE_INTERVAL_TICKS}.
+         * Затухає в {@link #tickOne} разом з іншими лічильниками сесії,
+         * тож наступна міні-гра не «успадковує» недогарок попередньої.
+         */
+        int blockedNoticeTicks = 0;
+
         RepairSession(BlockPos pos) {
             this.pos = pos;
         }
@@ -193,7 +217,9 @@ public final class GeneratorModule implements PhaseListener {
         // назавжди лишився б червоним, бо його лічильник ніхто не гасить.
         tickGenerators(players);
 
-        if (!phase.allows(PhaseRule.GENERATOR_REPAIR)) {
+        if (phase.allows(PhaseRule.GENERATOR_REPAIR)) {
+            tickSessions(players);
+        } else {
             if (!sessions.isEmpty()) sessions.clear();
             if (!activeMinigames.isEmpty()) {
                 // Фаза більше не дозволяє ремонт (наприклад матч
@@ -206,9 +232,13 @@ public final class GeneratorModule implements PhaseListener {
                 }
                 activeMinigames.clear();
             }
-            return;
         }
-        tickSessions(players);
+
+        // Звук — ПІСЛЯ ремонта й залива, і в будь-якій фазі. Після — бо
+        // бензин, що пішов у генератор цього тіку, мусить озвучитись цього
+        // ж тіку, а не наступного. У будь-якій — бо гул завершеного
+        // генератора не має зникати від зміни правила фази.
+        sounds.tick(matchSupplier.get().generators(), levelOf(players));
     }
 
     // ── Ремонт ───────────────────────────────────────────────────────────
@@ -332,6 +362,7 @@ public final class GeneratorModule implements PhaseListener {
         // того, чи зараз активна міні-гра (див. RepairSession.ageTicks).
         session.ageTicks++;
         if (session.minigameCooldownTicks > 0) session.minigameCooldownTicks--;
+        if (session.blockedNoticeTicks > 0) session.blockedNoticeTicks--;
 
         // Міні-гра заморожує внесок, і сама стежить за дистанцією та станом
         // гравця (tickMinigameTimeouts) — звичайні перевірки тут не потрібні.
@@ -341,6 +372,14 @@ public final class GeneratorModule implements PhaseListener {
 
         if (!session.holding || !canWork(player, session.pos)) {
             pauseSession(player, session);
+            return true;
+        }
+
+        // Чиясь міні-гра зупиняє ремонт ЦЬОГО генератора для всіх (див.
+        // ConfigSchema#MINIGAME_BLOCKS_REPAIR). Сюди доходить лише той, у
+        // кого власної міні-гри немає — свій випадок закритий вище.
+        if (ManiacConfigs.get(ConfigSchema.MINIGAME_BLOCKS_REPAIR) && minigameInProgressAt(session.pos)) {
+            blockByMinigame(player, session);
             return true;
         }
 
@@ -404,6 +443,48 @@ public final class GeneratorModule implements PhaseListener {
     }
 
     /**
+     * Як часто (у тіках) нагадувати гравцю, що ремонт стоїть через чужу
+     * міні-гру: перший раз — одразу, далі раз на 2 секунди. Рідше —
+     * гравець не зрозуміє, чому прогрес не рухається; частіше —
+     * перетвориться на миготіння в actionbar.
+     */
+    private static final int BLOCKED_NOTICE_INTERVAL_TICKS = 40;
+
+    /**
+     * Чи йде ЗАРАЗ міні-гра на цьому генераторі (неважливо, на кого саме).
+     *
+     * Міні-гри зберігаються за ГРАВЦЕМ, а не за генератором (див.
+     * {@link #activeMinigames}), тож це зворотний пошук. Мапа мала —
+     * максимум один запис на гравця, — тож обходити її щотіка дешевше,
+     * ніж тримати окремий індекс «генератор → міні-гра», який довелося б
+     * синхронізувати в кожному місці старту/кінця гри.
+     */
+    private boolean minigameInProgressAt(BlockPos pos) {
+        for (ActiveRepairMinigame minigame : activeMinigames.values()) {
+            if (minigame.generatorPos().equals(pos)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Ремонт на паузі через чужу міні-гру на тому самому генераторі.
+     *
+     * Сесію не скасовуємо — лише пауза, як і для відходу від генератора:
+     * гравець може тримати кнопку, поки інший розбирається зі скілл-чеком,
+     * і прогрес продовжиться сам, щойно гра скінчиться. Нового сигналу від
+     * клієнта для цього не потрібно, а якби ми видалили сесію, гравець із
+     * затиснутою кнопкою просто застиг би без прогресу до наступного
+     * натискання.
+     */
+    private void blockByMinigame(ServerPlayer player, RepairSession session) {
+        pauseSession(player, session);
+        if (session.blockedNoticeTicks > 0) return;
+        session.blockedNoticeTicks = BLOCKED_NOTICE_INTERVAL_TICKS;
+        ModNetwork.toPlayer(player, new ActionBarPacket(
+            ActionBarMessageType.COOLDOWN, "maniacmod.generator.minigame_busy"));
+    }
+
+    /**
      * Один тік заливки: бере каністру з руки, переносить частину її
      * заряду в генератор і зменшує заряд рівно на те, що генератор
      * реально прийняв.
@@ -458,7 +539,14 @@ public final class GeneratorModule implements PhaseListener {
 
         sendProgress(player, session, generator);
 
+        if (accepted > 0) {
+            // Саме прийнятий бензин, а не факт утримання кнопки: у порожній
+            // каністрі або на вже повному баку звучати нічому.
+            sounds.fuelPoured(generator);
+        }
+
         if (justCompleted) {
+            sounds.completed(generator, levelOf(players));
             onGeneratorCompleted(generator, players);
         }
     }
@@ -554,6 +642,35 @@ public final class GeneratorModule implements PhaseListener {
         } else {
             startWireMinigame(player, generator);
         }
+
+        announceMinigameStarted(player, generator);
+    }
+
+    /**
+     * Повідомляє РЕШТУ виживих, що на генераторі почалась міні-гра й ремонт
+     * цього генератора тимчасово заблоковано.
+     *
+     * ── Кому саме ─────────────────────────────────────────────────────
+     * Той, хто грає, пакет не отримує — він і без того бачить екран
+     * міні-гри. Маньяку — тим більше: скілл-чек виживих це внутрішня
+     * справа команди, а не безкоштовна підказка «біжи до цього
+     * генератора». Тому явна перевірка ролі, а не розсилка «всім».
+     *
+     * Коли блокування вимкнено в конфізі, повідомлення не шлеться взагалі:
+     * інформувати нема про що — решта й так продовжує лагодити.
+     */
+    private void announceMinigameStarted(ServerPlayer player, GeneratorPoi generator) {
+        if (!ManiacConfigs.get(ConfigSchema.MINIGAME_BLOCKS_REPAIR)) return;
+
+        ActionBarPacket packet = new ActionBarPacket(ActionBarMessageType.INFO,
+            "maniacmod.generator.minigame_started",
+            new String[] { player.getName().getString() });
+
+        for (ServerPlayer other : matchSupplier.get().onlinePlayers()) {
+            if (other.getUUID().equals(player.getUUID())) continue;
+            if (!matchSupplier.get().isSurvivor(other.getUUID())) continue;
+            ModNetwork.toPlayer(other, packet);
+        }
     }
 
     private void startTargetMinigame(ServerPlayer player, GeneratorPoi generator) {
@@ -635,10 +752,14 @@ public final class GeneratorModule implements PhaseListener {
      * Мовчки ігнорує клік без активної TARGET-міні-гри в цього гравця
      * (модифікований/застарілий клієнт чи запізнілий пакет після вже
      * завершеної гри).
+     *
+     * @return true, якщо клік належав цій міні-грі — викликач тоді не
+     *         пробує інші міні-гри (у капкана свій обробник кліку з тим
+     *         самим пакетом)
      */
-    public void onTargetMinigameClick(ServerPlayer player, double cursorPosition) {
+    public boolean onTargetMinigameClick(ServerPlayer player, double cursorPosition) {
         ActiveRepairMinigame minigame = activeMinigames.get(player.getUUID());
-        if (minigame == null || minigame.type() != RepairMinigameType.TARGET) return;
+        if (minigame == null || minigame.type() != RepairMinigameType.TARGET) return false;
 
         // Позицію з пакета сервер НЕ приймає на віру — перевіряє її проти
         // власної траєкторії повзунка з допуском на затримку мережі.
@@ -650,13 +771,38 @@ public final class GeneratorModule implements PhaseListener {
                 succeedMinigame(player);
             }
             case HIT_PROGRESS -> ModNetwork.toPlayer(player,
-                RepairMinigameProgressPacket.targetHit(minigame.targetHits()));
+                RepairMinigameProgressPacket.attempt(minigame.targetHits()));
             case FAIL -> {
                 activeMinigames.remove(player.getUUID());
                 failMinigame(player, minigame);
             }
             default -> { /* WIRE_CONNECTED неможливий для TARGET-типу */ }
         }
+        return true;
+    }
+
+    /**
+     * Закриває міні-гру цього гравця БЕЗ наслідків для генератора —
+     * потрібно, коли екран міні-гри має поступитися іншому (жертву
+     * капкана ловить СВОЯ міні-гра визволення, а клієнт тримає лише один
+     * екран).
+     *
+     * ── Чому саме «без наслідків», а не {@link #failMinigame} ───────
+     * {@code failMinigame} — це провал гравця: вибух генератора й знятий
+     * прогрес. Тут гравець нічим не винен: він порався з генератором, а
+     * потім наступив у капкан. Той самий вибір, що в
+     * {@code tickMinigameTimeouts} для збитого з ніг.
+     *
+     * Провалу міні-гри тут не потрібно ще й з другої причини: клієнт
+     * відкриє екран капкана тим самим пакетом {@code TargetMinigameOpenPacket},
+     * і будь-який пізніший результат генератора закрив би вже ЙОГО.
+     *
+     * @return true, якщо міні-гра справді була й закрита
+     */
+    public boolean abandonMinigame(ServerPlayer player) {
+        if (activeMinigames.remove(player.getUUID()) == null) return false;
+        ModNetwork.toPlayer(player, new RepairMinigameResultPacket(false));
+        return true;
     }
 
     /**
@@ -787,7 +933,9 @@ public final class GeneratorModule implements PhaseListener {
      *
      * ── Кольори (рахує сервер, клієнт лише малює) ────────────────────
      *   DONE        зелений — генератор повністю полагоджено
-     *   IN_PROGRESS жовтий  — ЗАРАЗ хтось лагодить чи заливає бензин
+     *   IN_PROGRESS жовтий  — ЗАРАЗ хтось лагодить, заливає бензин або
+     *                          розбирається з міні-грою (на цей час ремонт
+     *                          заблоковано для решти)
      *   FAILED      червоний — щойно вибухнув (лишається як є)
      *   IDLE        білий   — не полагоджений, ніхто не працює
      *
@@ -804,6 +952,13 @@ public final class GeneratorModule implements PhaseListener {
                 busy.add(entry.getValue().pos);
             }
         }
+        // Генератор, на якому ЗАРАЗ іде міні-гра, теж «зайнятий»: гравець
+        // фізично поруч і саме ним займається, просто внесок заморожений,
+        // доки гра не скінчиться. Без цього підсвітка була б БІЛОЮ («ніхто
+        // не працює») саме тоді, коли ремонт стоїть через чужу міні-гру.
+        for (ActiveRepairMinigame minigame : activeMinigames.values()) {
+            busy.add(minigame.generatorPos());
+        }
 
         List<GeneratorHighlightPacket.Entry> entries = new ArrayList<>();
         for (GeneratorPoi generator : matchSupplier.get().generators()) {
@@ -818,8 +973,11 @@ public final class GeneratorModule implements PhaseListener {
      * Чи гравець ПРЯМО ЗАРАЗ рухає ремонт/залив цього генератора.
      * Сесія, що існує, але на паузі (відійшов, відвернувся, нема
      * каністри), — не «працює»; так само й сесія під час міні-гри
-     * (внесок заморожений). Це той самий набір умов, що в
-     * {@link #tickOne}, тільки без побічних ефектів.
+     * (внесок заморожений). Це майже той самий набір умов, що в
+     * {@link #tickOne}, тільки без побічних ефектів: свідомо БЕЗ
+     * перевірки {@link ConfigSchema#MINIGAME_BLOCKS_REPAIR} — гравець, що
+     * упирається в заблокований міні-грою генератор, усе одно ЗАЙНЯТИЙ
+     * ним просто зараз, а саме це жовтий і означає.
      */
     private boolean isActivelyWorking(UUID uuid, RepairSession session) {
         if (!session.holding) return false;
@@ -915,7 +1073,10 @@ public final class GeneratorModule implements PhaseListener {
                 it.remove();
             }
 
-            if (generator.forceComplete()) justCompleted++;
+            if (generator.forceComplete()) {
+                justCompleted++;
+                sounds.completed(generator, levelOf(players));
+            }
         }
 
         if (justCompleted > 0) {

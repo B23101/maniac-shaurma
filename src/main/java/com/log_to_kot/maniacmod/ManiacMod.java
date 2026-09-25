@@ -7,6 +7,7 @@ import com.log_to_kot.maniacmod.core.match.ManiacChatChannels;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
 import com.log_to_kot.maniacmod.core.match.MatchBlockRegistry;
+import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.registry.ModBlocks;
 import com.log_to_kot.maniacmod.registry.ModCreativeTab;
@@ -182,8 +183,16 @@ public class ManiacMod {
             .withAnimatedCountdown()
             .build();
 
-        // Конфіг піднімається одразу після lib: усе, що йде нижче,
-        // вже читає справжні значення, а не дефолти.
+        // Реєстр маньяків — ПЕРЕД конфігом: кожен архетип оголошує свій
+        // блок налаштувань (config/maniacmod/maniac_stats/<id>.yml), і
+        // перше ж завантаження конфігу мусить бачити ці ключі — інакше
+        // файл маньяка не створився б до наступного reload. Явний
+        // виклик, а не «колись ініціалізується сам»: порядок тут
+        // частина контракту, а не випадковість лінивої ініціалізації.
+        ManiacRegistry.ensureLoaded();
+
+        // Конфіг піднімається одразу після lib і реєстру: усе, що йде
+        // нижче, вже читає справжні значення, а не дефолти.
         ManiacConfigs.init(lib.configModule());
         MapPointConfigs.init(ManiacConfigs.namespaceDirectory());
         match.reloadConfiguredMap();
@@ -213,9 +222,20 @@ public class ManiacMod {
         //    показує й не лікує, і воно лише могло б вбити гравця
         //    "по-справжньому" поза системою станів. Тому блокується.
         //
-        // 3) Фаза ігрова, жертва — МАНЬЯК або глядач → не чіпаємо:
-        //    маньяк не має HP-системи, а глядач із ванільною поведінкою
-        //    (SPECTATOR/креатив) сам захищений режимом гри.
+        // 3) Фаза ігрова, жертва — МАНЬЯК → блокуємо ВАНІЛЬНИЙ урон
+        //    ЗАВЖДИ, з тієї ж причини, що виживий у пункті 2: маньяк
+        //    теж не має ванільного HP-контуру в цьому дизайні (лише
+        //    ManiacCombatModule/ManiacStunModule як механіки, що на
+        //    нього діють, і жодна з них не рахує "здоров'я маньяка" —
+        //    він просто безсмертний за задумом, це протагоніст-мисливець,
+        //    не мішень). Раніше ця гілка була "не чіпаємо" — тому маньяк
+        //    ловив звичайний ванільний урон (падіння, вогонь, моби,
+        //    ефекти), який ніхто не лікував і який міг довести його
+        //    ванільне HP до 0 та вбити повз усю систему станів гри.
+        //
+        // 4) Фаза ігрова, жертва — глядач → не чіпаємо: глядач із
+        //    ванільною поведінкою (SPECTATOR/креатив) сам захищений
+        //    режимом гри.
         //
         // ⚠ Порядок умов — навмисний: спершу "фаза", тоді "роль". Роль
         // читаємо з матчу лише в ігровій фазі, де матч гарантовано
@@ -227,7 +247,8 @@ public class ManiacMod {
                     return true;
                 }
                 MatchOrchestrator current = match;
-                return current != null && current.isSurvivor(victim.getUUID());
+                if (current == null) return false;
+                return current.isSurvivor(victim.getUUID()) || current.isManiac(victim.getUUID());
             });
 
         // Фази дзеркаляться в грубий стан бібліотеки одним місцем.

@@ -553,16 +553,23 @@ public final class MatchOrchestrator {
             String name = player.getGameProfile().getName();
 
             if (isManiac(id)) {
-                String archetypeId = maniacArchetype() == null ? "" : maniacArchetype().id();
+                ManiacArchetype maniac = maniacArchetype();
+                // Габарити — з СЕРВЕРНОГО конфігу, а не з дефолтів: клієнт
+                // має бачити той самий хітбокс, що застосований тут
+                // (ManiacBodyEvents). null, якщо архетип ще не обрано.
+                var body = maniac == null ? null
+                    : new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.ManiacBody(
+                        maniac.hitboxWidth(), maniac.hitboxHeight(), maniac.eyeHeight());
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
-                    id, name, RoleSyncPacket.Role.MANIAC, archetypeId, SurvivorState.HEALTHY, 0, 0));
+                    id, name, RoleSyncPacket.Role.MANIAC,
+                    maniac == null ? "" : maniac.id(), SurvivorState.HEALTHY, 0, 0, body));
             } else if (isSurvivor(id)) {
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
                     id, name, RoleSyncPacket.Role.SURVIVOR, "",
-                    survivorStateOf(id), hpOf(id), maxHpOf(id)));
+                    survivorStateOf(id), hpOf(id), maxHpOf(id), null));
             } else {
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
-                    id, name, RoleSyncPacket.Role.SPECTATOR, "", SurvivorState.HEALTHY, 0, 0));
+                    id, name, RoleSyncPacket.Role.SPECTATOR, "", SurvivorState.HEALTHY, 0, 0, null));
             }
         }
 
@@ -573,7 +580,7 @@ public final class MatchOrchestrator {
             String name = terminalDisplayNameOf(id);
             if (name == null) continue;
             entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
-                id, name, RoleSyncPacket.Role.SURVIVOR, "", terminalStateOf(id), 0, 0));
+                id, name, RoleSyncPacket.Role.SURVIVOR, "", terminalStateOf(id), 0, 0, null));
         }
 
         return entries;
@@ -931,8 +938,38 @@ public final class MatchOrchestrator {
      */
     public void tick(List<ServerPlayer> players) {
         context.tick();
+        if (phases.is(GamePhase.LOBBY)) tickLobbyHunger(players);
         phases.tick(players);
         checkPhaseExitConditions(players);
+    }
+
+    /**
+     * БАГ (гравці втрачали голод у лобі): {@code lib.lobbyModule()
+     * .sendToLobby(player)} ставить гейммод {@code ADVENTURE}, а не
+     * {@code SPECTATOR}/{@code CREATIVE} — і в {@code ADVENTURE} голод
+     * тратиться так само, як у ваніли, бо гейммод сам по собі його не
+     * зупиняє (це робить лише {@code SPECTATOR}/{@code CREATIVE}).
+     *
+     * У виживих під час матчу голод тримає бібліотека сама
+     * ({@code StaminaRules.forceFullHungerWhileActive(true)} —
+     * {@code SurvivorModule.buildStaminaRules}), але цей прапор діє
+     * лише поки {@code StaminaService} активний для гравця, а в лобі
+     * він узагалі не вмикається (без ролі стаміна нікому не потрібна —
+     * див. коментар при {@code .withStamina(...active(false)...)} у
+     * {@code ManiacMod}). Тому в лобі голод не тримав ніхто.
+     *
+     * Найпростіше й найдешевше виправлення — тримати шкалу голоду на
+     * максимумі напряму, тим самим щотіковим підходом, що вже описаний
+     * для стаміни з поламаною ногою (SurvivorModule): постійна
+     * перезапис дешевший і надійніший, ніж ловити кожну подію
+     * виснаження (стрибки, регенерація хп) окремо.
+     */
+    private void tickLobbyHunger(List<ServerPlayer> players) {
+        for (ServerPlayer player : players) {
+            var food = player.getFoodData();
+            if (food.getFoodLevel() < 20) food.setFoodLevel(20);
+            if (food.getSaturationLevel() < 5.0f) food.setSaturation(5.0f);
+        }
     }
 
     /**

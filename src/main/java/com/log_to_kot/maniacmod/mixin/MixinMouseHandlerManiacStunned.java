@@ -3,6 +3,7 @@ package com.log_to_kot.maniacmod.mixin;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import net.minecraft.client.MouseHandler;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -21,19 +22,26 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * тут раніше не було жодного прецеденту — див. {@code ManiacStunModule}
  * докстрінг, розділ про {@code LockType}).
  *
- * ── Чому саме {@code turnPlayer()}, а не глушити "delta" раніше ──────
+ * ── Чому саме {@code turnPlayer()}, і чому акумулятори обнуляються ────
  * {@code MouseHandler.turnPlayer()} — єдине місце у ванільному коді,
- * де накопичена дельта миші (з {@code MouseHandler.xxa}/{@code yya}
- * внутрішніх акумуляторів) перетворюється на фактичний виклик
- * {@code Entity.turn(...)} для гравця під керуванням цього клієнта.
- * Скасування САМЕ цього виклику (а не спроба перехопити подію миші
- * раніше) означає, що акумулятор дельти однаково спорожняється
- * (ванільний метод усе одно доходить до кінця свого тіла в
- * невідредагованій частині — тут інжект лише скасовує сам виклик
- * повороту) і різкий "стрибок" камери не стається, коли стан
- * закінчується: непрочитана дельта просто не накопичується, бо
- * гравець фізично не рухав мишею для гри (рух миші й далі рухає
- * курсор в інвентарі/меню — це вікно нічого не чіпає).
+ * де накопичена дельта миші ({@code accumulatedDX}/{@code accumulatedDY})
+ * перетворюється на фактичний виклик {@code Entity.turn(...)} для
+ * гравця під керуванням цього клієнта.
+ *
+ * <p><b>БАГФІКС: скасування на HEAD лише цього методу лишало дельту
+ * НАКОПИЧУВАТИСЬ.</b> Ванільний код спорожнює акумулятори в СЕРЕДИНІ
+ * {@code turnPlayer()} — перед самим викликом {@code turn}. Якщо
+ * скасувати метод на вході, тіло не виконується взагалі, отже кожен
+ * рух мишею під час оглушення додавався до дельти й застосовувався
+ * ОДРАЗУ після закінчення стану: камера робила різкий стрибок саме
+ * тоді, коли маньяк мав би вже вільно керувати собою. Тому тут перед
+ * скасуванням акумулятори обнуляються вручну — саме те, що зробив би
+ * ванільний код.</p>
+ *
+ * Це лише ОДИН з двох шарів: {@link MixinEntityTurnManiacStunned}
+ * додатково глушить сам {@code Entity.turn} для свого гравця, тож
+ * навіть якщо цей інжект колись перестане знаходити метод, камера
+ * маньяка не рухатиметься.
  *
  * ⚠ Зручність для власного відчуття гри, а не захист: сервер не має
  * способу перевірити напрямок погляду гравця (ванільний рух повороту
@@ -49,8 +57,22 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(MouseHandler.class)
 public abstract class MixinMouseHandlerManiacStunned {
 
+    /** Дельта миші по X, накопичена від попереднього кадру (поле ванільного MouseHandler). */
+    @Shadow private double accumulatedDX;
+
+    /** Дельта миші по Y, накопичена від попереднього кадру. */
+    @Shadow private double accumulatedDY;
+
     @Inject(method = "turnPlayer", at = @At("HEAD"), cancellable = true)
     private void maniacmod$blockLookWhenStunned(CallbackInfo ci) {
-        if (ClientMatchState.isManiacStunned()) ci.cancel();
+        if (!ClientMatchState.isManiacStunned()) return;
+
+        // Спершу гасимо накопичене (ванільний код зробив би це сам, але
+        // ми зараз скасуємо його тіло — див. докстрінг), потім блокуємо
+        // сам поворот. Порядок важливий: cancel() виносить із методу, і
+        // жоден рядок нижче не виконався б.
+        this.accumulatedDX = 0.0;
+        this.accumulatedDY = 0.0;
+        ci.cancel();
     }
 }

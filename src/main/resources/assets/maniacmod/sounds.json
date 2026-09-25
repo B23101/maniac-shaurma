@@ -19,9 +19,19 @@
       { "name": "maniacmod:generator_repair", "stream": false }
     ]
   },
-  "generator_on": {
+  "generator_start": {
     "sounds": [
-      { "name": "maniacmod:generator_on", "stream": false }
+      { "name": "maniacmod:generator_start", "stream": false }
+    ]
+  },
+  "generator_loop": {
+    "sounds": [
+      { "name": "maniacmod:generator_loop", "stream": false }
+    ]
+  },
+  "fuel_fill": {
+    "sounds": [
+      { "name": "maniacmod:fuel_fill", "stream": false }
     ]
   },
   "power_on": {
@@ -47,6 +57,21 @@
   "trap_snap": {
     "sounds": [
       { "name": "maniacmod:trap_snap", "stream": false }
+    ]
+  },
+  "trap_place": {
+    "sounds": [
+      { "name": "maniacmod:trap_place", "stream": false }
+    ]
+  },
+  "trap_struggle": {
+    "sounds": [
+      { "name": "maniacmod:trap_struggle", "stream": false }
+    ]
+  },
+  "crowbar_hit": {
+    "sounds": [
+      { "name": "maniacmod:crowbar_hit", "stream": false }
     ]
   },
   "wire_zap": {

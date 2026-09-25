@@ -9,6 +9,7 @@ import com.log_to_kot.maniacmod.net.c2s.settings.SettingsChangePacket;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.resources.language.I18n;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -255,14 +256,41 @@ public final class SettingsMenuScreen extends Screen {
      * відсутність перекладу було одразу видно й полагоджено).
      */
     private static Component keyTitle(ConfigKey<?> key) {
-        String translationKey = "maniacmod.settings.key." + key.block() + "." + key.name();
-        return Component.translatable(translationKey);
+        return Component.translatable(keyTranslation(key, ""));
     }
 
     /** Короткий опис ЩО робить налаштування: {@code maniacmod.settings.key.<block>.<name>.desc}. */
     private static Component keyHint(ConfigKey<?> key) {
-        String translationKey = "maniacmod.settings.key." + key.block() + "." + key.name() + ".desc";
-        return Component.translatable(translationKey);
+        return Component.translatable(keyTranslation(key, ".desc"));
+    }
+
+    /**
+     * Ключ перекладу для налаштування — з фолбеком на «спільний» варіант
+     * без блока.
+     *
+     * ── Навіщо фолбек ────────────────────────────────────────────────
+     * Блок маньяка динамічний: його id ({@code maniac_stats_<id>})
+     * утворюється з коду, тож перекладу «за id» існувати не може —
+     * інакше кожен новий маньяк вимагав би ще одного рядка локалізації
+     * на кожен свій параметр. Тому спершу шукаємо точний ключ (він
+     * дозволяє, за потреби, назвати параметр конкретного маньяка
+     * інакше), а якщо його немає — спільний {@code maniacmod.settings.key.<name>}.
+     *
+     * Спільні ключі мусять бути УНІКАЛЬНИМИ за іменем: вони не містять
+     * блока, тому {@code hitboxHeight} з іншого блока підхопив би цей
+     * самий підпис. Для параметрів маньяка це виконується (таких імен
+     * більше ніде немає), і саме тому винесено сюди, а не продубльовано
+     * на кожного маньяка.
+     *
+     * Якщо немає ні того, ні того — повертаємо ТОЧНИЙ ключ: {@code Component.translatable}
+     * покаже його сирим текстом, і відсутність перекладу буде видно
+     * одразу (див. {@link #keyTitle}).
+     */
+    private static String keyTranslation(ConfigKey<?> key, String tail) {
+        String exact = "maniacmod.settings.key." + key.block() + "." + key.name() + tail;
+        if (I18n.exists(exact)) return exact;
+        String shared = "maniacmod.settings.key." + key.name() + tail;
+        return I18n.exists(shared) ? shared : exact;
     }
 
     private void toggleBoolean(ConfigKey<?> key) {
@@ -714,7 +742,8 @@ public final class SettingsMenuScreen extends Screen {
             g.fill(panelX + 8, tabY, panelX + 8 + TAB_WIDTH, tabY + TAB_ROW_HEIGHT, withAlpha(0xFF1C1C14, alpha));
         }
         int color = active ? ManiacUiTheme.TEXT_ACCENT : (hovered ? ManiacUiTheme.TEXT_TITLE : ManiacUiTheme.TEXT_BODY);
-        g.drawString(font, blockDisplayName(block), panelX + 14, tabY + (TAB_ROW_HEIGHT - font.lineHeight) / 2 + 1,
+        g.drawString(font, clipToWidth(blockDisplayName(block).getString(), TAB_WIDTH - 22),
+                panelX + 14, tabY + (TAB_ROW_HEIGHT - font.lineHeight) / 2 + 1,
                 withAlpha(color, alpha), false);
     }
 
@@ -805,8 +834,25 @@ public final class SettingsMenuScreen extends Screen {
         graphics.fill(trackX, thumbY, trackX + 4, thumbY + thumbHeight, withAlpha(ManiacUiTheme.BORDER_BRIGHT, alpha));
     }
 
+    /**
+     * Назва таба блока: переклад за id, а якщо його немає — перше
+     * речення коментаря блока.
+     *
+     * ── Чому саме перше речення ──────────────────────────────────────
+     * У динамічного блока (параметри конкретного маньяка) перекладу
+     * бути не може — id утворюється з коду. Показувати сирий ключ
+     * {@code maniacmod.settings.block.maniac_stats_test_maniac} у табі
+     * означало б, що ніхто, крім автора мода, не зрозуміє, що це.
+     * Коментар блока для того й написаний людською мовою, і його перше
+     * речення — коротка назва (див. {@link ConfigBlock#comment()}).
+     * Довжину обрізає {@link #drawTab}: таб має фіксовану ширину.
+     */
     private static Component blockDisplayName(ConfigBlock block) {
-        return Component.translatable("maniacmod.settings.block." + block.id());
+        String translationKey = "maniacmod.settings.block." + block.id();
+        if (I18n.exists(translationKey)) return Component.translatable(translationKey);
+        String comment = block.comment();
+        int dot = comment.indexOf('.');
+        return Component.literal(dot > 0 ? comment.substring(0, dot) : comment);
     }
 
     @Override

@@ -62,11 +62,27 @@ public final class ModSoundCues {
 
         // ── Світ ─────────────────────────────────────────────────────────
         cue(ModSounds.GENERATOR_REPAIR, SoundStage.POSITIONAL_FIXED, WORLD, 0.8f);
-        cue(ModSounds.GENERATOR_ON,     SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.POWER_ON,         SoundStage.NON_POSITIONAL,   WORLD, 1.0f);
+
+        // Запуск, гул роботи й залив бензину генератора. Ці три звуки грає
+        // СЕРВЕР (GeneratorSoundscape → WorldSound → ванільний звуковий
+        // пакет), а не SoundCenter: вони мусять бути чутні ВСІМ, хто в
+        // радіусі, а не лише клієнту, який їх викликав. Категорія тут —
+        // опис природи звуку (подія світу, а не інтерфейсу), тож якщо
+        // колись з'явиться клієнтський шлях — опис уже готовий.
+        cue(ModSounds.GENERATOR_START, SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.GENERATOR_LOOP,  SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.FUEL_FILL,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.EXIT_OPEN,        SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.SURVIVOR_ESCAPED, SoundStage.NON_POSITIONAL,   WORLD, 1.0f);
+        // Пастки й лом: усі грає СЕРВЕР із місця події (TrapModule,
+        // ManiacStunModule) — їх мусить чути кожен, хто поруч, а не лише
+        // той, хто діяв. Категорія тут описує природу події (світ), тож
+        // клієнтський шлях, якщо колись з'явиться, матиме готовий опис.
         cue(ModSounds.TRAP_SNAP,        SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.TRAP_PLACE,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.TRAP_STRUGGLE,    SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.CROWBAR_HIT,      SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.WIRE_ZAP,         SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
 
         // ── Напруга ──────────────────────────────────────────────────────
