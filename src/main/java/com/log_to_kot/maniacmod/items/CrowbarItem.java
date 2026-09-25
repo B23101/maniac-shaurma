@@ -26,6 +26,25 @@ import java.util.function.Consumer;
  * {@code use()}: правий клік ломом нічого не робить, бо за дизайном він
  * б'є ЛКМ.
  *
+ * ── "Жива" анімація удару ────────────────────────────────────────────
+ * {@code GeoItem}-контролер нижче лишається лише для вигляду лома на
+ * землі/в GUI/у 3rd-person поза моментом удару (те саме розділення, що
+ * в {@link MedkitItem} — див. його клас-докстрінг щодо причини). Сам
+ * УДАР веде тіло гравця через {@link LiveHeldItemAction#playHit},
+ * викликаний з {@code TrapModule.onCrowbarHit} одразу після
+ * зарахування удару. На відміну від аптечки — це НЕ
+ * {@link ItemArchetype#onUse} (лом б'є ЛКМ, а не ПКМ), тому власного
+ * {@code beginServerTimed} тут не досить: {@code TrapModule} сам знає
+ * момент зарахування удару й сам викликає {@link #playHitLive}.
+ * <p>
+ * Рух гравця під час удару НЕ блокується (lockMovement=false) — за
+ * дизайном виживий може відступити одразу після замаху, лом б'є
+ * миттєво; блокуються лише перемикання слоту й скидання лома на
+ * коротку тривалість анімації удару, щоб {@code crowbarHitWearPercent}
+ * не списався з предмета, якого гравець встиг викинути посеред кадру
+ * (ефект видно, стека вже нема — той самий клас багів, що й у
+ * TrapModule#onCrowbarHit докстрінгу вище щодо "хто платить за удар").
+ *
  * ── Міцність і перезарядка ───────────────────────────────────────────
  * 100% на старті; кожен удар по капкану знімає
  * {@code crowbarHitWearPercent} (33): три удари поспіль — і лом
@@ -53,6 +72,14 @@ public class CrowbarItem extends Item implements GeoItem {
     private static final RawAnimation ANIM_IDLE =
         RawAnimation.begin().thenLoop(VISUALS.animationSet().idle());
 
+    /**
+     * Тривалість playerlib-анімації удару в тіках — МУСИТЬ збігатись із
+     * довжиною {@code crowbar_hit.json} (PlayerAnimator-формат). Коротка
+     * навмисно: удар по капкану — різкий одноразовий рух, не дія
+     * "утримання" (порівняй із {@link MedkitItem#USE_DURATION_TICKS}).
+     */
+    private static final int HIT_DURATION_TICKS = 12; // 0.6с при 20 tps
+
     private final AnimatableInstanceCache geoCache = new SingletonAnimatableInstanceCache(this);
 
     public CrowbarItem() {
@@ -63,6 +90,10 @@ public class CrowbarItem extends Item implements GeoItem {
     public void initializeClient(Consumer<IClientItemExtensions> consumer) {
         // Спільний хелпер: один ліниво створений рендерер, шляхи — з VISUALS.
         // Свого класу-рендерера й класу-моделі лом більше не має.
+        // renderInHand=false: у 1st/3rd-person руці геометрію лома
+        // взагалі не малює GeckoLib — той шлях веде playerlib через
+        // кістку rightItem під час "живої" пози (див. LiveHeldItemAction
+        // і ItemGeoRenderer щодо ItemDisplayContext-фільтра).
         com.log_to_kot.maniacmod.client.renderer.ItemGeoRenderer
             .attach(consumer, () -> new com.log_to_kot.maniacmod.client.renderer.ItemGeoRenderer<>(VISUALS));
     }
@@ -76,6 +107,30 @@ public class CrowbarItem extends Item implements GeoItem {
     @Override
     public AnimatableInstanceCache getAnimatableInstanceCache() {
         return geoCache;
+    }
+
+    // ── "Жива" анімація удару ───────────────────────────────────────────
+
+    /**
+     * Викликати з {@code TrapModule.onCrowbarHit} ОДРАЗУ ПІСЛЯ
+     * зарахування удару (дальність/кулдаун/міцність уже перевірені —
+     * той самий момент, де метод грає звук і списує знос). Сервер
+     * блокує слот/дроп лома на {@link #HIT_DURATION_TICKS}; клієнтський
+     * тригер позы шле окремим пакетом {@code ItemAnimPacket}-аналогом
+     * (той самий, яким раніше йшов GeckoLib-тригер) з боку
+     * {@code ServerHooks}/{@code TrapPlacementController} — див. TODO
+     * нижче щодо мережевого дроту.
+     */
+    public static void playHitLive(net.minecraft.server.level.ServerPlayer hitter) {
+        LiveHeldItemAction.beginServerTimed(hitter, /* lockMovement */ false, HIT_DURATION_TICKS);
+        // TODO(мережа): надіслати hitter-у й усім спостерігачам у радіусі
+        // видимості сигнал відтворити PoseAction "maniacmod:crowbar_hit"
+        // на клієнті — аналог ItemAnimPacket, але для playerlib замість
+        // GeckoLib-тригера. До появи окремого PosePacket можна тимчасово
+        // повторно використати ItemAnimPacket з новим ім'ям анімації і
+        // на клієнті в ItemAnimPacket.Handler викликати
+        // LiveHeldItemAction.beginClient("maniacmod:crowbar_hit") замість
+        // GeoItem.triggerAnim(...).
     }
 
     // ── Міцність ─────────────────────────────────────────────────────────

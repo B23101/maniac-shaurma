@@ -102,6 +102,9 @@ public class ManiacMod {
         MinecraftForge.EVENT_BUS.addListener(this::onServerStopping);
         MinecraftForge.EVENT_BUS.register(new ServerHooks());
         MinecraftForge.EVENT_BUS.register(new GroundItemHooks());
+        // Таймер для LiveHeldItemAction.beginServerTimed (аптечка,
+        // удар ломом тощо) — той самий стиль реєстрації, що вище.
+        MinecraftForge.EVENT_BUS.register(new com.log_to_kot.maniacmod.items.LiveHeldItemAction.Ticker());
 
         GeckoLib.initialize();
     }

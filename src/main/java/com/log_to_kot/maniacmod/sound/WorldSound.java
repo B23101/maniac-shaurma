@@ -2,7 +2,9 @@ package com.log_to_kot.maniacmod.sound;
 
 import net.minecraft.core.Holder;
 import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.network.protocol.game.ClientboundStopSoundPacket;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
@@ -65,5 +67,42 @@ public final class WorldSound {
             null, at.x, at.y, at.z, radiusBlocks, level.dimension(),
             new ClientboundSoundPacket(holder, source, at.x, at.y, at.z,
                 volume, pitch, level.random.nextLong()));
+    }
+
+    /**
+     * Обірвати вже граючий звук на всіх гравцях сервера.
+     *
+     * ── Чому це потрібно окремо від {@link #playInRadius} ────────────────
+     * {@code playInRadius} лише припиняє СТАВИТИ нові програвання — те, що
+     * вже летить по мережі (наприклад довгий {@code generator_loop}),
+     * клієнт доспіває природньо до кінця файлу, бо звук — не «петля з
+     * прапорцем», яку можна вимкнути, а вже відправлений одноразовий
+     * пакет. Якщо генератор зникає (кінець матчу, RESET) саме ПІД ЧАС
+     * такого доспівування, гравець у лобі чує гул генератора, якого вже
+     * немає — секунди зайвого звуку, що читаються як баг.
+     *
+     * ── Чому всім гравцям, а не в радіусі ─────────────────────────────────
+     * {@code ClientboundStopSoundPacket} не має параметра відстані — це
+     * команда «якщо в тебе зараз грає САМЕ ЦЕЙ звук/категорія, зупини».
+     * Гравець, що вже вийшов за {@code radiusBlocks} у момент стопу, теж
+     * мусить отримати команду: інакше він єдиний лишиться з висячим
+     * звуком, а адресувати повідомлення «тим, хто раніше був у радіусі»
+     * сервер просто не має чим — той стан жив лише в {@link
+     * com.log_to_kot.maniacmod.map.GeneratorSoundscape}, а не на клієнті.
+     *
+     * @param source null — зупинити звук БУДЬ-ЯКОЇ категорії з таким id
+     *               (тут завжди передається конкретна категорія, бо мод
+     *               завжди знає, з якою грав)
+     */
+    public static void stopForAll(ServerLevel level, SoundEvent sound, SoundSource source) {
+        if (level == null) return;
+        net.minecraft.resources.ResourceLocation id =
+            ForgeRegistries.SOUND_EVENTS.getKey(sound);
+        if (id == null) return;
+
+        ClientboundStopSoundPacket packet = new ClientboundStopSoundPacket(id, source);
+        for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+            player.connection.send(packet);
+        }
     }
 }

@@ -21,33 +21,48 @@ import java.util.function.Consumer;
 /**
  * Аптечка: +30 хп, одне використання за матч.
  *
- * ── Чому geo-предмет, а не ванільний спрайт ──────────────────────────
- * Аптечка — предмет, який гравець дістає в найнапруженіший момент, і за
- * дизайном вона має бути 3D-моделлю в руці з живою анімацією
- * використання (той самий шлях рендера, що в лома й каністри — див.
- * {@code ItemGeoRenderer}). Файли асе́тів беруться за id предмета:
- * {@code geo/item/medkit.geo.json}, {@code animations/item/medkit.animation.json},
- * {@code textures/item/medkit.png}.
- *
- * ── Анімації ─────────────────────────────────────────────────────────
- *   • {@code idle} — loop, грає весь час, поки предмет намальовано;
- *   • {@code use}  — ОДНОРАЗОВА, тригериться на власний правий клік
- *     ({@link ItemArchetype#onUseClient}). Один контролер на дві
- *     анімації: GeckoLib сам віддає перевагу тригернутій, доки вона не
- *     скінчиться, і повертається до {@code idle} — саме той перехід
- *     «idle → use → idle» без дьоргання, який потрібен, і жодного
- *     власного стану для цього тримати не треба.
+ * ── Два шари, запущені ОДНИМ викликом (як TACZ) ─────────────────────
+ * TACZ (третьоособові анімації зброї) тримає тіло гравця й саму зброю
+ * у ДВОХ незалежних форматах — playerAnimator-поза для руки/торса і
+ * GeckoLib/Bedrock-модель для самої зброї — але НІКОЛИ не намагається
+ * вмонтувати геометрію зброї у playerAnimator-файл (це технічно
+ * неможливо: playerAnimator керує лише скелетом гравця, чужу геометрію
+ * не малює). Замість цього {@code AnimationManager} у TACZ просто
+ * запускає ОБИДВА шари з ОДНІЄЇ форжевої події (наприклад
+ * {@code GunShootEvent}) — вони йдуть синхронно не тому, що фізично
+ * зшиті, а тому що стартують в один тік з узгодженими тривалостями,
+ * підготованими одним художником в один файл-сесію Blockbench.
+ * <p>
+ * Тут той самий принцип: {@link #onUseClient} — єдина точка, де
+ * запускаються ОБИДВА шари одночасно:
+ * <ol>
+ *   <li>{@link LiveHeldItemAction#beginClient} — playerlib-поза
+ *       {@link #LIVE_USE_POSE} на шарі {@code PoseLayerId.ITEM_ACTION}
+ *       (див. {@link LiveHeldItemAction}) — керує РУКАМИ/ТОРСОМ/ГОЛОВОЮ
+ *       гравця. Файл: {@code assets/maniacmod/player_animations/medkit_use.json}.</li>
+ *   <li>{@code triggerAnim(...)} — GeckoLib {@code use}-кліп на
+ *       контролері {@link #CONTROLLER} — керує САМОЮ моделлю аптечки
+ *       (кришка відкривається, бинт з'являється). Файл:
+ *       {@code assets/maniacmod/animations/item/medkit.animation.json}.</li>
+ * </ol>
+ * Обидва файли МУСЯТЬ мати однакову тривалість ({@link #USE_DURATION_TICKS})
+ * і узгоджений темп руху — це відповідальність художника в Blockbench,
+ * а не коду: код лише гарантує, що обидва тригеряться в той самий тік.
  *
  * ── Хто бачить анімацію ──────────────────────────────────────────────
- * Тригер клієнтський, тож анімацію бачить ЛИШЕ той, хто користується
- * аптечкою (свій гравець). Для інших гравців модель лишається в {@code idle}:
- * щоб показати рух чужого використання, потрібен був би синхронізований
- * тригер через GeckoLib-мережу з id стека — наразі свідомо не робимо,
- * бо ефект (лікування) і так видно зі шкали здоров'я.
+ * {@link LiveHeldItemAction#beginClient} тригериться лише на клієнті
+ * власника (прогноз кліку — див. {@link ItemArchetype#onUseClient}), але
+ * саму playerlib-позу бачать УСІ спостерігачі автоматично, бо PAL
+ * застосовує {@code AnimationStack} до будь-якого {@code AbstractClientPlayer},
+ * що рендериться (див. {@code PlayerPoseController} клас-докстрінг,
+ * "Третя особа працює автоматично"). GeckoLib {@code use}-тригер на
+ * предметі синхронізується мережею окремо, як і раніше (звичайний
+ * {@code GeoItem} тригер-протокол) — див. TODO нижче.
  *
  * ── Що лишається на сервері ──────────────────────────────────────────
  * Сам ефект, кулдаун і ліміт використань — у {@link ItemArchetype}
- * ({@code onUse}); предмет описує лише свій ефект.
+ * ({@code onUse}); блокування руху/слота/дропу на час анімації —
+ * {@link LiveHeldItemAction#beginServerTimed}.
  */
 public class MedkitItem extends ItemArchetype implements GeoItem {
 
@@ -94,16 +109,37 @@ public class MedkitItem extends ItemArchetype implements GeoItem {
     }
 
     /**
-     * Правий клік — граємо анімацію використання.
-     *
-     * Інстанс-id беремо ТИМ САМИМ методом, що й рендерер
-     * ({@code GeoItem.getId}), тож тригер і малюнок завжди влучають в
-     * один менеджер анімацій: якщо сервер колись призначить стеку
-     * власний id ({@code getOrAssignId}), він уже приїде клієнту в NBT і
-     * обидва місця прочитають його однаково.
+     * Ім'я {@code PoseAction}, зареєстрованої в {@code ClientSetup} через
+     * {@link LiveHeldItemAction#registerUsePose(String)}. Керує лише
+     * РУКАМИ/ТОРСОМ гравця — див. клас-докстрінг щодо другого,
+     * незалежного шару (GeckoLib use-кліп на самій моделі аптечки).
      */
+    private static final String LIVE_USE_POSE = ManiacMod.MOD_ID + ":medkit_use";
+
+    /**
+     * Тривалість анімації бинтування в тіках — МУСИТЬ збігатись із
+     * довжиною {@code medkit_use.json} (PlayerAnimator-файл, не
+     * GeckoLib). Розсинхрон у той чи інший бік не ламає гру (лок все
+     * одно знімається), але або передчасно розблоковує гравця (лишок
+     * анімації додограє вже без блокувань), або тримає його зайвий час.
+     */
+    private static final int USE_DURATION_TICKS = 40; // 2 секунди при 20 tps
+
     @Override
     protected void onUseClient(Player player, ItemStack stack) {
+        // Обидва шари стартують тут же, в один тік (принцип TACZ
+        // AnimationManager: один event → playerlib-поза тіла +
+        // GeckoLib-кліп предмета одночасно, без спільної геометрії).
+
+        // 1) Тіло: руки/торс/голова виконують рух "піднести аптечку,
+        // відкрити, дістати бинт" — сам предмет тут не малюється.
+        LiveHeldItemAction.beginClient(LIVE_USE_POSE);
+
+        // 2) Предмет: та сама модель аптечки, що й на землі/в GUI,
+        // грає одноразовий use-кліп (кришка відкривається, бинт
+        // з'являється) поверх ItemGeoRenderer — художник у Blockbench
+        // підганяє її темп під medkit_use.json, щоб рух виглядав
+        // синхронним, хоч фізично це два незалежні файли.
         triggerAnim(player, GeoItem.getId(stack), CONTROLLER, VISUALS.animationSet().use());
     }
 
@@ -119,6 +155,13 @@ public class MedkitItem extends ItemArchetype implements GeoItem {
         // інакше гравець втрачає аптечку через випадковий клік.
         int healed = match.healSurvivor(player.getUUID(), HEAL_AMOUNT);
         if (healed <= 0) return InteractionResultHolder.fail(stack);
+
+        // Аптечка бинтується на місці — гравець не рухається, поки триває
+        // анімація (USE_DURATION_TICKS має збігатись із довжиною файлу
+        // medkit_use.json у тіках), не може перемкнутись на інший слот
+        // чи викинути її (Q) посеред use. beginServerTimed сам планує
+        // симетричний endServer — окремого тік-лічильника тут не треба.
+        LiveHeldItemAction.beginServerTimed(player, /* lockMovement */ true, USE_DURATION_TICKS);
 
         stack.shrink(1);
         return InteractionResultHolder.success(stack);

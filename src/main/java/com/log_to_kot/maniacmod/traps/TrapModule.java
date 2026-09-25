@@ -723,6 +723,11 @@ public final class TrapModule implements PhaseListener {
         hitter.level().playSound(null, trap.blockPosition(),
             ModSounds.CROWBAR_HIT.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
 
+        // "Жива" анімація удару тілом гравця (playerlib) замість
+        // GeckoLib-тригера на самому предметі — див. CrowbarItem
+        // клас-докстрінг щодо синхронізації руки/предмета.
+        com.log_to_kot.maniacmod.items.CrowbarItem.playHitLive(hitter);
+
         UUID trappedId = victimOf(trap.getUUID());
         if (trappedId != null) {
             ServerPlayer victim = onlinePlayer(trappedId);

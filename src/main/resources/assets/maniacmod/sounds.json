@@ -31,7 +31,9 @@
   },
   "fuel_fill": {
     "sounds": [
-      { "name": "maniacmod:fuel_fill", "stream": false }
+      { "name": "maniacmod:fuel_fill_1", "stream": false },
+      { "name": "maniacmod:fuel_fill_2", "stream": false },
+      { "name": "maniacmod:fuel_fill_3", "stream": false }
     ]
   },
   "power_on": {

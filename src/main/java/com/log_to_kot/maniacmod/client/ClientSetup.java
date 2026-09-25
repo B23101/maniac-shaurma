@@ -78,6 +78,12 @@ public final class ClientSetup {
         InventorySlotAllocationClientHooks.setCustomHotbarRenderer(new ManiacHotbarOverlay());
         ShaurmaLib.attachTabVisibility(new TabRosterOverlay());
 
+        // "Жива" поза бинтування аптечкою (LiveHeldItemAction/MedkitItem) —
+        // реєструється РІВНО ОДИН раз тут, як і решта одноразових
+        // клієнтських реєстрацій у цьому методі. Файл самої анімації:
+        // assets/maniacmod/player_animations/medkit_use.json.
+        com.log_to_kot.maniacmod.items.LiveHeldItemAction.registerUsePose("medkit");
+
         // Бібліотека сама малює дефолтну шкалу стаміни по центру екрана
         // (shaurma-lib StaminaClientHooks), поки withStamina() підключено —
         // але цей режим уже має власний HUD показників виживого

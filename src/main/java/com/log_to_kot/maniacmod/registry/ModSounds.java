@@ -39,6 +39,8 @@ public final class ModSounds {
 
     // Луп заливу бензину (радіус 5): чується лише тоді, коли хтось справді
     // заливає, тож знати про нього більше нікому не треба.
+    // 3 варіації (fuel_fill_1/2/3.ogg) — sounds.json сам випадково обирає
+    // одну з трьох при кожному програванні, так само як exhausted_breath.
     public static final RegistryObject<SoundEvent> FUEL_FILL = register("fuel_fill");
 
     // ── Вихід ────────────────────────────────────────────────────────────
@@ -89,8 +91,8 @@ public final class ModSounds {
     // (minigame_fail). Реєструвати після додавання .ogg.
 
     private static RegistryObject<SoundEvent> register(String name) {
-        return SOUNDS.register(name, () -> SoundEvent.createVariableRangeEvent(
-            new ResourceLocation(ManiacMod.MOD_ID, name)));
+        return SOUNDS.register(name, () -> SoundEvent.createFixedRangeEvent(
+            new ResourceLocation(ManiacMod.MOD_ID, name), 16.0f));
     }
 
     private ModSounds() {}

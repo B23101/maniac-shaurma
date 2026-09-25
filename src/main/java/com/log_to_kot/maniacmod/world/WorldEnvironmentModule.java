@@ -35,6 +35,21 @@ import java.util.function.Supplier;
  * цільовою часткою з конфігу. Перша подія рахується від найменшого
  * інтервалу, щоб погоду було видно вже в першому матчі, а не через
  * 5–15 хвилин.
+ *
+ * ── БАГФІКС: погода вмикалась і за тік зникала ────────────────────────
+ * {@link #applyWeather} раніше викликався в {@link #onPhaseTick} КОЖНОГО
+ * тіку, поки погода активна — з {@code setWeatherParameters(0, ...)}.
+ * Ванільний {@code ServerLevel} сам щотіку просуває свій погодний цикл
+ * ({@code advanceWeatherCycle}); повторний виклик setWeatherParameters
+ * на вже активній погоді щотіку заново засилає клієнту
+ * {@code ClientboundGameEventPacket} START_RAINING/RAIN_LEVEL_CHANGE
+ * замість того, щоб лишити один раз розпочату погоду доспівувати —
+ * клієнт бачив спалах дощу й одразу його зникнення. Тепер
+ * {@link #applyWeather} викликається РІВНО ОДИН РАЗ — у {@link
+ * #startEvent}, коли подія починається; далі до кінця {@code
+ * eventTicksLeft} рахуємо тіки мовчки й лише гасимо погоду в кінці
+ * ({@link #clearWeather}). Ванільний рушій сам підтримує raining=true
+ * весь цей час, як і мав з самого початку.
  */
 public final class WorldEnvironmentModule implements PhaseListener {
 
@@ -109,7 +124,6 @@ public final class WorldEnvironmentModule implements PhaseListener {
         if (weatherActive) {
             weatherTicks++;
             eventTicksLeft--;
-            applyWeather(server);
             if (eventTicksLeft <= 0) {
                 weatherActive = false;
                 clearWeather();
