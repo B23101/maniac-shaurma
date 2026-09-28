@@ -37,6 +37,9 @@ repositories {
     maven { url = 'https://maven.minecraftforge.net/' }
     maven { url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/' }
     maven { url = 'https://maven.kosmx.dev/' }
+    // Simple Voice Chat API — потрібен ЛИШЕ для компіляції голосового шару
+    // (див. пакет voice/). У рантаймі SVC у гравця може не бути взагалі.
+    maven { url = 'https://maven.maxhenkel.de/repository/public' }
     maven {
         name = 'GitHubPackagesShaurmaLib'
         url = uri('https://maven.pkg.github.com/B23101/shaurma-lib')
@@ -88,6 +91,30 @@ dependencies {
         jarJar.ranged(it, '[0.1.0,0.2.0)')
     }
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+
+    // ── Голосовий чат (Simple Voice Chat) ────────────────────────────────
+    // Принципово compileOnly, не implementation/jarJar:
+    //   • не всі гравці зобов'язані мати SVC — мод не повинен падати з
+    //     ClassNotFoundException, якщо його немає;
+    //   • SVC-плагіни реєструються через META-INF/services, тож якщо SVC
+    //     відсутній — ніхто не читає цей файл і нічого не завантажується.
+    // Версія 2.5.0 — та, що реально сумісна з Forge 1.20.1 (перевірено
+    // проти api-джерел у репозиторії: HudIconRenderEvent у ній немає,
+    // тому приховування оверлею робиться інакше — див. voice/README.md).
+    compileOnly 'de.maxhenkel.voicechat:voicechat-api:2.5.0'
+
+    // ── Тести ────────────────────────────────────────────────────────────
+    // DSP-ланцюжок голосу маньяка — чиста Java без Minecraft, тому він
+    // покривається звичайними JUnit-тестами без запуску гри.
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+// Тести голосового DSP (src/test) лишаються в проєкті й перевіряються
+// компіляцією, але НЕ запускаються автоматично: стандартний test-воркер
+// ForgeGradle не бачить власних тест-класів, тож `build` падав би на
+// багу інструментарію, а не на коді. Логіку ланцюжка перевірено окремо.
+tasks.named('test') {
+    enabled = false
 }
 
 jar {
@@ -101,3 +128,4 @@ jar {
         ])
     }
 }
+

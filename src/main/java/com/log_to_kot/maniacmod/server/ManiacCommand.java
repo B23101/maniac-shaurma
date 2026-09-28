@@ -7,6 +7,8 @@ import com.log_to_kot.maniacmod.config.ConfigDiagnostics;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
+import com.log_to_kot.maniacmod.config.DarkZoneConfigs;
+import com.log_to_kot.maniacmod.map.zones.DarkZonePolygon;
 import com.log_to_kot.maniacmod.core.match.DebugMode;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
@@ -92,6 +94,7 @@ public final class ManiacCommand {
         //   /maniac debug swap maniac [гравець]  — гаряче перетворення, БУДЬ-ЯКА фаза, без spectator
         //   /maniac debug swap survivor [гравець]
         //   /maniac debug traps
+        //   /maniac debug stun [гравець]         — оглушити маніяка як ударом лома
         //   /maniac debug unmorph [гравець]      — зняти роль, БУДЬ-ЯКА фаза
         root.then(Commands.literal("debug")
             .executes(ctx -> debugStatus(ctx.getSource()))
@@ -124,6 +127,11 @@ public final class ManiacCommand {
                             EntityArgument.getPlayer(ctx, "player"))))))
             .then(Commands.literal("traps")
                 .executes(ctx -> debugTraps(ctx.getSource())))
+            .then(Commands.literal("stun")
+                .executes(ctx -> debugStun(ctx.getSource(), null))
+                .then(Commands.argument("player", EntityArgument.player())
+                    .executes(ctx -> debugStun(ctx.getSource(),
+                        EntityArgument.getPlayer(ctx, "player")))))
             .then(Commands.literal("unmorph")
                 .executes(ctx -> debugUnmorph(ctx.getSource(),
                     ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null))
@@ -225,6 +233,45 @@ public final class ManiacCommand {
                             IntegerArgumentType.getInteger(ctx, "index"))))))
             .then(Commands.literal("clear")
                 .executes(ctx -> clearPoints(ctx.getSource()))));
+
+        // ── /maniac darkzone ────────────────────────────────────────────
+        // Розмітка темних зон: 1..6+ точок командою на поточній позиції
+        // виконавця, БЕЗ ручного вписування координат. Y не враховується
+        // (див. DarkZonePolygon) — зона діє по всій висоті стовпця XZ.
+        //   /maniac darkzone create <name>      — нова порожня зона
+        //   /maniac darkzone point <name>       — додати поточну позицію
+        //   /maniac darkzone list                — які зони і скільки точок
+        //   /maniac darkzone remove <name>       — видалити зону цілком
+        //   /maniac darkzone clear               — стерти всю розмітку
+        root.then(Commands.literal("darkzone")
+            .then(Commands.literal("create")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .executes(ctx -> darkZoneCreate(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name")))))
+            .then(Commands.literal("point")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests((ctx, builder) -> {
+                        for (DarkZonePolygon zone : DarkZoneConfigs.snapshot()) {
+                            builder.suggest(zone.name());
+                        }
+                        return builder.buildFuture();
+                    })
+                    .executes(ctx -> darkZonePoint(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name")))))
+            .then(Commands.literal("list")
+                .executes(ctx -> darkZoneList(ctx.getSource())))
+            .then(Commands.literal("remove")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests((ctx, builder) -> {
+                        for (DarkZonePolygon zone : DarkZoneConfigs.snapshot()) {
+                            builder.suggest(zone.name());
+                        }
+                        return builder.buildFuture();
+                    })
+                    .executes(ctx -> darkZoneRemove(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name")))))
+            .then(Commands.literal("clear")
+                .executes(ctx -> darkZoneClear(ctx.getSource()))));
 
         dispatcher.register(root);
 
@@ -349,11 +396,13 @@ public final class ManiacCommand {
         MatchOrchestrator match = ManiacMod.match();
         if (match != null) match.reloadConfiguredMap();
 
-        // loot.sparkleEnabled читає клієнт із пакета, не з файлу — без
-        // цього /maniac reload міняв би блиск лише для тих, хто перезайде.
+        // loot.sparkleEnabled і loot.pickupRangeBlocks читає клієнт із
+        // пакета, не з файлу — без цього /maniac reload міняв би їх лише
+        // для тих, хто перезайде.
         ModNetwork.toPlayers(source.getServer().getPlayerList().getPlayers(),
             new com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket(
-                ManiacConfigs.get(ConfigSchema.GROUND_ITEM_SPARKLE_ENABLED)));
+                ManiacConfigs.get(ConfigSchema.GROUND_ITEM_SPARKLE_ENABLED),
+                ManiacConfigs.get(ConfigSchema.GROUND_ITEM_PICKUP_RANGE)));
 
         if (diag.isEmpty()) {
             source.sendSuccess(() -> Component.translatable("maniacmod.command.reload_clean"), true);
@@ -592,6 +641,46 @@ public final class ManiacCommand {
 
         match.debugSwapToSurvivor(player);
         source.sendSuccess(() -> Component.translatable("maniacmod.command.morph_survivor"), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac debug stun [гравець]} — оглушує маніяка так, ніби
+     * його щойно вдарили ломом, але без самого удару (без виживого поруч,
+     * без списання міцності лома). Для тестування оглушення в одиночку.
+     *
+     * Без аргументу — оглушується поточний маніяк матчу (перший онлайн
+     * гравець з роллю маніяка). З аргументом — саме цей гравець, і він
+     * мусить бути маніяком: оглушення виживого не має сенсу, ця механіка
+     * існує лише для маніяка.
+     */
+    private static int debugStun(CommandSourceStack source, ServerPlayer target) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        ServerPlayer maniac = target;
+        if (maniac == null) {
+            for (ServerPlayer online : match.onlinePlayers()) {
+                if (match.isManiac(online.getUUID())) {
+                    maniac = online;
+                    break;
+                }
+            }
+        }
+
+        if (maniac == null || !match.isManiac(maniac.getUUID())) {
+            source.sendFailure(Component.translatable("maniacmod.command.stun_no_maniac"));
+            return 0;
+        }
+
+        if (!match.maniacStun().debugStun(maniac)) {
+            source.sendFailure(Component.translatable("maniacmod.command.stun_already"));
+            return 0;
+        }
+
+        ServerPlayer stunned = maniac;
+        source.sendSuccess(() -> Component.translatable(
+            "maniacmod.command.stun_applied", stunned.getDisplayName()), true);
         return 1;
     }
 
@@ -899,6 +988,76 @@ public final class ManiacCommand {
         if (match != null) match.reloadConfiguredMap();
         source.sendSuccess(() -> Component.literal("Точку " + kind.name()
             + " #" + index + " видалено."), true);
+        return 1;
+    }
+
+    // ── Темні зони ───────────────────────────────────────────────────────
+
+    /**
+     * {@code /maniac darkzone create <name>} — резервує ім'я зони з
+     * НУЛЬОВОЮ кількістю точок. Точки додаються далі окремо командою
+     * {@code point} — так адмін ходить по карті й натискає одну коротку
+     * команду в кожному потрібному куті, замість вписувати координати
+     * вручну (саме цього просив дизайн).
+     */
+    private static int darkZoneCreate(CommandSourceStack source, String name) {
+        if (!DarkZoneConfigs.create(name)) {
+            source.sendFailure(Component.translatable("maniacmod.command.darkzone_exists", name));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.translatable(
+            "maniacmod.command.darkzone_created", name, name), true);
+        return 1;
+    }
+
+    /**
+     * {@code /maniac darkzone point <name>} — додає ПОТОЧНУ позицію
+     * виконавця (X/Z; Y не зберігається — {@link DarkZonePolygon}
+     * ігнорує висоту) як наступну точку зони. Порядок доданих точок і
+     * визначає форму: 1 точка → квадрат навколо неї, 2 → прямокутник
+     * по діагоналі, 3+ → полігон у тому порядку, як додавали.
+     */
+    private static int darkZonePoint(CommandSourceStack source, String name) {
+        var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
+        if (!DarkZoneConfigs.addPoint(name, pos)) {
+            source.sendFailure(Component.translatable(
+                "maniacmod.command.darkzone_not_found", name, name));
+            return 0;
+        }
+        DarkZonePolygon zone = DarkZoneConfigs.find(name);
+        int index = zone == null ? 0 : zone.points().size();
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.darkzone_point_added",
+            index, name, pos.toShortString()), true);
+        return 1;
+    }
+
+    private static int darkZoneList(CommandSourceStack source) {
+        var zones = DarkZoneConfigs.snapshot();
+        if (zones.isEmpty()) {
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.darkzone_empty_list"), false);
+            return 1;
+        }
+        StringBuilder sb = new StringBuilder("Темні зони:");
+        for (DarkZonePolygon zone : zones) {
+            sb.append(' ').append(zone.name()).append('=').append(zone.points().size()).append("т.");
+        }
+        source.sendSuccess(() -> Component.literal(sb.toString()), false);
+        return zones.size();
+    }
+
+    private static int darkZoneRemove(CommandSourceStack source, String name) {
+        if (!DarkZoneConfigs.remove(name)) {
+            source.sendFailure(Component.translatable(
+                "maniacmod.command.darkzone_not_found", name, name));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.darkzone_removed", name), true);
+        return 1;
+    }
+
+    private static int darkZoneClear(CommandSourceStack source) {
+        DarkZoneConfigs.clearAll();
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.darkzone_cleared"), true);
         return 1;
     }
 

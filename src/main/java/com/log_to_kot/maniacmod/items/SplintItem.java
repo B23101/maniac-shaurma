@@ -21,8 +21,8 @@ import net.minecraft.world.item.ItemStack;
  * StaminaRules (recoveryPerSecond/recoveryDelaySeconds).
  *
  * ── Чому не можна вжити при CRAWLING/UNCONSCIOUS ────────────────────
- * Поламана нога — це стан ПІСЛЯ вставання (onStandUpAttempt), не під
- * час лежання. Поки гравець CRAWLING чи UNCONSCIOUS, pendingLegBreak
+ * Хруст ноги лунає в момент падіння, але СТАН BROKEN_LEG вмикається
+ * лише ПІСЛЯ вставання (onStandUpAttempt), не під час лежання. Поки гравець CRAWLING чи UNCONSCIOUS, pendingLegBreak
  * ще не застосований і survivorStateOf(...) не поверне BROKEN_LEG —
  * onUse природно відмовить (fail), нічого спеціально перевіряти не
  * треба понад сам стан.

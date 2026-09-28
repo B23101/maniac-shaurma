@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod.client.overlay.hint;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -25,8 +26,16 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * гравця хоч один дозволений слот. Той самий підхід, що
  * {@link GeneratorHintOverlay}.
  *
- * <h3>Коли НЕ показуємо</h3>
+ * <h3>Коли НЕ показуємо «ПКМ — взяти» (лише назву або «підійдіть ближче»)</h3>
  * <ul>
+ *   <li>Гравець ЗАДАЛЕКО за реальним серверним лімітом підбору
+ *       ({@code ConfigSchema.GROUND_ITEM_PICKUP_RANGE}, донесеним
+ *       {@code GroundItemVisualSettingsPacket}) — БАГФІКС: ванільний
+ *       рейкаст ловить сутність суттєво далі (~3 блоки), ніж сервер
+ *       готовий підтвердити підбір (типово 2 блоки); без цієї
+ *       перевірки гравець бачив підказку в тому проміжку й отримував
+ *       мовчазну відмову сервера. Тепер у цьому проміжку показується
+ *       «підійдіть ближче» замість обіцянки дії.</li>
  *   <li>Фаза не дозволяє предмети ({@link PhaseRule#ITEM_USE}) — сервер
  *       відмовить у підборі, обіцяти його не можна.</li>
  *   <li>У гравця немає жодного дозволеного слота (маньяк, глядач) —
@@ -67,30 +76,73 @@ public final class GroundItemHintOverlay {
 
     private GroundItemHintOverlay() {}
 
+    // ── Анімаційний стан ─────────────────────────────────────────────────
+    // appear      : плавна поява тексту (alpha + підйом), 0 → 1.
+    // lastTargetId: id сутності, для якої текст уже прозвучав — звук лише
+    //               коли погляд перескочив на НОВИЙ предмет, а не кожен кадр.
+    private static final long[] lastFrameNanos = new long[1];
+    private static float appear = 0f;
+    private static boolean wasVisible = false;
+    private static int lastTargetId = -1;
+
     public static void render(GuiGraphics graphics) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.screen != null) return;
+        HitResult hit = mc.player == null ? null : mc.hitResult;
+        GroundItemEntity item = (mc.screen == null
+            && hit instanceof EntityHitResult entityHit
+            && entityHit.getEntity() instanceof GroundItemEntity g
+            && g.hasStack()) ? g : null;
 
-        HitResult hit = mc.hitResult;
-        if (!(hit instanceof EntityHitResult entityHit)) return;
-        if (!(entityHit.getEntity() instanceof GroundItemEntity item)) return;
-        if (!item.hasStack()) return;
+        if (item == null) {
+            if (wasVisible) {
+                wasVisible = false;
+            }
+            appear = 0f;
+            lastFrameNanos[0] = 0L;
+            lastTargetId = -1;
+            return;
+        }
 
-        boolean canPickUp = canOfferPickup(mc);
+        int targetId = item.getId();
+        if (targetId != lastTargetId) {
+            lastTargetId = targetId;
+        }
+        if (!wasVisible) wasVisible = true;
+
+        float dt = UiAnim.frameDt(lastFrameNanos);
+        appear = UiAnim.approach(appear, 1f, 13f, dt);
+        float ease = UiAnim.easeOutCubic(UiAnim.clamp01(appear));
+
+        boolean inRange = mc.player.distanceTo(item) <= ClientMatchState.groundItemPickupRangeBlocks();
+        boolean canPickUp = inRange && canOfferPickup(mc);
         String name = item.displayName().getString();
         String action = Component.translatable("maniacmod.hud.ground_item.pickup_hint").getString();
+        String tooFar = Component.translatable("maniacmod.hud.ground_item.too_far_hint").getString();
 
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
         int centerX = screenW / 2;
-        int anchorY = screenH / 2 - ABOVE_CROSSHAIR_GAP;
+        // Підйом: непрозорий текст «спливає» на місце, а не виникає раптово.
+        int anchorY = screenH / 2 - ABOVE_CROSSHAIR_GAP + Math.round((1f - ease) * 6f);
 
         Font font = mc.font;
         if (canPickUp) {
-            drawScaledCentered(graphics, font, name, centerX, anchorY - (font.lineHeight + LINE_GAP), TITLE_COLOR);
-            drawScaledCentered(graphics, font, action, centerX, anchorY, ACTION_COLOR);
+            drawScaledCentered(graphics, font, name, centerX, anchorY - (font.lineHeight + LINE_GAP), TITLE_COLOR, ease);
+            drawScaledCentered(graphics, font, action, centerX, anchorY, ACTION_COLOR, ease);
+        } else if (!inRange) {
+            // БАГФІКС: раніше тут показувалась сама назва без пояснення —
+            // ванільний рейкаст ловить сутність аж до ~3 блоків, а сервер
+            // (GroundItemEntity.interact) відмовляв уже на 2 блоках
+            // (ConfigSchema.GROUND_ITEM_PICKUP_RANGE). Гравець бачив назву
+            // і тиснув ПКМ у проміжку між цими дистанціями — і отримував
+            // мовчазну відмову сервера без жодного пояснення. Тепер
+            // клієнт знає той самий ліміт (див. GroundItemVisualSettingsPacket)
+            // і чесно каже «підійдіть ближче», а не обіцяє дію, якої
+            // сервер за мить не підтвердить.
+            drawScaledCentered(graphics, font, name, centerX, anchorY - (font.lineHeight + LINE_GAP), TITLE_COLOR, ease);
+            drawScaledCentered(graphics, font, tooFar, centerX, anchorY, ACTION_COLOR, ease);
         } else {
-            drawScaledCentered(graphics, font, name, centerX, anchorY, TITLE_COLOR);
+            drawScaledCentered(graphics, font, name, centerX, anchorY, TITLE_COLOR, ease);
         }
     }
 
@@ -100,13 +152,19 @@ public final class GroundItemHintOverlay {
      * рядок (заданий окремим {@code baselineY}) масштаб не зсуває.
      */
     private static void drawScaledCentered(GuiGraphics g, Font font, String text,
-                                            int centerX, int baselineY, int color) {
+                                            int centerX, int baselineY, int color, float alpha) {
+        // Прозорість самої появи: текст проявляється, а не спалахує.
+        // Колір задано як 0xFFRRGGBB, тож старший байт замінюємо на
+        // поточну альфу — RGB лишається тим самим.
+        int alphaByte = Math.round(UiAnim.clamp01(alpha) * 255f);
+        int shaded = (alphaByte << 24) | (color & 0x00FFFFFF);
+
         PoseStack pose = g.pose();
         pose.pushPose();
         pose.translate(centerX, baselineY, 0);
         pose.scale(TEXT_SCALE, TEXT_SCALE, 1f);
         int width = font.width(text);
-        g.drawString(font, text, -width / 2, -font.lineHeight / 2, color, true);
+        g.drawString(font, text, -width / 2, -font.lineHeight / 2, shaded, true);
         pose.popPose();
     }
 

@@ -14,7 +14,8 @@ import software.bernie.geckolib.model.GeoModel;
  * {@code assets/maniacmod/geo/item/fuel_canister.geo.json}       — модель
  * {@code assets/maniacmod/animations/item/fuel_canister.animation.json} —
  *     одна loop-анімація {@code "idle"} (легке погойдування в руці) —
- *     той самий короткий-ім'я підхід, що {@code GeneratorGeoModel}.
+ *     той самий короткий-ім'я підхід, що {@code GeneratorGeoModel}:
+ *     GeckoLib шукає анімацію за ключем як він є, без префіксу.
  * {@code assets/maniacmod/textures/item/fuel_canister.png}       — текстура
  *
  * ── Поточний стан: тимчасова заглушка ─────────────────────────────────

@@ -14,7 +14,6 @@ import com.log_to_kot.maniacmod.net.s2c.notify.ManiacStunPacket;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.common.overlay.ActionBarMessageType;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
@@ -69,6 +68,14 @@ public final class ManiacStunModule implements PhaseListener {
     private static final String MOVEMENT_LOCK_REASON = "maniac_stun_movement";
     private static final String ATTACK_LOCK_REASON = "maniac_stun_attack";
 
+    /**
+     * На скільки тіків нудота ставиться ДОВШЕ за залишок стану (див.
+     * {@link #keepNauseaAlive}). Це ж значення задає темп донакладання:
+     * ефект тримається з запасом у 1 секунду, тож якщо клієнт втратив
+     * його посеред стану, найгірша пауза без нудоти — цей самий запас.
+     */
+    private static final int NAUSEA_REFRESH_MARGIN_TICKS = 20;
+
     private final Supplier<MatchOrchestrator> matchSupplier;
 
     /** Тіків оглушення, що лишилось. 0 = маньяк вільний. */
@@ -112,10 +119,44 @@ public final class ManiacStunModule implements PhaseListener {
     @Override
     public void onPhaseTick(GamePhase phase, List<ServerPlayer> players, long ticksInPhase) {
         if (stunTicksLeft <= 0) return;
-        if (--stunTicksLeft > 0) return;
+        if (--stunTicksLeft > 0) {
+            keepNauseaAlive(players);
+            return;
+        }
 
         // Щойно дотікало до нуля — звільняємо.
         endStun(players);
+    }
+
+    /**
+     * Тримає нудоту прив'язаною до СТАНУ, а не до власного таймера
+     * ефекту: за дизайном нудота має тривати рівно стільки, скільки
+     * оглушення, а не «перші дві секунди».
+     *
+     * <p>Раніше ефект ставився один раз у {@link #beginStun} і більше
+     * ніхто його не чіпав — якщо його щось прибирало чи скорочувало
+     * (сторонній код, ресинк ефектів), нудота зникала, а стан
+     * продовжувався. Тепер раз на {@link #NAUSEA_REFRESH_MARGIN_TICKS}
+     * тіків перевіряємо й донакладаємо: донакладання з БІЛЬШОЮ
+     * тривалістю змушує ванільний код надіслати клієнтам свіжий
+     * {@code ClientboundUpdateMobEffectPacket}, тож нудить знову.</p>
+     *
+     * <p>Перевірка «лишилось менше за решту стану» (а не «донакладати
+     * щотік») важлива саме заради мережі: щотікове переписування тієї
+     * самої тривалості надсилало б гравцям пакет щотік без жодної
+     * причини.</p>
+     */
+    private void keepNauseaAlive(List<ServerPlayer> players) {
+        if (stunnedManiacId == null) return;
+        ServerPlayer maniac = findPlayer(players, stunnedManiacId);
+        if (maniac == null) return;
+
+        MobEffectInstance current = maniac.getEffect(MobEffects.CONFUSION);
+        if (current != null && current.getDuration() > stunTicksLeft) return;
+
+        maniac.addEffect(new MobEffectInstance(MobEffects.CONFUSION,
+            stunTicksLeft + NAUSEA_REFRESH_MARGIN_TICKS,
+            ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_NAUSEA_AMPLIFIER), false, false));
     }
 
     /** Гравець вийшов із сервера — якщо це був оголушений маньяк, звільняємо стан і локи. */
@@ -249,7 +290,8 @@ public final class ManiacStunModule implements PhaseListener {
         // так рясні від капкана/лома) і не показувати іконку ефекту в
         // інвентарі — HUD оглушення й так має власні 5 зірочок, ванільна
         // іконка нудоти лише задублювала б інформацію.
-        maniac.addEffect(new MobEffectInstance(MobEffects.CONFUSION, duration, nauseaAmplifier, false, false));
+        maniac.addEffect(new MobEffectInstance(MobEffects.CONFUSION,
+            duration + NAUSEA_REFRESH_MARGIN_TICKS, nauseaAmplifier, false, false));
 
         spawnHitParticles(maniac);
 
@@ -258,11 +300,39 @@ public final class ManiacStunModule implements PhaseListener {
         ModNetwork.toPlayers(everyone, new ManiacStunPacket(maniac.getUUID(), true, duration));
     }
 
+    // ── Дебаг ────────────────────────────────────────────────────────────
+
+    /**
+     * Дебаг-версія {@link #beginStun}: приголомшує маньяка тим самим
+     * ефектом, що справжній удар ломом ({@code /maniac debug stun}), але
+     * БЕЗ реального удару — без гравця-виживого поруч, без списання
+     * міцності лома й без перевірки дальності. Той самий стан
+     * ({@code stunTicksLeft}, лок руху/атаки, ефект нудоти, пакет
+     * усім спостерігачам), що й {@link #onCrowbarHitManiac}, лише
+     * запущений напряму, для тестування без другого гравця з ломом у
+     * руці.
+     *
+     * Той самий "продовжити чи ні" підхід, що в бойовому шляху: другий
+     * запуск команди на вже оглушеного маньяка НЕ подовжує стан — щоб
+     * команду не використовували як спосіб тримати маньяка оглушеним
+     * нескінченно, повторюючи її.
+     *
+     * @return true, якщо стан оглушення застосовано; false — маньяк уже
+     *         був оглушений (стан не продовжено, але це не помилка)
+     */
+    public boolean debugStun(ServerPlayer maniac) {
+        boolean alreadyStunned = stunnedManiacId != null && stunnedManiacId.equals(maniac.getUUID());
+        if (alreadyStunned) return false;
+
+        beginStun(maniac);
+        return true;
+    }
+
     private static void spawnHitParticles(ServerPlayer maniac) {
         if (!(maniac.level() instanceof ServerLevel level)) return;
-        level.sendParticles(ParticleTypes.CRIT,
-            maniac.getX(), maniac.getY() + 1.0, maniac.getZ(),
-            18, 0.35, 0.5, 0.35, 0.05);
+        level.sendParticles(com.log_to_kot.maniacmod.registry.ModParticles.STUN_STAR.get(),
+            maniac.getX(), maniac.getY() + 1.2, maniac.getZ(),
+            10, 0.35, 0.45, 0.35, 0.03);
     }
 
     private void notify(ServerPlayer player, ActionBarMessageType type, String key, String... args) {

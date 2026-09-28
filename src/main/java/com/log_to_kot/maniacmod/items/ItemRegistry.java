@@ -37,8 +37,9 @@ public final class ItemRegistry {
         register("splint", SplintItem::new, Group.SURVIVOR);  // Шина
         register("fuel_canister", FuelCanisterItem::new, Group.SURVIVOR);  // Бензин
         register("crowbar", CrowbarItem::new, Group.SURVIVOR);  // Лом
+        register("flashlight", FlashlightItem::new, Group.SURVIVOR);  // Ліхтарик
+        register("geo_scissors", GeoScissorsItem::new, Group.SURVIVOR);  // Geo-ножиці (розмінування пасток)
         // TODO(міграція items): у міру перенесення з v3 ItemImplementations
-        //   register("flashlight",   FlashlightItem::new,   Group.SURVIVOR);
         //   register("bat",          BatItem::new,          Group.SURVIVOR);
         //   register("screwdriver",  ScrewdriverItem::new,  Group.SURVIVOR);
         //   register("scissors",     ScissorsItem::new,     Group.SURVIVOR);

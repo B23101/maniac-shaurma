@@ -62,7 +62,7 @@ public final class GeneratorHighlightGlow {
     public static void reset() {
         activeUntilMs = 0;
         entries = List.of();
-        ClientEntityGlow.clear();
+        ClientEntityGlow.clearLayer(ClientEntityGlow.LAYER_GENERATOR);
     }
 
     @SubscribeEvent
@@ -82,7 +82,7 @@ public final class GeneratorHighlightGlow {
         // Роль могла змінитись, поки підсвітка висіла (морф/конець матчу) —
         // чужій ролі генератори не світимо.
         if (mc.level == null || !ClientMatchState.isSurvivor()) {
-            ClientEntityGlow.clear();
+            ClientEntityGlow.clearLayer(ClientEntityGlow.LAYER_GENERATOR);
             return;
         }
 
@@ -92,7 +92,7 @@ public final class GeneratorHighlightGlow {
             if (entity == null) continue; // чанк не завантажений клієнтом — світити нічого
             next.put(entity.getId(), ClientMatchState.highlightColor(entry.state()) & 0x00FFFFFF);
         }
-        ClientEntityGlow.replace(next);
+        ClientEntityGlow.setLayer(ClientEntityGlow.LAYER_GENERATOR, next);
     }
 
     private static GeneratorEntity findAt(Minecraft mc, BlockPos pos) {

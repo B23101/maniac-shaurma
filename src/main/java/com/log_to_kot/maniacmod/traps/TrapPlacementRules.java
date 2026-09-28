@@ -57,6 +57,19 @@ public final class TrapPlacementRules {
     }
 
     /**
+     * Те саме, що {@link #check}, але БЕЗ перевірки дальності від очей.
+     * Для першої точки дроту: її дальність перевірена в момент вибору, а
+     * до другого кліку маньяк уже міг відійти.
+     */
+    public static TrapArchetype.PlacementResult checkIgnoringReach(ServerLevel level, BlockPos floor,
+                                                                    ServerPlayer placer) {
+        if (isTooCloseToAnySurvivor(floor, placer)) {
+            return TrapArchetype.PlacementResult.TOO_CLOSE_TO_PLAYER;
+        }
+        return TrapArchetype.PlacementResult.OK;
+    }
+
+    /**
      * Чи цей блок у межах дальності розміщення від очей маньяка. Сервер
      * міряє це сам: позиція, яку надіслав клієнт, — лише «куди він
      * дивиться», і модифікований клієнт міг би вказати блок за півкарти.

@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod.maniacs;
 
 import com.log_to_kot.maniacmod.abilities.Ability;
 import com.log_to_kot.maniacmod.traps.BearTrapArchetype;
+import com.log_to_kot.maniacmod.traps.ElectricWireArchetype;
 import com.log_to_kot.maniacmod.traps.TrapArchetype;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
@@ -68,9 +69,13 @@ public final class TestManiacArchetype extends ManiacArchetype {
         return List.of();
     }
 
-    /** Поки в реєстрі одна пастка — капкан. Решта додасться разом із реалізацією. */
+    /**
+     * Пастки маньяка. Капкан — базова; електричний дріт — нова (ТЗ 2).
+     * Решта (мотузка, розтяжка) додасться разом із реалізацією.
+     * Порядок = порядок клавіш 5/6/7.
+     */
     @Override
     public List<TrapArchetype> traps() {
-        return List.of(new BearTrapArchetype());
+        return List.of(new BearTrapArchetype(), new ElectricWireArchetype());
     }
 }

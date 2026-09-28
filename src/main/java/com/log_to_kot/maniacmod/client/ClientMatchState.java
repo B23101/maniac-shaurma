@@ -61,6 +61,47 @@ public final class ClientMatchState {
     private static boolean trapped = false;
 
     /**
+     * Чи зараз активна підказка "Натисни F, щоб вибратись". Керується
+     * ЛИШЕ сервером ({@code TrapEscapePromptPacket}) — {@link #trapped}
+     * для цього не годиться: він лишається true і після втраченої спроби.
+     */
+    private static boolean trapEscapePrompt = false;
+
+    /**
+     * Хто зараз працює з генератором — {@code UUID → вид роботи}
+     * ({@code GeneratorInteractionPacket}).
+     *
+     * ── Навіщо це взагалі клієнту ─────────────────────────────────────
+     * Поза рук (ремонт / залив бензину) — це playerlib-анімація на тілі
+     * ГРАВЦЯ, а не стан предмета, тож її мусить запустити КОЖЕН клієнт,
+     * який має цього гравця в зоні видимості (той самий принцип, що
+     * {@code DownedSurvivorsPacket} для лежачої пози: PAL застосовує
+     * стек кожного {@code AbstractClientPlayer}, але наповнити його може
+     * лише той клієнт, який знає про позу).
+     *
+     * ── Чому не власний прапор клієнта ────────────────────────────────
+     * Для СЕБЕ клієнт і так знає ({@code ClientInputHandler.isRepairHeld()}),
+     * але чужий ремонт із клієнта не видно ніяк: утримання Shift+ПКМ —
+     * суто локальний ввід. Тому це єдине джерело для третіх осіб.
+     *
+     * Скидається в {@link #reset()} — як і решта стану матчу.
+     */
+    private static final Map<UUID, Integer> generatorInteraction = new java.util.HashMap<>();
+
+    /** Вид роботи з генератором: нічого (у мапі відсутній), ремонт або залив пального. */
+    public static final int GENERATOR_ACTION_NONE = 0;
+    public static final int GENERATOR_ACTION_REPAIR = 1;
+    public static final int GENERATOR_ACTION_REFUEL = 2;
+
+    /**
+     * Чи мене ЗАРАЗ б'є струмом електричний дріт. Окремо від
+     * {@link #trapped}: капкан глушить лише РУХ (навколо можна
+     * роздивлятись), а дріт за ТЗ додатково блокує ПОВОРОТ камери й трясе
+     * нею. Керується ЛИШЕ сервером ({@code WireShockPacket}).
+     */
+    private static boolean wireShocked = false;
+
+    /**
      * Стан «оглушений маньяк» (удар ломом). На відміну від капкана,
      * цей стан має ДВА різних глядачі (див. докстрінг
      * {@code ManiacStunPacket}), тому тут два незалежних записи:
@@ -120,10 +161,23 @@ public final class ClientMatchState {
     // ── Ростер (tab-екран) ───────────────────────────────────────────────
     private static List<RosterSyncPacket.RosterEntry> roster = List.of();
 
-    // ── Візуальні налаштування предметів на землі (loot.sparkleEnabled) ──
+    // ── Візуальні налаштування предметів на землі (loot.sparkleEnabled,
+    // loot.pickupRangeBlocks) ──────────────────────────────────────────
     // НАВМИСНО поза reset(): це конфіг сервера, а не прогрес матчу; вихід
-    // у LOBBY/RESET не повинен вимикати блиск до наступного пакета.
+    // у LOBBY/RESET не повинен вимикати блиск чи забувати дистанцію до
+    // наступного пакета.
     private static boolean groundItemSparkleEnabled = true;
+
+    /**
+     * Дистанція підбору (блоки), якою РЕАЛЬНО керується сервер
+     * ({@code ConfigSchema.GROUND_ITEM_PICKUP_RANGE}). БАГФІКС: без
+     * цього поля {@code GroundItemHintOverlay} не мав звідки знати
+     * серверний ліміт і показував «ПКМ — взяти» на будь-якій дистанції,
+     * де ловить ванільний рейкаст — ширшій за те, що сервер справді
+     * дозволяв. 2.0 — той самий дефолт, що в {@code ConfigSchema}, на
+     * випадок, якщо пакет із якоїсь причини ще не прийшов.
+     */
+    private static double groundItemPickupRangeBlocks = 2.0;
 
     private ClientMatchState() {}
 
@@ -245,6 +299,26 @@ public final class ClientMatchState {
         groundItemSparkleEnabled = enabled;
     }
 
+    static void setGroundItemPickupRangeBlocks(double range) {
+        groundItemPickupRangeBlocks = range;
+    }
+
+    /**
+     * Дзеркало {@code GeneratorInteractionPacket}: хто зараз ремонтує чи
+     * заливає генератор. {@code action == }{@link #GENERATOR_ACTION_NONE}
+     * прибирає запис гравця (робота скінчилась).
+     */
+    static void setGeneratorInteraction(UUID playerId, int action) {
+        // Білий список, а не перевірка "!= NONE": значення з чужого
+        // (новішого) сервера клієнт має проігнорувати, а не зберегти й
+        // потім подавитись ним у драйвері поз.
+        if (action != GENERATOR_ACTION_REPAIR && action != GENERATOR_ACTION_REFUEL) {
+            generatorInteraction.remove(playerId);
+            return;
+        }
+        generatorInteraction.put(playerId, action);
+    }
+
     /** Повне скидання. Викликається при виході з матчу і при диконекті. */
     public static void reset() {
         role = RoleSyncPacket.Role.SPECTATOR;
@@ -256,6 +330,8 @@ public final class ClientMatchState {
         survivorState = SurvivorState.HEALTHY;
         heartbeat = 0f;
         trapped = false;
+        trapEscapePrompt = false;
+        wireShocked = false;
         maniacStunSelfUntilTick = 0;
         maniacStunSelfTotalTicks = 0;
         maniacStunUntilTick.clear();
@@ -271,12 +347,15 @@ public final class ClientMatchState {
         activeTrapSlot = -1;
         downed = List.of();
         downedMaxTicks.clear();
+        generatorInteraction.clear();
+        com.log_to_kot.maniacmod.client.ItemPickupPose.reset();
         rescueRequired = 0;
         rescueProgress = 0;
         com.log_to_kot.maniacmod.client.overlay.WorldToScreen.invalidate();
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
         com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.reset();
         com.log_to_kot.maniacmod.client.glow.GeneratorHighlightGlow.reset();
+        com.log_to_kot.maniacmod.client.glow.TrapVictimGlow.reset();
     }
 
     // ── Читання ──────────────────────────────────────────────────────────
@@ -287,6 +366,56 @@ public final class ClientMatchState {
             if (entry.id().equals(id)) return true;
         }
         return false;
+    }
+
+    /**
+     * Стан виживого для БУДЬ-ЯКОГО гравця матчу (не лише себе) — з того
+     * ж джерела, яке вже показує tab-екран.
+     *
+     * ── Пріоритет джерел ──────────────────────────────────────────────
+     *   1. своє значення ({@link #survivorState}) — воно найточніше;
+     *   2. список лежачих ({@link #isDowned}) — він свіжий (раз на
+     *      секунду, поки список непорожній);
+     *   3. ростер — він надходить на ПОДІЮ зміни стану, тому саме він
+     *      дає те, чого немає в жодному іншому місці: {@code CRAWLING}
+     *      чужих гравців (щойно впав, ще не зомлів).
+     *
+     * Повертає {@link SurvivorState#HEALTHY}, якщо гравця немає ніде —
+     * безпечний фолбек: "нічого особливого з ним не сталось". Маньяк і
+     * глядач у ростері теж мають {@code HEALTHY} (див. докстрінг
+     * {@code RosterSyncPacket}), тож зайвих станів звідти не прийде.
+     */
+    public static SurvivorState survivorStateOf(UUID id) {
+        UUID self = selfId();
+        if (self != null && self.equals(id)) return survivorState;
+        if (isDowned(id)) return SurvivorState.UNCONSCIOUS;
+        for (RosterSyncPacket.RosterEntry entry : roster) {
+            if (entry.playerId().equals(id)) return entry.state();
+        }
+        return SurvivorState.HEALTHY;
+    }
+
+    /**
+     * Чи цей гравець зараз лежить на землі — тобто чи має його тіло
+     * набувати лежачої пози (плоский хітбокс) і лежачої анімації.
+     *
+     * Сюди входять ОБИДВА стани повзання, а не лише непритомність:
+     * {@code CRAWLING} — це "щойно впав", і саме він раніше лишався
+     * стоячим (гравець дивився на себе зверху в позі стовпа).
+     * {@code UNCONSCIOUS} — 0 хп, повзе.
+     */
+    public static boolean isProne(UUID id) {
+        return survivorStateOf(id).isCrawlOnly();
+    }
+
+    /** Вид роботи з генератором у цього гравця ({@link #GENERATOR_ACTION_NONE}, якщо нічого). */
+    public static int generatorInteractionOf(UUID id) {
+        return generatorInteraction.getOrDefault(id, GENERATOR_ACTION_NONE);
+    }
+
+    /** UUID усіх гравців, що зараз працюють із генератором — для прогріву поз. */
+    public static Iterable<Map.Entry<UUID, Integer>> generatorInteractions() {
+        return generatorInteraction.entrySet();
     }
 
     public static List<DownedSurvivorsPacket.Entry> downedEntries() { return downed; }
@@ -338,6 +467,11 @@ public final class ClientMatchState {
     public static float heartbeat()            { return heartbeat; }
     /** Затиснений у капкані ЗАРАЗ — для клієнтського блокування руху/повороту. */
     public static boolean isTrapped()          { return trapped; }
+    public static boolean isTrapEscapePrompt() { return trapEscapePrompt; }
+    static void setTrapEscapePrompt(boolean active) { trapEscapePrompt = active; }
+    /** Під струмом дроту ЗАРАЗ — для блокування камери й тряски (ТЗ 5). */
+    public static boolean isWireShocked()      { return wireShocked; }
+    static void setWireShocked(boolean active) { wireShocked = active; }
 
     /** Я, поточний клієнт, оглушений ЗАРАЗ ударом лома — для блокування руху/камери/атаки й власного HUD. */
     public static boolean isManiacStunned() {
@@ -362,6 +496,9 @@ public final class ClientMatchState {
     }
 
     public static boolean groundItemSparkleEnabled() { return groundItemSparkleEnabled; }
+
+    /** Реальна серверна дистанція підбору (блоки) — див. {@link #setGroundItemPickupRangeBlocks}. */
+    public static double groundItemPickupRangeBlocks() { return groundItemPickupRangeBlocks; }
 
     /** Скільки натискань пробілу вже зараховано (0, якщо вставання не триває). */
     public static int standUpPresses()         { return standUpPresses; }

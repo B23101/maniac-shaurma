@@ -93,9 +93,9 @@ public class BearTrapArchetype extends TrapArchetype {
         if (!(victim.level() instanceof ServerLevel level)) return;
         for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
             if (viewer.serverLevel() != level) continue;
-            level.sendParticles(viewer, net.minecraft.core.particles.ParticleTypes.SWEEP_ATTACK, true,
-                victim.getX(), victim.getY() + 0.3, victim.getZ(),
-                6, 0.25, 0.1, 0.25, 0.0);
+            level.sendParticles(viewer, com.log_to_kot.maniacmod.registry.ModParticles.TRAP_SNAP.get(), true,
+                victim.getX(), victim.getY() + 0.25, victim.getZ(),
+                5, 0.25, 0.08, 0.25, 0.02);
         }
     }
 

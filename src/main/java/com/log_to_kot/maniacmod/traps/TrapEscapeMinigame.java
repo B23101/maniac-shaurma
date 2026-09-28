@@ -46,12 +46,29 @@ public final class TrapEscapeMinigame {
     }
 
     private final UUID trapId;
-    private final TargetMinigameSpec spec;
+    /**
+     * Поточні параметри спроби. НЕ final: за ТЗ ціль капкана
+     * ПЕРЕМІЩУЄТЬСЯ після КОЖНОЇ спроби (і влучання, і промаху) —
+     * {@code TrapModule} після кожного {@link #attempt} підставляє сюди
+     * новий {@link TargetMinigameSpec} із іншою {@code targetPosition}.
+     * Ціль не в самому класі окремим полем, бо тоді `isHit` мусив би
+     * питати «а яка ціль зараз?» у двох місцях — тут і в спеку. Одна
+     * правда: спеку.
+     */
+    private TargetMinigameSpec spec;
     private final int missPenalty;
     private final long openedAtMillis = System.currentTimeMillis();
 
     private int hits = 0;
     private int ticksLeft;
+
+    /**
+     * Вердикт ОСТАННЬОЇ спроби — щоб {@code TrapModule} не виводив
+     * «влучив/схибив» із того, змінилось число влучань чи ні (при
+     * штрафі 0 промах не змінює лічильник, і таке виведення помилково
+     * показало б промах як влучання).
+     */
+    private Result lastResult;
 
     public TrapEscapeMinigame(UUID trapId, TargetMinigameSpec spec, int missPenalty, int totalTicks) {
         this.trapId = trapId;
@@ -62,10 +79,26 @@ public final class TrapEscapeMinigame {
 
     public UUID trapId() { return trapId; }
 
+    /** Поточна спека (з поточною позицією цілі) — для перерахунку нової цілі в модулі. */
+    public TargetMinigameSpec spec() { return spec; }
+
+    /**
+     * Підмінює спеку — використовується, щоб ПЕРЕНЕСТИ ціль після
+     * чергової спроби. Решта полів (швидкість, ширина зони, потрібні
+     * влучання, seed) лишаються тими самими: змінюється лише позиція
+     * цілі, інакше гра «перезапускалась» би з новою швидкістю — а
+     * клієнтський повзунок рахує свій час від моменту відкриття
+     * екрана й такого перезапуску не побачив би.
+     */
+    public void setSpec(TargetMinigameSpec spec) { this.spec = spec; }
+
     /** Скільком влучанням треба дійти до визволення (для пакетів і повідомлень). */
     public int hitsRequired() { return spec.hitsRequired(); }
 
     public int hits() { return hits; }
+
+    /** Вердикт останньої {@link #attempt}; до першої спроби — {@code null}. */
+    public Result lastResult() { return lastResult; }
 
     /** Скільки тіків лишилось до кінця спроби. */
     public int ticksLeft() { return ticksLeft; }
@@ -99,10 +132,12 @@ public final class TrapEscapeMinigame {
 
         if (plausible) {
             hits++;
-            return hits >= spec.hitsRequired() ? Result.ESCAPED : Result.HIT;
+            lastResult = hits >= spec.hitsRequired() ? Result.ESCAPED : Result.HIT;
+            return lastResult;
         }
 
         hits = Math.max(0, hits - missPenalty);
-        return Result.MISS;
+        lastResult = Result.MISS;
+        return lastResult;
     }
 }

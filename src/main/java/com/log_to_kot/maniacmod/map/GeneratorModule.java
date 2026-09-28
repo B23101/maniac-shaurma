@@ -1,5 +1,6 @@
 package com.log_to_kot.maniacmod.map;
 
+import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
@@ -22,7 +23,9 @@ import com.log_to_kot.maniacmod.net.s2c.minigame.WireMinigameOpenPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorExplosionPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorInteractionPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.common.overlay.ActionBarMessageType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleOptions;
@@ -107,13 +110,23 @@ public final class GeneratorModule implements PhaseListener {
     private final Map<UUID, ActiveRepairMinigame> activeMinigames = new HashMap<>();
 
     /**
-     * Звук генераторів: старт, гул роботи, гул заливу. Живе окремим
-     * об'єктом, бо розклад озвучення не має нічого спільного з прогресом
-     * ремонта — див. {@link GeneratorSoundscape}.
+     * Звук запуску генератора (одноразовий) — гул роботи й гул заливу
+     * тепер клієнтські, див. {@link GeneratorSoundscape}.
      */
     private final GeneratorSoundscape sounds = new GeneratorSoundscape();
 
     private long tick = 0;
+
+    /**
+     * Причина локу руху на час роботи з генератором (ТЗ 12: гравець
+     * повністю зафіксований, поки тримає кнопку).
+     *
+     * Окремий рядок-причина, а не {@code true/false} — той самий реєстр,
+     * що в оглушення й капкана, тож заморозка від ремонту й заморозка від
+     * чогось іншого коректно співіснують: зняття однієї не розлочить іншу. Ідемпотентний —
+     * викликається щотік, значення не накопичується.
+     */
+    private static final String WORK_LOCK_REASON = "generator_work";
 
     public GeneratorModule(Supplier<MatchOrchestrator> matchSupplier) {
         this.matchSupplier = matchSupplier;
@@ -181,6 +194,17 @@ public final class GeneratorModule implements PhaseListener {
          */
         int blockedNoticeTicks = 0;
 
+        /**
+         * Останнє, що клієнтам сказали про роботу цього гравця
+         * ({@code GeneratorInteractionPacket}). -1 — ще нічого не казали,
+         * тож перше ж значення піде пакетом.
+         *
+         * Потрібно, щоб не слати пакет щотіка: поза змінюється на
+         * ПЕРЕХОДІ "ремонт → залив → нічого", а не щотік. Серія
+         * однакових значень — це рівно один пакет.
+         */
+        int sentInteraction = GeneratorInteractionPacket.ACTION_NONE;
+
         RepairSession(BlockPos pos) {
             this.pos = pos;
         }
@@ -204,7 +228,18 @@ public final class GeneratorModule implements PhaseListener {
             if (activeMinigames.containsKey(player.getUUID())) {
                 ModNetwork.toPlayer(player, new RepairMinigameResultPacket(false));
             }
+            // Фаза скінчилась — робота теж. Знімаємо і лок руху, і позу
+            // рук: без цього гравець, що ремонтував у момент кінця матчу,
+            // лишався б замороженим у лоббі, а треті особи бачили б його
+            // з руками в ремонтній позі вже після матчу.
+            setWorkLock(player, false);
         }
+        // Пакетів "кінець роботи" тут НЕ шлемо свідомо: кінець ігрової фази
+        // приходить клієнтам як зміна фази, а вона сама викликає
+        // ClientMatchState.reset() — разом з рештою стану матчу чиститься й
+        // мапа "хто працює" (див. ClientMatchState#reset), і лежача поза рук
+        // гасне. Слати по пакету на кожного — зайвий трафік замість одного
+        // скидання, яке і так відбувається.
         sessions.clear();
         activeMinigames.clear();
     }
@@ -212,6 +247,11 @@ public final class GeneratorModule implements PhaseListener {
     @Override
     public void onPhaseTick(GamePhase phase, List<ServerPlayer> players, long ticksInPhase) {
         tick++;
+        // Прапор "ліють зараз" скидається на початку КОЖНОГО тіку, а не лише
+        // всередині tickSessions: якщо фаза більше не дозволяє ремонт (або
+        // сесій узагалі немає), tickSessions не виконається, і прапор
+        // лишився б true з минулого тіку — idle_fuel не згасала б.
+        resetFillingFlags();
         // Вибух генератора тікається ЗАВЖДИ, а не лише коли фаза дозволяє
         // ремонт: інакше вибух, що стався за мить до кінця ремонтної фази,
         // назавжди лишився б червоним, бо його лічильник ніхто не гасить.
@@ -234,11 +274,11 @@ public final class GeneratorModule implements PhaseListener {
             }
         }
 
-        // Звук — ПІСЛЯ ремонта й залива, і в будь-якій фазі. Після — бо
-        // бензин, що пішов у генератор цього тіку, мусить озвучитись цього
-        // ж тіку, а не наступного. У будь-якій — бо гул завершеного
-        // генератора не має зникати від зміни правила фази.
-        sounds.tick(matchSupplier.get().generators(), levelOf(players));
+        // Гул роботи й звук заливу більше не мають окремого розкладу
+        // тут — GeneratorEntity.tick() сам щотік підтримує їх через
+        // GeneratorLoopSoundscape/GeneratorFuelSoundscape, читаючи
+        // isActive()/stagePercent(). Тут лишається лише одноразовий
+        // старт (sounds.completed, викликається нижче й у refreshFuel).
     }
 
     // ── Ремонт ───────────────────────────────────────────────────────────
@@ -278,8 +318,77 @@ public final class GeneratorModule implements PhaseListener {
     public void stopRepair(ServerPlayer player) {
         UUID uuid = player.getUUID();
         if (activeMinigames.containsKey(uuid)) return;
-        if (sessions.remove(uuid) != null) {
-            hideProgress(player);
+        RepairSession removed = sessions.remove(uuid);
+        if (removed == null) return;
+        hideProgress(player);
+        releaseWork(matchSupplier.get(), player);
+    }
+
+    // ── Лок руху й поза рук під час роботи (ТЗ 12–13) ───────────────────
+
+    /**
+     * Заморожує/розморожує РУХ гравця на час роботи з генератором.
+     *
+     * ── Навіщо це, якщо клієнт і так не пускає ──────────────────────
+     * Клієнтський міксин глушить ввід ({@code MixinKeyboardInputGeneratorWork}),
+     * але клієнт можна змінити, і тоді гравець "ремонтує" генератор,
+     * одночасно тікаючи від маньяка — тобто робота стає безкоштовною
+     * дією на бігу. Лок — справжній захист: він тримає позицію на
+     * сервері, а не лише ховає ввід.
+     *
+     * Серверний лок — той самий реєстр, що в капкана й оглушення.
+     * "Повернути все назад" робить {@code InteractionLockModule.unlock},
+     * викликаний із {@link #releaseWork} в кожному місці, де сесія
+     * закінчується.
+     */
+    private void setWorkLock(ServerPlayer player, boolean locked) {
+        if (locked) {
+            ManiacMod.lib().interactionLockModule()
+                .lock(player.getUUID(), LockType.MOVEMENT, WORK_LOCK_REASON);
+        } else {
+            ManiacMod.lib().interactionLockModule()
+                .unlock(player.getUUID(), LockType.MOVEMENT, WORK_LOCK_REASON);
+        }
+    }
+
+    /**
+     * Сесію закрито не через пакет клієнта (генератор завершився, гравець
+     * вибув, фаза скінчилась): знімаємо і рух, і позу рук.
+     */
+    private void releaseWork(MatchOrchestrator match, ServerPlayer player) {
+        setWorkLock(player, false);
+        if (match == null) return;
+        ModNetwork.toPlayers(match.onlinePlayers(), new GeneratorInteractionPacket(
+            player.getUUID(), GeneratorInteractionPacket.ACTION_NONE));
+    }
+
+    /**
+     * Одним рядком виставляє ПАРУ "заморожений рух + поза рук" за видом
+     * роботи. {@code ACTION_NONE} означає "не працює зараз": тодi й лок,
+     * і поза знімаються — пауза (відійшов, відвернувся) мусить виглядати
+     * як пауза, а не як робота на відстані.
+     */
+    private void markWorking(List<ServerPlayer> players, RepairSession session,
+                             ServerPlayer player, int action) {
+        setWorkLock(player, action != GeneratorInteractionPacket.ACTION_NONE);
+
+        // Пакет лише на ЗМІНІ виду роботи: поза ж не може змінюватись
+        // щотіка, а серія однакових значень — це зайвий трафік.
+        if (session.sentInteraction == action) return;
+        session.sentInteraction = action;
+        ModNetwork.toPlayers(players, new GeneratorInteractionPacket(player.getUUID(), action));
+    }
+
+    /**
+     * Скидає прапор "ліють зараз" для КОЖНОГО генератора матчу. Викликається
+     * перед проходом сесій, тож true лишається лише в тих, для кого
+     * {@link #tickFuel} справді відпрацював цього тіку.
+     */
+    private void resetFillingFlags() {
+        MatchOrchestrator match = matchSupplier.get();
+        if (match == null) return;
+        for (GeneratorPoi generator : match.generators()) {
+            generator.resetFillingTick();
         }
     }
 
@@ -307,6 +416,11 @@ public final class GeneratorModule implements PhaseListener {
             // генератор завершувався.
             if (!tickOne(player, entry.getValue(), players)) {
                 it.remove();
+                // Сесію закрито не через пакет клієнта (генератор зник або
+                // вже завершений, гравець більше не виживий) — лок руху й
+                // поза рук мусять піти з нею, інакше гравець лишався б
+                // замороженим до кінця матчу.
+                releaseWork(matchSupplier.get(), player);
             }
         }
 
@@ -367,11 +481,16 @@ public final class GeneratorModule implements PhaseListener {
         // Міні-гра заморожує внесок, і сама стежить за дистанцією та станом
         // гравця (tickMinigameTimeouts) — звичайні перевірки тут не потрібні.
         if (activeMinigames.containsKey(uuid)) {
+            // Міні-гра: гравець не ремонтує, він ГРАЄ, і руки в нього
+            // зайняті екраном, а не генератором. Знімаємо і лок, і позу
+            // (відкрите GUI саме по собі не дає ні йти, ні крутити камеру).
+            markWorking(players, session, player, GeneratorInteractionPacket.ACTION_NONE);
             return true;
         }
 
         if (!session.holding || !canWork(player, session.pos)) {
             pauseSession(player, session);
+            markWorking(players, session, player, GeneratorInteractionPacket.ACTION_NONE);
             return true;
         }
 
@@ -380,10 +499,12 @@ public final class GeneratorModule implements PhaseListener {
         // кого власної міні-гри немає — свій випадок закритий вище.
         if (ManiacConfigs.get(ConfigSchema.MINIGAME_BLOCKS_REPAIR) && minigameInProgressAt(session.pos)) {
             blockByMinigame(player, session);
+            markWorking(players, session, player, GeneratorInteractionPacket.ACTION_NONE);
             return true;
         }
 
         if (generator.stage() == GeneratorPoi.Stage.REPAIR) {
+            markWorking(players, session, player, GeneratorInteractionPacket.ACTION_REPAIR);
             generator.addRepairProgress(1);
             sendProgress(player, session, generator);
 
@@ -481,7 +602,7 @@ public final class GeneratorModule implements PhaseListener {
         if (session.blockedNoticeTicks > 0) return;
         session.blockedNoticeTicks = BLOCKED_NOTICE_INTERVAL_TICKS;
         ModNetwork.toPlayer(player, new ActionBarPacket(
-            ActionBarMessageType.COOLDOWN, "maniacmod.generator.minigame_busy"));
+                ActionBarMessageType.COOLDOWN, "maniacmod.generator.minigame_busy"));
     }
 
     /**
@@ -512,11 +633,12 @@ public final class GeneratorModule implements PhaseListener {
      * прогрес, а не зникає.
      */
     private void tickFuel(ServerPlayer player, RepairSession session, GeneratorPoi generator,
-                           List<ServerPlayer> players) {
+                          List<ServerPlayer> players) {
         ItemStack canister = canisterInHand(player);
         if (canister == null) {
             pauseSession(player, session);
             session.fuelTicks = 0;
+            markWorking(players, session, player, GeneratorInteractionPacket.ACTION_NONE);
             return;
         }
 
@@ -525,8 +647,20 @@ public final class GeneratorModule implements PhaseListener {
             // Порожня каністра — те саме, що відсутня: нічого лити.
             pauseSession(player, session);
             session.fuelTicks = 0;
+            markWorking(players, session, player, GeneratorInteractionPacket.ACTION_NONE);
             return;
         }
+
+        markWorking(players, session, player, GeneratorInteractionPacket.ACTION_REFUEL);
+
+        // БАГФІКС: цей тік — гравець реально тримає Shift+ПКМ ІЗ
+        // зарядженою каністрою на стадії FUEL. Це пряма правда про
+        // "залив триває зараз", незалежно від того, чи fuelGainForTick
+        // на ЦЬОМУ конкретному тіку дав 0 чи 1 (Бресенхем-розклад дає
+        // ненульовий приріст лише раз на кілька тіків) — саме тому
+        // GeneratorEntity.isFilling() більше НЕ вгадує це з приросту
+        // округленого stagePercent(), а читає прапор звідси.
+        generator.markFillingThisTick();
 
         int offered = Math.min(fuelGainForTick(session.fuelTicks++), charge);
         int before = generator.fuelPercent();
@@ -539,11 +673,9 @@ public final class GeneratorModule implements PhaseListener {
 
         sendProgress(player, session, generator);
 
-        if (accepted > 0) {
-            // Саме прийнятий бензин, а не факт утримання кнопки: у порожній
-            // каністрі або на вже повному баку звучати нічому.
-            sounds.fuelPoured(generator);
-        }
+        // Звук заливу більше не запускається звідси: GeneratorEntity.tick()
+        // сам помічає приріст stagePercent() (те саме значення, яке й так
+        // реплікується для GeneratorHintOverlay) через GeneratorFuelSoundscape.
 
         if (justCompleted) {
             sounds.completed(generator, levelOf(players));
@@ -576,6 +708,28 @@ public final class GeneratorModule implements PhaseListener {
         long after = (long) rate * (n + 1) / 20;
         long before = (long) rate * n / 20;
         return (int) (after - before);
+    }
+
+    /**
+     * БАГФІКС: найдовша можлива серія тіків підряд БЕЗ приросту між
+     * двома тіками, які {@link #fuelGainForTick} робить ненульовими —
+     * тобто реальний "розмір діри" в розкладі 20-тіків-на-секунду для
+     * поточного {@code fuelPercentPerSecond}. При дефолтному rate=4
+     * ненульовий тік трапляється раз на ~5 тіків (20/4), а старий
+     * жорсткий grace=3 у {@code GeneratorEntity.FILLING_GRACE_TICKS} і
+     * {@code sound.GeneratorFuelSoundscape.GRACE_TICKS} був КОРОТШИЙ за
+     * цю діру — тому "idle_fuel"/звук заливу вимикались і вмикались
+     * знову впродовж кожного природного проміжку між прийнятими
+     * тіками, хоча гравець весь час тримає каністру. Обидва місця
+     * тепер повинні брати grace звідси, а не власну константу — це
+     * єдине джерело істини про реальний темп розкладу.
+     */
+    public static int maxFuelTickGapTicks() {
+        int rate = ManiacConfigs.get(ConfigSchema.FUEL_PERCENT_PER_SECOND);
+        if (rate <= 0) return 20;
+        // Найдовша діра в Bresenham-розкладі rate подій на 20 тіків —
+        // це стеля 20/rate (наприклад rate=4 -> 5, rate=7 -> 3).
+        return (20 + rate - 1) / rate;
     }
 
     /**
@@ -663,8 +817,8 @@ public final class GeneratorModule implements PhaseListener {
         if (!ManiacConfigs.get(ConfigSchema.MINIGAME_BLOCKS_REPAIR)) return;
 
         ActionBarPacket packet = new ActionBarPacket(ActionBarMessageType.INFO,
-            "maniacmod.generator.minigame_started",
-            new String[] { player.getName().getString() });
+                "maniacmod.generator.minigame_started",
+                new String[] { player.getName().getString() });
 
         for (ServerPlayer other : matchSupplier.get().onlinePlayers()) {
             if (other.getUUID().equals(player.getUUID())) continue;
@@ -683,11 +837,11 @@ public final class GeneratorModule implements PhaseListener {
         long seed = rng.nextLong();
 
         TargetMinigameSpec spec = new TargetMinigameSpec(
-            seed, cursorSpeed, hitZoneWidth, targetPosition, hitsRequired);
+                seed, cursorSpeed, hitZoneWidth, targetPosition, hitsRequired);
         activeMinigames.put(player.getUUID(), new ActiveRepairMinigame(generator.pos(), spec));
 
         ModNetwork.toPlayer(player, new TargetMinigameOpenPacket(
-            generator.pos(), seed, cursorSpeed, hitZoneWidth, targetPosition, hitsRequired));
+                generator.pos(), seed, cursorSpeed, hitZoneWidth, targetPosition, hitsRequired));
     }
 
     private void startWireMinigame(ServerPlayer player, GeneratorPoi generator) {
@@ -698,7 +852,7 @@ public final class GeneratorModule implements PhaseListener {
         for (int i = 0; i < initial.length; i++) initial[i] = layout.initialRightSlotForLeft(i);
 
         ModNetwork.toPlayer(player, new WireMinigameOpenPacket(
-            generator.pos(), initial, ManiacConfigs.get(ConfigSchema.WIRE_MINIGAME_TICKS)));
+                generator.pos(), initial, ManiacConfigs.get(ConfigSchema.WIRE_MINIGAME_TICKS)));
     }
 
     /** Максимальна дистанція (у блоках) від генератора під час міні-гри — далі вважається втечею/провалом. */
@@ -723,7 +877,7 @@ public final class GeneratorModule implements PhaseListener {
 
             GeneratorPoi generator = findGenerator(minigame.generatorPos());
             boolean generatorGone = generator == null
-                || generator.stage() != GeneratorPoi.Stage.REPAIR;
+                    || generator.stage() != GeneratorPoi.Stage.REPAIR;
             SurvivorState state = matchSupplier.get().survivorStateOf(entry.getKey());
             boolean playerOut = state == null || state.isCrawlOnly() || state.isTerminal();
 
@@ -764,14 +918,14 @@ public final class GeneratorModule implements PhaseListener {
         // Позицію з пакета сервер НЕ приймає на віру — перевіряє її проти
         // власної траєкторії повзунка з допуском на затримку мережі.
         ActiveRepairMinigame.Result result = minigame.registerTargetClick(
-            cursorPosition, ManiacConfigs.get(ConfigSchema.TARGET_MINIGAME_LAG_TOLERANCE_MS));
+                cursorPosition, ManiacConfigs.get(ConfigSchema.TARGET_MINIGAME_LAG_TOLERANCE_MS));
         switch (result) {
             case SUCCESS -> {
                 activeMinigames.remove(player.getUUID());
                 succeedMinigame(player);
             }
             case HIT_PROGRESS -> ModNetwork.toPlayer(player,
-                RepairMinigameProgressPacket.attempt(minigame.targetHits()));
+                    RepairMinigameProgressPacket.attempt(minigame.targetHits()));
             case FAIL -> {
                 activeMinigames.remove(player.getUUID());
                 failMinigame(player, minigame);
@@ -823,7 +977,7 @@ public final class GeneratorModule implements PhaseListener {
                 succeedMinigame(player);
             }
             case WIRE_CONNECTED -> ModNetwork.toPlayer(player,
-                RepairMinigameProgressPacket.wireConnected(leftSlot, rightSlot));
+                    RepairMinigameProgressPacket.wireConnected(leftSlot, rightSlot));
             case FAIL -> {
                 activeMinigames.remove(player.getUUID());
                 failMinigame(player, minigame);
@@ -883,7 +1037,7 @@ public final class GeneratorModule implements PhaseListener {
 
         List<ServerPlayer> everyone = matchSupplier.get().onlinePlayers();
         ModNetwork.toPlayers(everyone, new GeneratorExplosionPacket(
-            generator.pos(), generator.explosionTicksLeft()));
+                generator.pos(), generator.explosionTicksLeft()));
 
         ServerLevel level = levelOf(everyone);
         if (level == null) return;
@@ -893,7 +1047,7 @@ public final class GeneratorModule implements PhaseListener {
         burst(everyone, level, ParticleTypes.LARGE_SMOKE, at, 20, 0.5, 0.05);
         burst(everyone, level, ParticleTypes.LAVA, at, 12, 0.5, 0.0);
         level.playSound(null, at.x, at.y, at.z, SoundEvents.GENERIC_EXPLODE,
-            SoundSource.BLOCKS, 4.0f, 0.8f);
+                SoundSource.BLOCKS, 4.0f, 0.8f);
     }
 
     /**
@@ -906,7 +1060,7 @@ public final class GeneratorModule implements PhaseListener {
         for (ServerPlayer player : players) {
             if (player.serverLevel() != level) continue;
             level.sendParticles(player, particle, true, at.x, at.y, at.z,
-                count, spread, spread, spread, speed);
+                    count, spread, spread, spread, speed);
         }
     }
 
@@ -963,10 +1117,10 @@ public final class GeneratorModule implements PhaseListener {
         List<GeneratorHighlightPacket.Entry> entries = new ArrayList<>();
         for (GeneratorPoi generator : matchSupplier.get().generators()) {
             entries.add(new GeneratorHighlightPacket.Entry(
-                generator.pos(), highlightStateOf(generator, busy.contains(generator.pos()))));
+                    generator.pos(), highlightStateOf(generator, busy.contains(generator.pos()))));
         }
         ModNetwork.toPlayer(player, new GeneratorHighlightPacket(
-            ManiacConfigs.get(ConfigSchema.HIGHLIGHT_DURATION_TICKS), entries));
+                ManiacConfigs.get(ConfigSchema.HIGHLIGHT_DURATION_TICKS), entries));
     }
 
     /**
@@ -1095,20 +1249,20 @@ public final class GeneratorModule implements PhaseListener {
         boolean repairStage = generator.stage() == GeneratorPoi.Stage.REPAIR;
         int fuelRequired = Math.max(1, ManiacConfigs.get(ConfigSchema.FUEL_REQUIRED_PERCENT));
         int stagePercent = repairStage
-            ? generator.repairPercent()
-            : Math.min(100, generator.fuelPercent() * 100 / fuelRequired);
+                ? generator.repairPercent()
+                : Math.min(100, generator.fuelPercent() * 100 / fuelRequired);
 
         int key = repairStage ? stagePercent : 1000 + generator.fuelPercent();
         if (key == session.lastSentKey) return;
         session.lastSentKey = key;
 
         ModNetwork.toPlayer(player, new GeneratorProgressPacket(
-            true,
-            repairStage ? 0 : 1,
-            stagePercent,
-            repairStage ? 0 : 1,   // стадій пройдено
-            2,                     // стадій усього: REPAIR, FUEL
-            generator.fuelPercent()));
+                true,
+                repairStage ? 0 : 1,
+                stagePercent,
+                repairStage ? 0 : 1,   // стадій пройдено
+                2,                     // стадій усього: REPAIR, FUEL
+                generator.fuelPercent()));
     }
 
     private void hideProgress(ServerPlayer player) {

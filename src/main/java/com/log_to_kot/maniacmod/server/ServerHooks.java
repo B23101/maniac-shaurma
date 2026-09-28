@@ -3,6 +3,7 @@ package com.log_to_kot.maniacmod.server;
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
+import com.log_to_kot.maniacmod.config.DarkZoneConfigs;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.PhaseSyncPacket;
@@ -69,6 +70,7 @@ public final class ServerHooks {
                 MatchOrchestrator current = ManiacMod.match();
                 if (current != null) current.reloadConfiguredMap();
             }
+            DarkZoneConfigs.tickWatcher();
         }
 
         MatchOrchestrator match = ManiacMod.match();
@@ -223,7 +225,9 @@ public final class ServerHooks {
         ModNetwork.toPlayer(player, match.roleSyncFor(player));
         ModNetwork.toPlayer(player, new com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket(
             com.log_to_kot.maniacmod.config.ManiacConfigs.get(
-                com.log_to_kot.maniacmod.config.ConfigSchema.GROUND_ITEM_SPARKLE_ENABLED)));
+                com.log_to_kot.maniacmod.config.ConfigSchema.GROUND_ITEM_SPARKLE_ENABLED),
+            com.log_to_kot.maniacmod.config.ManiacConfigs.get(
+                com.log_to_kot.maniacmod.config.ConfigSchema.GROUND_ITEM_PICKUP_RANGE)));
         // Кнопки каналів у чаті залежать від ролі/фази — надсилаємо одразу,
         // щоб гравець, що зайшов посеред матчу, не чекав наступного переходу.
         ChatModule.syncChannels(player);

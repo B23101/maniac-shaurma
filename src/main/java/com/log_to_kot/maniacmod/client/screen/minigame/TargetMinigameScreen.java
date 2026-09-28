@@ -76,12 +76,35 @@ public final class TargetMinigameScreen extends Screen {
     private static final int FAIL_BORDER = 0xFFB0242F;
     private static final int FAIL_BAR_BG = 0xFF2A0C0E;
 
+    /** Скільки мс триває спалах-фідбек влучання/промаху. */
+    private static final long FLASH_MS = 320;
+
+    /** Відтінки фідбеку влучання (ARGB). */
+    private static final int HIT_ZONE = 0xFF7FD68D;
+    private static final int HIT_TEXT = 0xFFA9F0B4;
+    /** Відтінки фідбеку промаху (ARGB). Збігаються з провальними — це той самий провал по суті. */
+    private static final int MISS_ZONE = 0xFFB0242F;
+    private static final int MISS_TEXT = 0xFFFF7A7A;
+
     private final long seed;
     private final double cursorSpeed;
     private final double hitZoneWidth;
-    private final double targetPosition;
+    /**
+     * Позиція цілі (0.0-1.0). НЕ final: у капкані ціль ПЕРЕМІЩУЄТЬСЯ після
+     * КОЖНОЇ спроби (ТЗ 1.2) — сервер присилає нову позицію у
+     * {@code TrapEscapeAttemptPacket}, і {@link #onTrapAttempt} її тут
+     * підставляє. У міні-грі генератора ціль нерухома, тож там поле
+     * ніколи не змінюється.
+     */
+    private double targetPosition;
     private final int hitsRequired;
     private final long openedAtMillis;
+
+    /** Коли (мс) закінчується спалах-фідбек спроби; 0 — немає активного. */
+    private long flashUntilMillis = 0;
+
+    /** true — спалах показує ПОПАДАННЯ; false — промах. Читається лише поки {@link #flashUntilMillis} не минув. */
+    private boolean flashWasHit;
 
     private int hits = 0;
     private boolean finished = false;
@@ -152,6 +175,42 @@ public final class TargetMinigameScreen extends Screen {
     @Override
     public void onClose() {
         // Навмисно порожньо — див. клас-докстрінг "Чому не закривається по ESC".
+    }
+
+    /**
+     * Викликається {@code ClientPacketHandler} після
+     * {@code TrapEscapeAttemptPacket} — результат ОДНІСЇ спроби в
+     * капкані разом із НОВОЮ позицією цілі.
+     *
+     * <p>Це і є {"візуальний та звуковий feedback" із ТЗ 1.2: спалах
+     * зони/тексту (зелений на попадання, червоний на промах) + окремий
+     * звук, а також перенесення нерухомої цілі в нове місце. На відміну
+     * від {@link #onResult}, це НЕ кінець гри — гра триває, лічильник
+     * просто оновлюється.</p>
+     *
+     * <p>Годинник повзунка НЕ скидається: сервер звіряє позицію від
+     * моменту відкриття екрана, і зсув розійшовся б із ним.</p>
+     */
+    public void onTrapAttempt(int hitsSoFar, boolean hit, double newTargetPosition) {
+        this.hits = hitsSoFar;
+        this.targetPosition = newTargetPosition;
+        // Повзунок знову їде — спроба завершена, наступна з чистого аркуша.
+        this.frozenCursor = -1;
+        this.flashWasHit = hit;
+        this.flashUntilMillis = System.currentTimeMillis() + FLASH_MS;
+        playFeedbackSound(hit);
+    }
+
+    /** Звук попадання/промаху — клієнтський, лише для цього гравця. */
+    private void playFeedbackSound(boolean hit) {
+        net.minecraftforge.registries.RegistryObject<net.minecraft.sounds.SoundEvent> event =
+            hit ? com.log_to_kot.maniacmod.registry.ModSounds.MINIGAME_HIT
+                : com.log_to_kot.maniacmod.registry.ModSounds.MINIGAME_MISS;
+        // Подія може бути не зареєстрована (напр. гравці з різними
+        // версіями мода) — тоді просто без звуку, а не краш.
+        if (!event.isPresent()) return;
+        Minecraft.getInstance().getSoundManager().play(
+            net.minecraft.client.resources.sounds.SimpleSoundInstance.forUI(event.get(), 1.0f, 1.0f));
     }
 
     /** Викликається ClientPacketHandler після RepairMinigameProgressPacket.targetHit(...). */
@@ -279,14 +338,33 @@ public final class TargetMinigameScreen extends Screen {
         // |cursor − target| ≤ hitZoneWidth/2). Раніше це була тонка риска
         // з напівпрозорим «підказковим» ореолом навколо, і гравець
         // цілився в риску, хоча влучити можна було й поруч.
-        int targetCenterX = barX + (int) Math.round(targetPosition * BAR_WIDTH);
+        int targetCenterX = barX + (int) Math.round(this.targetPosition * BAR_WIDTH);
         int zoneHalf = Math.max(1, (int) Math.round(hitZoneWidth / 2.0 * BAR_WIDTH));
         int zoneLeft = Math.max(barX + 2, targetCenterX - zoneHalf);
         int zoneRight = Math.min(barX + BAR_WIDTH - 2, targetCenterX + zoneHalf);
-        int zoneFill = failed ? 0xFF6A1A20 : 0xFF3F7F4A;
-        int zoneEdge = failed ? FAIL_BORDER : 0xFF7FD68D;
+        // Спалах-фідбек спроби (ТЗ 1.2): зелений на попадання, червоний на
+        // промах. Живе лише {@link #FLASH_MS}, потім зона повертається до
+        // звичайного вигляду. Стан "провал" (failed) має приоритет над
+        // спалахом: там гра вже скінчилась.
+        boolean flash = flashUntilMillis != 0 && System.currentTimeMillis() < flashUntilMillis;
+        if (flashUntilMillis != 0 && !flash) flashUntilMillis = 0;
+
+        int zoneFill = failed ? 0xFF6A1A20
+            : (flash ? (flashWasHit ? 0xFF2C5F38 : 0xFF5F1A22) : 0xFF3F7F4A);
+        int zoneEdge = failed ? FAIL_BORDER
+            : (flash ? (flashWasHit ? HIT_ZONE : MISS_ZONE) : 0xFF7FD68D);
         graphics.fill(zoneLeft, barY + 2, zoneRight, barY + BAR_HEIGHT - 2, zoneFill);
         ManiacUiTheme.border1px(graphics, zoneLeft, barY + 2, zoneRight - zoneLeft, BAR_HEIGHT - 4, zoneEdge);
+
+        // Текстова частина фідбеку — другим каналом ("окрема анімація"),
+        // щоб попадання/промах читались навіть тим, хто не розрізняє
+        // відтінки кольору.
+        if (flash) {
+            String label = Component.translatable(flashWasHit
+                ? "maniacmod.minigame.trap.hit" : "maniacmod.minigame.trap.miss").getString();
+            graphics.drawCenteredString(font, label, panelX + PANEL_WIDTH / 2,
+                barY + BAR_HEIGHT + 6, flashWasHit ? HIT_TEXT : MISS_TEXT);
+        }
 
         // ПАЛКА — тонка вертикальна риска, що виступає за смугу.
         int stickCenterX = barX + (int) Math.round(cursorPosition() * BAR_WIDTH);

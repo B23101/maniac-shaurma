@@ -53,6 +53,15 @@ public final class ClientInputHandler {
     private static boolean repairHeld = false;
 
     /**
+     * Сутність генератора, який зараз тримає утримання ПОТОЧНИЙ гравець
+     * — потрібна {@code GeneratorFuelClientSoundHandler}, щоб знати,
+     * ЧИЙ саме генератор озвучувати заливом, коли утримання на стадії
+     * FUEL (на відміну від гулу роботи, це не "будь-який генератор
+     * поруч", а конкретно "той, який я особисто заливаю зараз").
+     */
+    private static GeneratorEntity heldGenerator = null;
+
+    /**
      * Чи пробіл був затиснутий на ПОПЕРЕДНЬОМУ тіку — для виявлення
      * фронту натискання (відпущено → натиснуто). Без цього
      * {@code isDown()} лишався б істинним увесь час утримання, і
@@ -84,6 +93,7 @@ public final class ClientInputHandler {
      */
     static void forceReleaseRepairHold() {
         repairHeld = false;
+        heldGenerator = null;
     }
 
     /**
@@ -95,6 +105,16 @@ public final class ClientInputHandler {
      */
     public static boolean isRepairHeld() {
         return repairHeld;
+    }
+
+    /**
+     * Генератор, який зараз тримає утримання ЦЕЙ гравець (Shift+ПКМ), або
+     * {@code null}, якщо утримання не активне. Читається
+     * {@code GeneratorFuelClientSoundHandler} — див. докстрінг поля
+     * {@link #heldGenerator}.
+     */
+    public static GeneratorEntity heldGenerator() {
+        return heldGenerator;
     }
 
     @SubscribeEvent
@@ -125,6 +145,7 @@ public final class ClientInputHandler {
         handleStandUp();
         handleRescueHold();
         handleGeneratorRepair();
+        handleTrapEscapeStart();
     }
 
     /** Клавіші 1, 2, 3 — здібності маньяка. */
@@ -325,6 +346,7 @@ public final class ClientInputHandler {
         if (!ClientMatchState.allows(PhaseRule.GENERATOR_REPAIR) || !ManiacKeybinds.isRepairHeld()) {
             if (repairHeld) {
                 repairHeld = false;
+                heldGenerator = null;
                 ModNetwork.toServer(new GeneratorRepairHoldPacket(false, BlockPos.ZERO));
             }
             return;
@@ -338,6 +360,25 @@ public final class ClientInputHandler {
         if (!(entityHit.getEntity() instanceof GeneratorEntity generator)) return;
 
         repairHeld = true;
+        heldGenerator = generator;
         ModNetwork.toServer(new GeneratorRepairHoldPacket(true, generator.generatorPos()));
+    }
+
+    /**
+     * F, поки гравець у капкані бачить підказку "Натисни F, щоб
+     * вибратися" ({@link com.log_to_kot.maniacmod.client.overlay.hint.TrapEscapeHintOverlay}).
+     *
+     * Шле пакет на КОЖНЕ натискання (не на утримання) — той самий
+     * принцип, що {@link #handleStandUp()}. Сервер сам ігнорує пакет,
+     * якщо в гравця немає активної підказки (не в капкані, вже
+     * натиснув раніше, чи час на натискання вийшов) — тут лише локальна
+     * умова "не варто навіть слати", щоб не засмічувати мережу явно
+     * марними пакетами, поки гравець НЕ в капкані.
+     */
+    private static void handleTrapEscapeStart() {
+        if (!ClientMatchState.isSurvivor() || !ClientMatchState.isTrapEscapePrompt()) return;
+        while (ManiacKeybinds.TRAP_ESCAPE.consumeClick()) {
+            ModNetwork.toServer(new com.log_to_kot.maniacmod.net.c2s.intent.TrapEscapeStartPacket());
+        }
     }
 }

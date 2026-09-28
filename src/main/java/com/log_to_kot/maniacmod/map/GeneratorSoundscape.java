@@ -3,154 +3,87 @@ package com.log_to_kot.maniacmod.map;
 import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.registry.ModSounds;
-import com.log_to_kot.maniacmod.sound.EntityAnchoredLoopSoundscape;
-import com.log_to_kot.maniacmod.sound.OggSoundLength;
-import net.minecraft.core.BlockPos;
+import com.log_to_kot.maniacmod.sound.WorldSound;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
-
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 /**
- * Звукове життя генераторів: запуск, гул роботи й залив бензину —
- * підклас {@link EntityAnchoredLoopSoundscape}, який лише називає свої
- * звуки, радіуси й уміє знайти {@link GeneratorEntity} за позицією
- * генератора. Увесь розклад ("коли програти", "коли ретригернути",
- * "коли зупинити луп") — у батьківському класі, спільному з будь-яким
- * іншим механізмом мода.
+ * Звукове життя генераторів: тут лишається лише одноразовий "запуск".
+ * Залив бензину більше НЕ йде звідси — він живе як власний серверний
+ * розклад прямо в {@link GeneratorEntity#tick()}
+ * ({@code sound.GeneratorFuelSoundscape}), за принципом
+ * {@code RadioBlockEntity.resendSoundToClient} із Let's Do: Beachparty
+ * — сервер щотік стежить, кому саме звук уже підтверджено, і
+ * персонально ресинкає його кожному новому глядачеві, а не шле один
+ * пакет одразу всім на момент активації.
  *
- * ── Три звуки ────────────────────────────────────────────────────────
- * <pre>
- *   подія             коли                             радіус
- *   ───────────────   ──────────────────────────────   ──────
- *   generator_start   генератор щойно завершено         10
- *   generator_loop    одразу після start і до кінця гри  10
- *   fuel_fill         поки в генератор ллється бензин    5
- * </pre>
+ * Гул роботи (generator_loop) тепер узагалі не серверний: щоб мати
+ * СПРАВЖНІЙ плавний fade гучності і на наближення, і на віддалення
+ * (не лише в один бік), він переїхав на клієнт —
+ * {@code client.GeneratorLoopClientSoundHandler} — де рушій може
+ * плавно міняти гучність уже граючого звуку щокадру, замість
+ * пересилки нового старт-пакета щоразу (пакет — завжди рестарт семпла
+ * з нуля, тому мережевий фейд і плавно наростав через збіг з природним
+ * повтором лупа, і сіпався на спаданні). Детальніше —
+ * {@code client.GeneratorLoopClientSound}.
  *
- * ── Чому звук лунає ВІД СУТНОСТІ, а не від точки карти ────────────────
- * Раніше джерелом координат був {@code GeneratorPoi.pos()} — статичний
- * запис прогресу, який ніколи не рухається й не має нічого спільного з
- * видимим "тілом" генератора в світі. Тепер кожне програвання бере
- * позицію в АКТУАЛЬНОЇ {@link GeneratorEntity} (через {@link
- * #findEntity}) — так само, як зброя чи снаряд у нормальному моді грає
- * звук зі своєї сутності, а не з координат, де вона колись заспавнилась.
- * Різниці на практиці майже немає (сутність стоїть на місці), але це
- * правильне джерело істини: якщо колись генератор переспавнять в іншій
- * точці в межах матчу, звук про це одразу дізнається, а не грає з
- * координат мертвої сутності.
+ * ── БАГФІКС історії: чому "один пакет всім при активації" не годився ──
+ * Перша версія слала {@code generator_loop} одним {@link WorldSound#playInRadius}
+ * у момент активації — це чув лише той, хто ВЖЕ був у радіусі САМЕ ТІЄЇ
+ * миті; хтось, хто підійшов пізніше, поки генератор давно активний,
+ * жодного пакета не отримував і чув тишу. Друга версія (клієнтський
+ * {@code AbstractTickableSoundInstance}) полагодила плавне
+ * загасання й миттєвий стоп, але успадкувала ту саму хворобу: клієнт
+ * заводив {@code SoundInstance} лише в мить переходу
+ * {@code isActive()} false→true, а не для "я зараз бачу вже активний
+ * генератор". {@code GeneratorLoopSoundscape}/{@code GeneratorFuelSoundscape}
+ * прибирають цю прив'язку до моменту зовсім: щотік перевіряють усіх
+ * гравців у радіусі й шлють старт-пакет саме тим, у кого його ще
+ * нема — незалежно від того, коли конкретно генератор став активним.
  *
- * ── Чому рахунок саме тут, а не в {@code GeneratorModule} ────────────
- * Модуль генераторів — про ремонт, бензин і стадії; розклад озвучення
- * не має з ними нічого спільного й читається окремо. Зв'язок між ними —
- * три виклики ({@link #completed}, {@link #fuelPoured}, {@link #tick}),
- * по одному на подію, яку модуль і так знає.
+ * ── {@code generator_start} лишається тут, на сервері ─────────────────
+ * Це одноразова подія за задумом ("запуск щойно стався") — "доспівати
+ * до кінця" тут не баг, а очікувана поведінка, тому лишається на
+ * старому надійному {@link WorldSound#playInRadius}: сервер знає, коли
+ * подія сталась, і всім у радіусі чутно однаковий момент запуску.
  */
-public final class GeneratorSoundscape extends EntityAnchoredLoopSoundscape<GeneratorEntity> {
+public final class GeneratorSoundscape {
 
-    /** Радіус чутності працюючого генератора (10 блоків). */
-    public static final double RUNNING_RADIUS_BLOCKS = 10.0;
-
-    /** Радіус чутності заливу бензину (5 блоків). */
-    public static final double FUEL_RADIUS_BLOCKS = 5.0;
-
-    private static final String START_FILE = "generator_start";
-    private static final String LOOP_FILE = "generator_loop";
-    private static final String FUEL_FILE = "fuel_fill";
+    /** Радіус чутності одноразового звуку запуску (той самий, що раніше мав гул роботи). */
+    public static final double START_RADIUS_BLOCKS = 10.0;
 
     /**
-     * Половина сторони боксу пошуку сутності навколо {@code GeneratorPoi.pos()}
-     * (див. {@link #findByBox}). Генератор — статичний, не рухається, тож
-     * досить трохи ширше за його власний хітбокс (1.2×1.2), щоб пережити
-     * дробові зсуви позиції спавну.
+     * Половина сторони боксу пошуку сутності навколо {@code GeneratorPoi.pos()}.
+     * Генератор — статичний, не рухається, тож досить трохи ширше за
+     * його власний хітбокс (1.2×1.2), щоб пережити дробові зсуви позиції
+     * спавну.
      */
     private static final double ENTITY_SEARCH_PADDING = 1.5;
 
-    private final int startTicks;
-    private final int loopTicks;
-    private final int fuelTicks;
-
-    public GeneratorSoundscape() {
-        this.startTicks = OggSoundLength.ticksOf(START_FILE);
-        this.loopTicks = OggSoundLength.ticksOf(LOOP_FILE);
-        this.fuelTicks = OggSoundLength.ticksOf(FUEL_FILE);
-    }
-
-    // ── Події ────────────────────────────────────────────────────────────
-
     /**
-     * Генератор щойно завершено (обидві стадії): старт-звук зараз, гул —
-     * одразу після нього. Грає тут-таки, а не з черги в {@link #tick}:
-     * «запустився» мусить звучати тієї ж миті, коли гравець долив
-     * останню каністру, інакше звук відстає від події.
+     * Генератор щойно завершено (обидві стадії): одноразовий звук
+     * запуску з позиції сутності. Гул роботи, що йде ЗА ним, більше не
+     * запускає сервер — клієнт сам заводить його, щойно бачить
+     * {@link GeneratorEntity#isActive()} true (виставляється щотік у
+     * {@code GeneratorEntity.syncFromPoi()} з того самого
+     * {@code GeneratorPoi.isCompleted()}, що й раніше рухало цей клас).
      */
     public void completed(GeneratorPoi generator, ServerLevel level) {
         if (level == null) return;
-        GeneratorEntity entity = findEntity(level, generator.pos());
-        started(generator.pos(), entity, level, startTicks, loopTicks);
+        GeneratorEntity entity = findEntity(level, generator);
+        if (entity == null) return;
+        Vec3 origin = entity.position().add(0, entity.getBbHeight() * 0.5, 0);
+        WorldSound.playInRadius(level, ModSounds.GENERATOR_START.get(), SoundSource.BLOCKS,
+            origin, START_RADIUS_BLOCKS, 1.0f, 1.0f);
     }
 
-    /**
-     * У цей тік генератор реально прийняв бензин. Позначка, а не звук:
-     * залив іде тік за тіком, і програвати звук на КОЖНОМУ з них не
-     * можна — лунав би тріск із накладених копій. Звук ставить
-     * {@link #tick} за розкладом.
-     */
-    public void fuelPoured(GeneratorPoi generator) {
-        fed(generator.pos());
-    }
-
-    /** Раз на тік, у будь-якій фазі: рухає розклади й прибирає зайве. */
-    public void tick(List<GeneratorPoi> generators, ServerLevel level) {
-        Set<BlockPos> alive = new HashSet<>();
-        for (GeneratorPoi generator : generators) {
-            if (generator.isCompleted()) alive.add(generator.pos());
+    private static GeneratorEntity findEntity(ServerLevel level, GeneratorPoi generator) {
+        AABB box = new AABB(generator.pos()).inflate(ENTITY_SEARCH_PADDING);
+        for (GeneratorEntity entity : level.getEntitiesOfClass(GeneratorEntity.class, box)) {
+            return entity;
         }
-        tick(alive, level);
-    }
-
-    // ── EntityAnchoredLoopSoundscape ────────────────────────────────────
-
-    @Override
-    protected SoundEvent startSound() {
-        return ModSounds.GENERATOR_START.get();
-    }
-
-    @Override
-    protected SoundEvent runningLoopSound() {
-        return ModSounds.GENERATOR_LOOP.get();
-    }
-
-    @Override
-    protected SoundEvent sustainSound() {
-        return ModSounds.FUEL_FILL.get();
-    }
-
-    @Override
-    protected double runningRadiusBlocks() {
-        return RUNNING_RADIUS_BLOCKS;
-    }
-
-    @Override
-    protected double sustainRadiusBlocks() {
-        return FUEL_RADIUS_BLOCKS;
-    }
-
-    @Override
-    protected SoundSource soundSource() {
-        return SoundSource.BLOCKS;
-    }
-
-    @Override
-    protected int sustainLengthTicks() {
-        return fuelTicks;
-    }
-
-    @Override
-    protected GeneratorEntity findEntity(ServerLevel level, BlockPos pos) {
-        return findByBox(level, pos, GeneratorEntity.class, ENTITY_SEARCH_PADDING);
+        return null;
     }
 }

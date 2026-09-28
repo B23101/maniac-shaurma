@@ -13,9 +13,9 @@ import software.bernie.geckolib.model.GeoModel;
  * ── Файли асетів ─────────────────────────────────────────────────────
  * {@code assets/maniacmod/geo/entity/bear_trap.geo.json}          — модель
  * {@code assets/maniacmod/animations/entity/bear_trap.animation.json} —
- *     дві loop-анімації: {@code idle_open} (розкритий, чекає) і
- *     {@code idle_closed} (захлопнутий; його перші кадри — момент
- *     клацання, далі нерухома поза)
+ *     {@code idle_open} (розкритий, чекає), {@code snap} (ОДНОРАЗОВА
+ *     анімація захлопування, ТЗ 1.1) і {@code catch_loop} (held-поза,
+ *     капкан тримає жертву)
  * {@code assets/maniacmod/textures/entity/bear_trap.png}          — текстура
  *
  * ── Поточний стан: тимчасова заглушка ────────────────────────────────

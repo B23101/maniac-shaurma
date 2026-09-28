@@ -1,0 +1,11 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "idle": {
+      "loop": true,
+      "animation_length": 1.0,
+      "comment": "Заглушка: кріплення електричного дроту спокійно стоїть. Ім'я 'idle' лишити — його читає ElectricWireMountEntity.registerControllers. Модель і текстура замінюються художником (ТЗ 10).",
+      "bones": {}
+    }
+  }
+}

@@ -62,15 +62,25 @@ public class BearTrapEntity extends Entity implements GeoEntity {
     private static final String CONTROLLER_NAME = "bearTrapController";
 
     /**
-     * Дві анімації, обидві loop — той самий патерн, що GeneratorEntity
-     * (idle/active). Момент «клацання» вбудований у початок
-     * {@code idle_closed} самим художником (перші кадри — захлоп, далі
-     * нерухома поза): так контролер лишається з одним setAndContinue і
-     * не потребує стану «вже програв перехід», який на клієнті
-     * розсинхронізувався б при перезаході в зону видимості.
+     * Дві гілки стану (розкритий / захлопнув).
+     *
+     * <p>Розкритий — звичайний loop {@code idle_open}.</p>
+     *
+     * <p>Захлопнутий — ЗА ТЗ 1.1 має ОКРЕМУ анімацію моменту захлопування
+     * ({@code snap}, one-shot: щелепи змикаються за чверть секунди), після
+     * якої капкан лишається в held-позі {@code catch_loop}. Раніше
+     * клацання було вбудоване в САМ ПОЧАТОК одного loop-кліпу
+     * {@code idle_closed}, і окремої анімації спрацювання не існувало.
+     * {@code thenPlay(...).thenLoop(...)} дає саме цю послідовність: один
+     * прогін {@code snap}, потім цикл {@code catch_loop}. Оскільки
+     * {@code setAndContinue} перезапускає кліп лише коли значення, що
+     * повертається, ЗМІНИЛОСЯ, {@code snap} програється рівно один раз у
+     * момент переходу {@code SNAPPED=false→true} — а не при кожному
+     * перезаході в зону видимості.</p>
      */
     private static final RawAnimation ANIM_OPEN   = RawAnimation.begin().thenLoop("idle_open");
-    private static final RawAnimation ANIM_CLOSED = RawAnimation.begin().thenLoop("idle_closed");
+    private static final RawAnimation ANIM_SNAPPED =
+        RawAnimation.begin().thenPlay("snap").thenLoop("catch_loop");
 
     private static final String OWNER_TAG = "TrapOwner";
 
@@ -195,7 +205,7 @@ public class BearTrapEntity extends Entity implements GeoEntity {
     @Override
     public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
         controllers.add(new AnimationController<>(this, CONTROLLER_NAME, 0,
-            state -> state.setAndContinue(isSnapped() ? ANIM_CLOSED : ANIM_OPEN)));
+            state -> state.setAndContinue(isSnapped() ? ANIM_SNAPPED : ANIM_OPEN)));
     }
 
     @Override

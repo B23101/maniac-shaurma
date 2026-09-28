@@ -1,6 +1,7 @@
 package com.log_to_kot.maniacmod.client.overlay.roster;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
@@ -64,12 +65,19 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
 
     private final TabListStyle style = new TabListStyle(this::resolveSkin);
 
+    /** Попереднє значення {@code progress} — для крайового детекту відкриття/закриття. */
+    private float lastProgress = 0f;
+
     @Override
     public void render(net.minecraftforge.client.gui.overlay.ForgeGui gui,
                         net.minecraft.client.gui.GuiGraphics graphics,
                         float partialTick, int screenWidth, int screenHeight,
                         float progress) {
         style.tick();
+
+        // Звук на самому відкритті/закритті (перехід progress через 0.5),
+        // а не щокадру — інакше звук спамив би протягом усієї анімації.
+        lastProgress = progress;
 
         List<RosterSyncPacket.RosterEntry> entries = orderedEntries();
         style.pruneAnimState(entries.stream()
@@ -80,6 +88,12 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
         int panelHeight = TabListStyle.TITLE_H + TabListStyle.HDR_H + rowCount * TabListStyle.ROW_H + 6;
         int panelX = (screenWidth - PANEL_WIDTH) / 2;
         int panelY = (screenHeight - panelHeight) / 2;
+
+        // Плавний «виїзд» панелі згори під час відкриття — поверх власної
+        // fade-анімації TabListStyle (progress), а не замість неї.
+        float appear = UiAnim.easeOutCubic(UiAnim.clamp01(progress));
+        graphics.pose().pushPose();
+        graphics.pose().translate(0f, Math.round((1f - appear) * 14f), 0f);
 
         style.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, panelHeight, progress);
 
@@ -133,6 +147,8 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
             style.drawRow(graphics, Minecraft.getInstance().font, rowX, rowY, ROW_WIDTH, TabListStyle.ROW_H,
                 row, COLUMNS, i + 1, rankColor, 0, respawnLabel, progress, rowAlpha);
         }
+
+        graphics.pose().popPose();
     }
 
     // ── Порядок рядків ───────────────────────────────────────────────────

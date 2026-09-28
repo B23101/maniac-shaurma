@@ -128,6 +128,11 @@ public final class TrapChooseScreen extends Screen {
     /** Пакет із запитом на вибір вже надіслано — щоб не продублювати з кількох кадрів поспіль. */
     private boolean confirmPacketSent = false;
 
+    /** Звук відкриття грає рівно раз за життя екрана. */
+    private boolean openSoundPlayed = false;
+    /** Остання картка під курсором — щоб звук-наведення не спамив щокадру. */
+    private int lastHoveredIndex = -1;
+
     public TrapChooseScreen(List<String> trapIds, int limit) {
         super(Component.translatable("maniacmod.trapchoose.title"));
         this.trapIds = List.copyOf(trapIds);
@@ -203,6 +208,10 @@ public final class TrapChooseScreen extends Screen {
         int panelH = panelHeight();
         long now = Util.getMillis();
 
+        if (!openSoundPlayed) {
+            openSoundPlayed = true;
+        }
+
         maybeFinishConfirm(now);
 
         ManiacUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, panelH, true);
@@ -224,11 +233,19 @@ public final class TrapChooseScreen extends Screen {
             }
         }
 
+        int hoveredIndex = -1;
         String hoveredName = null;
         for (int i = 0; i < trapIds.size(); i++) {
             String trapId = trapIds.get(i);
             boolean hovered = renderCard(graphics, mouseX, mouseY, trapId, cardBounds.get(i), i, now);
-            if (hovered) hoveredName = Component.translatable("maniacmod.trap.name." + trapId).getString();
+            if (hovered) {
+                hoveredName = Component.translatable("maniacmod.trap.name." + trapId).getString();
+                hoveredIndex = i;
+            }
+        }
+
+        if (hoveredIndex != lastHoveredIndex) {
+            lastHoveredIndex = hoveredIndex;
         }
 
         // Наведено на картку -> показуємо її назву. Інакше, поки нічого не

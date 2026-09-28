@@ -1,10 +1,10 @@
 {
   "format_version": "1.8.0",
   "animations": {
-    "animation.test_maniac.idle": {
+    "idle": {
       "loop": true,
       "animation_length": 2.0,
-      "comment": "Спокій. Легке 'дихання' торса й голови — модель жива, але не рухається з місця. Ім'я мусить бути animation.<id>.<коротке ім'я з ManiacAnimationSet>, бо GeckoLib сам додає префікс.",
+      "comment": "Спокій. Легке 'дихання' торса й голови — модель жива, але не рухається з місця. Ім'я мусить ТОЧНО збігатись із коротким іменем з ManiacAnimationSet (idle/walk/...): GeckoLib шукає анімацію за ключем як він є в цьому файлі, без додавання будь-якого префіксу.",
       "bones": {
         "body": {
           "position": {
@@ -23,7 +23,7 @@
       }
     },
 
-    "animation.test_maniac.walk": {
+    "walk": {
       "loop": true,
       "animation_length": 1.0,
       "comment": "Ходьба. Ноги/руки в протифазі; період 1.0с — швидкість кроку задає сама анімація, а рух гравця приходить зі швидкості сутності, тому не синхронізуємо їх жорстко (перехід 3 тіки згладжує різницю).",
@@ -66,7 +66,7 @@
       }
     },
 
-    "animation.test_maniac.run": {
+    "run": {
       "loop": true,
       "animation_length": 0.6,
       "comment": "Біг (у маньяка це підвищена ходьба). Той самий малюнок, що walk, але розмах більший і корпус нахилений уперед — читається як 'тисне'.",
@@ -109,7 +109,7 @@
       }
     },
 
-    "animation.test_maniac.jump": {
+    "jump": {
       "loop": true,
       "animation_length": 0.5,
       "comment": "У повітрі. Ноги підтягнуті, руки розведені — читається як стрибок і не конфліктує з walk/run при переході.",
@@ -141,7 +141,7 @@
       }
     },
 
-    "animation.test_maniac.sneak": {
+    "sneak": {
       "loop": true,
       "animation_length": 2.0,
       "comment": "Присідання на місці: корпус опускається (position y -7px) і нахиляється вперед, ноги згинаються.",
@@ -179,7 +179,7 @@
       }
     },
 
-    "animation.test_maniac.sneak_walk": {
+    "sneak_walk": {
       "loop": true,
       "animation_length": 1.2,
       "comment": "Переміщення присідаючи (закладання пастки). База — sneak, зверху доданий крок ніг.",
@@ -231,7 +231,7 @@
       }
     },
 
-    "animation.test_maniac.attack": {
+    "attack": {
       "loop": false,
       "animation_length": 0.5,
       "comment": "Одноразовий замах. Грається, поки діє латч удару в ManiacAnimatable (ATTACK_TICKS ≈ 8 тіків), потім контролер сам повертає стан ходьби/стояння — тому 'loop': false і жодного прапорця 'анімація скінчилась' не потрібно.",
@@ -259,7 +259,7 @@
       }
     },
 
-    "animation.test_maniac.interact": {
+    "interact": {
       "loop": false,
       "animation_length": 0.6,
       "comment": "Взаємодія: грається, поки гравець використовує предмет (isUsingItem) — так виглядає закладання пастки. Обидві руки йдуть уперед і трохи вниз.",

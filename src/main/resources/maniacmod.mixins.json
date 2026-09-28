@@ -5,7 +5,8 @@
   "minVersion": "0.8",
   "refmap": "maniacmod.refmap.json",
   "mixins": [
-    "MixinPlayerDownedPose"
+    "MixinPlayerDownedPose",
+    "MixinSwapOffhandServer"
   ],
   "client": [
     "ManiacAttackGuardMixin",
@@ -13,10 +14,17 @@
     "MixinKeyboardInputDownedMovement",
     "MixinKeyboardInputTrapped",
     "MixinKeyboardInputManiacStunned",
+    "MixinKeyboardInputGeneratorWork",
     "MixinMouseHandlerManiacStunned",
     "MixinEntityTurnManiacStunned",
     "GeneratorRepairSwingGuardMixin",
-    "ManiacSprintGuardMixin"
+    "ManiacSprintGuardMixin",
+    "MixinHoldFlashlightPose",
+    "MixinFlashlightHoldUpThirdPerson",
+    "MixinDownedPoseThirdPerson",
+    "MixinGeneratorWorkThirdPerson",
+    "MixinPlayerRendererDownedUpright",
+    "MixinSwapOffhandClient"
   ],
   "server": [],
   "injectors": {

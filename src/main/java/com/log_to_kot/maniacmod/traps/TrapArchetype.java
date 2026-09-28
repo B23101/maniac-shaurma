@@ -40,7 +40,12 @@ public abstract class TrapArchetype {
     public enum PlacementShape {
         /** Один блок-підлога (капкан, міна). */
         SINGLE_BLOCK,
-        // TWO_POINTS,   // розтяжка: 2 точки на одному рівні, ≤ 4 блоків, без стіни між
+        /**
+         * Дві точки на одному Y, між ними прямий відрізок без перешкод
+         * (електричний дріт). Маньяк підтверджує СПЕРШУ точку, потім
+         * ДРУГУ; між ними клієнт малює лінію-прев'ю.
+         */
+        TWO_POINTS,
         // CEILING_LINK  // мотузка: потрібна стеля на висоті 2–5 блоків
     }
 
@@ -58,7 +63,17 @@ public abstract class TrapArchetype {
         /** На цьому блоці вже стоїть пастка. */
         OCCUPIED,
         /** Слот на перезарядці або пастку не обрано в цьому матчі. */
-        UNAVAILABLE;
+        UNAVAILABLE,
+
+        // ── Причини відмови ЛИШЕ для TWO_POINTS (електричний дріт) ──────
+        /** Дві точки не на одному рівні Y (ТЗ 2.1). */
+        SAME_Y_REQUIRED,
+        /** Відстань між точками більша за дозволений максимум (ТЗ 2.1). */
+        TOO_LONG,
+        /** Між точками є блок, крізь який дріт фізично не протягнути (ТЗ 2.1). */
+        OBSTRUCTED,
+        /** Точки збігаються — ставити дріт нульової довжини немає сенсу. */
+        TOO_SHORT;
 
         public boolean ok() { return this == OK; }
     }
@@ -100,7 +115,34 @@ public abstract class TrapArchetype {
      *
      * @return створена сутність, або {@code null}, якщо додати не вдалось
      */
-    public abstract Entity spawn(ServerLevel level, BlockPos floor, ServerPlayer placer);
+    public Entity spawn(ServerLevel level, BlockPos floor, ServerPlayer placer) {
+        throw new UnsupportedOperationException(id + ": не підтримує розміщення в одну точку");
+    }
+
+    /**
+     * Створює тіло TWO_POINTS-пастки між двома точками. За замовчуванням
+     * явно не підтримується: {@code SINGLE_BLOCK}-пастки (капкан, міна)
+     * його ніколи не викликають, а мовчазне «нічого не робити» приховало б
+     * помилку виклику. {@link ElectricWireArchetype} перевизначає цей метод.
+     *
+     * @param pointA перша точка (блок, обраний першим підтвердженням)
+     * @param pointB друга точка
+     */
+    public Entity spawn(ServerLevel level, BlockPos pointA, BlockPos pointB, ServerPlayer placer) {
+        throw new UnsupportedOperationException(id + ": не підтримує розміщення у дві точки");
+    }
+
+    /**
+     * Перевірка ПАРИ точок для TWO_POINTS-пастки (спільний Y, довжина,
+     * відсутність перешкод). Для {@code SINGLE_BLOCK} не викликається.
+     *
+     * <p>Друга перевірка після {@link #validatePlacement(BlockGetter, BlockPos)}
+     * (яка перевіряє КОЖНУ точку окремо) — той самий поділ
+     * «властивість місця vs властивість пари», що й з {@link TrapPlacementRules}.</p>
+     */
+    public PlacementResult validatePlacement(BlockGetter level, BlockPos pointA, BlockPos pointB) {
+        return PlacementResult.UNAVAILABLE;
+    }
 
     /** Ефект на гравця, що потрапив у пастку (знерухомлення, урон, зв'язування тощо). */
     public abstract void applyEffect(ServerPlayer victim, BlockPos trapPos);

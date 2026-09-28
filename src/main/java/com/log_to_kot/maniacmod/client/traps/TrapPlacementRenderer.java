@@ -93,6 +93,45 @@ public final class TrapPlacementRenderer {
 
         // Заливка.
         renderFill(pose, buffers, x0, y, z0, x1, z1, color);
+
+        // Прев'ю дроту (ТЗ 2.2): маньяк вибрав ПЕРШУ точку і цілиться в
+        // другу — малюємо пряму лінію між ними, щоб він бачив, де саме
+        // натягнеться дріт.
+        if (TrapPlacementController.isTwoPointMode()) {
+            BlockPos first = TrapPlacementController.firstPoint();
+            if (first != null) {
+                renderWirePreview(pose, buffers, mc, first, target, cam);
+            }
+        }
+    }
+
+    /**
+     * Пряма лінія від першої точки дроту до поточної цілі — без провисання
+     * (ТЗ 2.1). Той самий рендерер-хелпер, що готовий дріт
+     * ({@link com.log_to_kot.maniacmod.client.renderer.RopeLineRenderer}) —
+     * прев'ю мусить виглядати ТОЧНІСІНЬКО як фінальний дріт (мотузка, без
+     * кольору-індикатора), просто напівпрозоре. Стара версія малювала
+     * {@code renderLineBox} навколо AABB відрізка — це рамка bounding-
+     * боксу (візуально квадрат/паралелепіпед), а не лінія вздовж самого
+     * відрізка a→b.
+     */
+    private static void renderWirePreview(PoseStack pose, MultiBufferSource.BufferSource buffers,
+                                          Minecraft mc, BlockPos first, BlockPos second, Vec3 cam) {
+        if (mc.level == null) return;
+        Vec3 a = com.log_to_kot.maniacmod.traps.ElectricWireArchetype
+            .wireAnchor(mc.level, first).subtract(cam);
+        Vec3 b = com.log_to_kot.maniacmod.traps.ElectricWireArchetype
+            .wireAnchor(mc.level, second).subtract(cam);
+
+        int lightA = LevelRenderer.getLightColor(mc.level, first.above());
+        int lightB = LevelRenderer.getLightColor(mc.level, second.above());
+
+        pose.pushPose();
+        pose.translate(a.x, a.y, a.z);
+        com.log_to_kot.maniacmod.client.renderer.RopeLineRenderer.render(
+            pose, buffers, b.subtract(a), lightA, lightB, LINE_ALPHA);
+        pose.popPose();
+        buffers.endBatch(net.minecraft.client.renderer.RenderType.leash());
     }
 
     /**

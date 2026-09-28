@@ -8,6 +8,7 @@ import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.core.phase.Phases;
 import com.log_to_kot.maniacmod.loot.GroundItemPickup;
+import dev.shaurmalib.forge.inventory.InventorySlotAllocation;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -79,7 +80,11 @@ import net.minecraftforge.network.NetworkHooks;
  * <h2>Підбір</h2>
  * ПКМ (без Shift — Shift+ПКМ зарезервований під генератор). Куди
  * класти — рішає {@link GroundItemPickup}; сутність не знає правил
- * слотів.
+ * слотів. БАГФІКС: предмет НЕ потрапляє в інвентар одразу на клік — він
+ * летить до руки {@link #VACUUM_TICKS} тіків ({@link #beginVacuum}) і
+ * лише в момент прибуття кладеться в слот ({@link #finishVacuum}), тож
+ * підбір виглядає як один суцільний рух, а не миттєва зміна хотбару з
+ * летючою декорацією поруч.
  */
 public class GroundItemEntity extends Entity {
 
@@ -399,6 +404,15 @@ public class GroundItemEntity extends Entity {
         this.entityData.set(VACUUM_OWNER, owner.getId());
         this.vacuumTicksLeft = VACUUM_TICKS;
         setDeltaMovement(Vec3.ZERO);
+
+        // Жест «піднімає предмет» — усім клієнтам виміру: поза тіла
+        // мусить бути видна й іншим гравцям, не лише підбирачу. Пакет
+        // несе лише «хто почав»; тривалість (18 тіків) клієнт відлічує
+        // сам, тож ні кінцевого сигналу, ні щотікового трафіку немає.
+        // Жест ЧИСТО візуальний: підбір і слоти від нього не залежать.
+        com.log_to_kot.maniacmod.net.ModNetwork.toLevel(
+            (net.minecraft.server.level.ServerLevel) owner.level(),
+            new com.log_to_kot.maniacmod.net.s2c.notify.ItemPickupPacket(owner.getUUID()));
     }
 
     /**
@@ -408,12 +422,21 @@ public class GroundItemEntity extends Entity {
      *
      * На відміну від решти руху тут НЕМАЄ передбачення з гравітацією:
      * дуга була б кривою, а треба рівно «притягнути до руки».
+     *
+     * <p><b>БАГФІКС:</b> предмет кладеться в інвентар САМЕ ТУТ, у момент
+     * реального прибуття моделі до руки ({@link #finishVacuum}) — а не
+     * заздалегідь в {@link #interact}. Раніше {@code GroundItemPickup.place}
+     * викликався ДО {@link #beginVacuum}, тож інвентар мінявся миттєво,
+     * і 6-тіковий політ моделі йшов уже ПІСЛЯ того, як гравець побачив
+     * готовий результат у хотбарі — виглядало як миттєве переміщення з
+     * зайвою декорацією поруч, а не як єдиний процес підбору.</p>
      */
     private void tickVacuum() {
         Entity owner = level().getEntity(vacuumOwnerId());
         if (owner == null) {
-            // Гравець зник (вийшов/помер) — предмет уже в інвентарі, лишати
-            // його в світі нема сенсу.
+            // Гравець зник (вийшов/помер) — класти вже нікуди й нема кому,
+            // предмет лишається загубленим у світі, тож просто прибираємо
+            // саму сутність-політ, не намагаючись покласти стек.
             if (!level().isClientSide) discard();
             return;
         }
@@ -428,7 +451,37 @@ public class GroundItemEntity extends Entity {
         // через updateInterval — інакше політ виглядав би ривками.
         hasImpulse = true;
         if (--vacuumTicksLeft <= 0 || next.distanceToSqr(target) < VACUUM_DONE_SQR) {
+            if (owner instanceof ServerPlayer serverPlayer) finishVacuum(serverPlayer);
             discard();
+        }
+    }
+
+    /**
+     * Політ долетів до руки: САМЕ ЗАРАЗ стек іде в інвентар — не
+     * раніше. {@link #interact} уже перевірив {@code hasRoom}/
+     * {@code isSlotAllowed} на початку польоту, тож тут місце майже
+     * напевно є; єдина причина, з якої воно раптом могло зникнути за ці
+     * 6 тіків, — гравець сам заповнив інвентар (наприклад підібрав щось
+     * інше в цей самий проміжок). Той рідкісний випадок дзеркалить ту
+     * саму «фізику обміну», що й раніше жила в {@link #interact}: спершу
+     * звичайне {@link GroundItemPickup#place}, і лише як запасний варіант
+     * {@link GroundItemPickup#swapSelected}.
+     */
+    private void finishVacuum(ServerPlayer serverPlayer) {
+        ItemStack stack = this.entityData.get(STACK);
+        if (stack.isEmpty()) return; // зіпсована сутність — уже нема чого класти
+
+        GroundItemPickup.Result result = GroundItemPickup.place(serverPlayer, stack);
+        if (result == GroundItemPickup.Result.NO_FREE_SLOT) {
+            result = GroundItemPickup.swapSelected(serverPlayer, stack);
+            if (result != GroundItemPickup.Result.SWAPPED) {
+                // Украй рідкісний край: місце було на старті польоту, а за
+                // 6 тіків зникло, і вибраний слот теж розхотів бути
+                // дозволеним. Чесніше повідомити про невдачу, ніж мовчки
+                // з'їсти предмет.
+                serverPlayer.displayClientMessage(
+                    Component.translatable("maniacmod.hud.ground_item.no_free_slot"), true);
+            }
         }
     }
 
@@ -532,30 +585,33 @@ public class GroundItemEntity extends Entity {
             return InteractionResult.FAIL;
         }
 
-        GroundItemPickup.Result result = GroundItemPickup.place(serverPlayer, stack);
-        if (result == GroundItemPickup.Result.NO_FREE_SLOT) {
-            // БАГФІКС/фіча: раніше тут усе закінчувалось — предмет
-            // лишався лежати, а гравцю з повним інвентарем не було чого
-            // зробити, крім спершу вручну викинути щось із руки. Тепер,
-            // коли вільного дозволеного слота немає, застосовуємо
-            // «фізику обміну» (GroundItemPickup.swapSelected): те, що
-            // зараз у вибраній руці, летить у світ тією ж дугою, що Q, а
-            // клікнутий предмет одразу опиняється в руці — гравець
-            // «міняється» з землею одним ПКМ замість двох кроків.
-            result = GroundItemPickup.swapSelected(serverPlayer, stack);
-            if (result != GroundItemPickup.Result.SWAPPED) {
-                // Вибраний слот поза дозволеним діапазоном (обмежений
-                // гравець) — міняти нема на що, інвентар не займано.
-                serverPlayer.displayClientMessage(
-                    Component.translatable("maniacmod.hud.ground_item.no_free_slot"), true);
-                return InteractionResult.FAIL; // предмет лишається лежати
-            }
+        // Перевірка місця — ЛИШЕ перевірка, без мутації інвентаря
+        // (GroundItemPickup.hasRoom): якщо вільного дозволеного слота
+        // немає, і вибраний слот теж не дозволений (то нема на що навіть
+        // обміняти — GroundItemPickup.swapSelected теж відмовить), кажемо
+        // про це одразу, а не після 6 тіків польоту, який однаково
+        // прийшлось би відкликати.
+        boolean canPlaceOrSwap = GroundItemPickup.hasRoom(serverPlayer)
+            || InventorySlotAllocation.isSlotAllowed(serverPlayer, serverPlayer.getInventory().selected);
+        if (!canPlaceOrSwap) {
+            serverPlayer.displayClientMessage(
+                Component.translatable("maniacmod.hud.ground_item.no_free_slot"), true);
+            return InteractionResult.FAIL; // предмет лишається лежати
         }
 
         level().playSound(null, getX(), getY(), getZ(), SoundEvents.ITEM_PICKUP,
             SoundSource.PLAYERS, 0.3f, 1.0f + this.random.nextFloat() * 0.4f);
-        // Не discard() одразу: сутність відіграє політ у руку й зникне сама
-        // (див. beginVacuum) — предмет «лине в руки», а не просто зникає.
+        // БАГФІКС: стек більше НЕ кладеться в інвентар тут. Раніше
+        // GroundItemPickup.place() виконувався ПЕРЕД beginVacuum(), тож
+        // предмет з'являвся в руці гравця МИТТЄВО (звичайна синхронізація
+        // інвентаря), а 6-тіковий політ моделі в повітрі йшов ПАРАЛЕЛЬНО
+        // й ПІСЛЯ вже завершеної дії — виглядало як «дублікат»/миттєве
+        // переміщення, бо найпомітніший результат (новий предмет у
+        // хотбарі) гравець бачив ще до того, як політ встиг початись.
+        // Тепер {@link GroundItemPickup#place} викликається лише в
+        // {@link #tickVacuum()}, у момент реального прибуття моделі до
+        // руки — «підбір» стає ОДНІЄЮ видимою дією від початку до кінця,
+        // а не миттєвою зміною інвентаря плюс окрема декорація.
         beginVacuum(serverPlayer);
         return InteractionResult.SUCCESS;
     }

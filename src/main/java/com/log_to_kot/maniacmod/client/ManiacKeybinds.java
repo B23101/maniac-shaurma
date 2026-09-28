@@ -27,6 +27,7 @@ import org.lwjgl.glfw.GLFW;
  * | Підвестися після падіння  | пробіл  | виживі | ванільна (jump)  |
  * | Підняти непритомного      | ПКМ (утримання, приціл на ньому) | виживі | ванільна (use) |
  * | Ремонт / залив генератора | Shift+ПКМ | виживі | ванільна (sneak+use) |
+ * | Спроба вибратись із капкана | F       | виживі | власна (лише поки видно підказку) |
  *
  * ── Чому цифри вільні ────────────────────────────────────────────────
  * У маньяка немає інвентаря взагалі (0 слотів hotbar), тому клавіші
@@ -76,6 +77,15 @@ public final class ManiacKeybinds {
     /** Підсвітка генераторів та їхніх станів. */
     public static final KeyMapping HIGHLIGHT = mapping("highlight", GLFW.GLFW_KEY_5);
 
+    /**
+     * F: спроба вибратися з капкана. Власний {@code KeyMapping}, а не
+     * ванільна клавіша, перевикористана за станом (як пробіл/Shift+ПКМ
+     * нижче) — на відміну від "стрибка" чи "тримання", у ванілі немає
+     * жодної дії, з якою "спробувати вибратись" природно збігається,
+     * тож тут не йдеться про подвійне навантаження вже зайнятої клавіші.
+     */
+    public static final KeyMapping TRAP_ESCAPE = mapping("trap_escape", GLFW.GLFW_KEY_F);
+
     private ManiacKeybinds() {}
 
     @SubscribeEvent
@@ -83,6 +93,7 @@ public final class ManiacKeybinds {
         for (KeyMapping key : ABILITIES) event.register(key);
         for (KeyMapping key : TRAPS) event.register(key);
         event.register(HIGHLIGHT);
+        event.register(TRAP_ESCAPE);
     }
 
     // ── Ванільні клавіші, перевикористані модом ──────────────────────────

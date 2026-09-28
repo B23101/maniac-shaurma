@@ -50,6 +50,25 @@ import java.util.function.Supplier;
  * eventTicksLeft} рахуємо тіки мовчки й лише гасимо погоду в кінці
  * ({@link #clearWeather}). Ванільний рушій сам підтримує raining=true
  * весь цей час, як і мав з самого початку.
+ * ── БАГФІКС: дощ з'являвся й миттєво зникав (спалах на 1 тік) ─────────
+ * Причина була не в порядку викликів {@link #applyWeather}/{@link
+ * #clearWeather} (це виправлено раніше, див. коментар нижче), а в тому,
+ * що ванільний {@code doWeatherCycle} gamerule (за умовчанням {@code
+ * true}) лишався увімкненим: {@code ServerLevel} сам щотіку просуває
+ * власний погодний цикл ({@code advanceWeatherCycle}) НЕЗАЛЕЖНО від
+ * наших ручних {@code setWeatherParameters}. У лобі, де {@link
+ * #clearWeather} викликається щотіку, це виглядало як "дощ на секунду
+ * з'явився й одразу почистився" — ваніль сама вирішувала почати дощ
+ * своїм випадковим циклом якраз між нашими тіками, а наш код тільки
+ * встигав його гасити вже ПІСЛЯ того, як клієнт побачив спалах. У грі ж
+ * той самий цикл міг непередбачувано додати ЩЕ один дощ понад той, що
+ * запланував {@code startEvent} — розсинхронізуючи targetShare з
+ * конфігу. {@link #onPhaseEnter}/{@link #onPhaseTick} тепер вимикають
+ * {@code doWeatherCycle} для кожного рівня раз і на весь час життя
+ * серверного інстансу (через {@link #ensureVanillaWeatherCycleDisabled}) —
+ * ваніль більше не керує погодою САМА взагалі, лише мод через
+ * {@link #applyWeather}/{@link #clearWeather} явними викликами
+ * {@code setWeatherParameters}, коли й скільки він сам вирішить.
  */
 public final class WorldEnvironmentModule implements PhaseListener {
 
@@ -64,6 +83,17 @@ public final class WorldEnvironmentModule implements PhaseListener {
     private long nextEventTick;
     private long eventTicksLeft;
 
+    /**
+     * true, коли {@code doWeatherCycle} уже вимкнено для поточного
+     * серверного інстансу — {@link #ensureVanillaWeatherCycleDisabled}
+     * реально торкається gamerule лише один раз (див. докстрінг там
+     * щодо того, чому не варто робити це щотіку), а прапорець тут дає
+     * дешевий шлях перевірити це з {@link #onPhaseTick}, щоб і той
+     * єдиний тік до першого {@link #onPhaseEnter} (старт сервера) теж
+     * був покритий.
+     */
+    private boolean weatherCycleDisabled;
+
     public WorldEnvironmentModule(Supplier<MatchOrchestrator> matchSupplier) {
         this.matchSupplier = matchSupplier;
     }
@@ -75,12 +105,15 @@ public final class WorldEnvironmentModule implements PhaseListener {
 
     @Override
     public void onPhaseEnter(GamePhase phase, List<ServerPlayer> players) {
+        MinecraftServer server = server();
+        if (server != null) ensureVanillaWeatherCycleDisabled(server);
+
         if (!phase.isGameplay()) {
             gameplaySession = false;
             weatherActive = false;
             eventTicksLeft = 0;
             clearWeather();
-            maintainGameTime(server());
+            maintainGameTime(server);
             return;
         }
 
@@ -102,6 +135,7 @@ public final class WorldEnvironmentModule implements PhaseListener {
     public void onPhaseTick(GamePhase phase, List<ServerPlayer> players, long ticksInPhase) {
         MinecraftServer server = server();
         if (server == null) return;
+        ensureVanillaWeatherCycleDisabled(server);
 
         // Годину притримує в КОЖНІЙ фазі (лобі теж) — див. докклас.
         maintainGameTime(server);
@@ -169,6 +203,28 @@ public final class WorldEnvironmentModule implements PhaseListener {
                 level.setDayTime(time);
             }
         }
+    }
+
+    /**
+     * Вимикає ванільний {@code doWeatherCycle} gamerule для кожного
+     * рівня — мод, а не сам Minecraft, вирішує, коли йде дощ (див.
+     * клас-докстрінг щодо спалаху дощу в лобі). Реально торкається
+     * gamerule лише ОДИН РАЗ за життя цього серверного інстансу
+     * ({@link #weatherCycleDisabled}): {@code GameRules.Value#set} у
+     * ванілі завжди позначає правило зміненим і не має власної
+     * "нічого не змінилось — вийти рано" перевірки, тож викликати його
+     * щотіку означало б зайву роботу без жодної користі. Дешева
+     * перевірка прапорця дозволяє замовити цей виклик і з
+     * {@link #onPhaseEnter}, і з {@link #onPhaseTick} — так покритий і
+     * той єдиний тік між стартом сервера й першим onPhaseEnter.
+     */
+    private void ensureVanillaWeatherCycleDisabled(MinecraftServer server) {
+        if (weatherCycleDisabled) return;
+        for (ServerLevel level : server.getAllLevels()) {
+            level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_WEATHER_CYCLE)
+                .set(false, server);
+        }
+        weatherCycleDisabled = true;
     }
 
     private void applyWeather(MinecraftServer server) {

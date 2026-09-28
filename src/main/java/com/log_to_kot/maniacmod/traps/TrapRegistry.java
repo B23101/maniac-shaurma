@@ -13,10 +13,10 @@ public final class TrapRegistry {
 
     static {
         register(new BearTrapArchetype());
+        register(new ElectricWireArchetype());
         // Ще не реалізовані (немає розміщення й тіла у світі) — НЕ реєструємо,
         // інакше вони потрапили б у меню вибору й падали при використанні.
         // Реалізував пастку → розкоментуй її рядок тут:
-        // register(new ElectricWireArchetype());
         // register(new RopeBindArchetype());
         // register(new MineArchetype());
     }

@@ -34,6 +34,9 @@ public final class ClientPacketHandler {
 
     public static void onPhase(GamePhase phase) {
         ClientMatchState.setPhase(phase);
+        // Голос маньяка прив'язаний до фази й ролі — перераховуємо одразу
+        // після оновлення стану (див. voice/VoiceActivation).
+        com.log_to_kot.maniacmod.voice.VoiceActivation.refresh();
         if (phase == GamePhase.ENDING) {
             Minecraft.getInstance().setScreen(
                 new com.log_to_kot.maniacmod.client.screen.statistics.MatchResultScreen());
@@ -42,11 +45,13 @@ public final class ClientPacketHandler {
 
     public static void onRole(RoleSyncPacket.Role role, String archetypeId, double attackRangeBlocks) {
         ClientMatchState.setRole(role, archetypeId, attackRangeBlocks);
+        com.log_to_kot.maniacmod.voice.VoiceActivation.refresh();
     }
 
     /** Конфіг блиску предметів на землі ({@code loot.sparkleEnabled}), синхронізований із сервера. */
-    public static void onGroundItemVisualSettings(boolean sparkleEnabled) {
+    public static void onGroundItemVisualSettings(boolean sparkleEnabled, double pickupRangeBlocks) {
         ClientMatchState.setGroundItemSparkleEnabled(sparkleEnabled);
+        ClientMatchState.setGroundItemPickupRangeBlocks(pickupRangeBlocks);
     }
 
     public static void onVitals(int hp, int maxHp, float stamina,
@@ -106,6 +111,9 @@ public final class ClientPacketHandler {
         // лише на цьому клієнті (див. GeneratorHighlightGlow).
         com.log_to_kot.maniacmod.client.glow.GeneratorHighlightGlow
             .show(entries, durationTicks);
+        // Звук активації підсвітки — момент, коли гравець натиснув
+        // клавішу 5 і побачив контури генераторів крізь стіни.
+        com.log_to_kot.maniacmod.client.style.UiAnim.playReady();
     }
 
     public static void onGeneratorProgress(GeneratorProgressPacket packet) {
@@ -217,6 +225,36 @@ public final class ClientPacketHandler {
         ClientMatchState.setManiacStun(maniacId, stunned, totalTicks);
     }
 
+    /** Показати/сховати підказку "Натисни F" (див. {@code TrapEscapePromptPacket}). */
+    public static void onTrapEscapePrompt(boolean active) {
+        ClientMatchState.setTrapEscapePrompt(active);
+    }
+
+    /**
+     * Почався/скінчився удар струмом (див. {@code WireShockPacket}).
+     * Сам стан лише записуємо — камеру глушить міксин (як оглушення
+     * маньяка), а тряску додає {@code WireShockCameraShake} щокадру.
+     */
+    public static void onWireShock(boolean active, double degrees, double hz) {
+        ClientMatchState.setWireShocked(active);
+        com.log_to_kot.maniacmod.client.WireShockCameraShake.configure(active, degrees, hz);
+    }
+
+    /**
+     * Хтось почав/змінив/закінчив роботу з генератором (див.
+     * {@code GeneratorInteractionPacket}). Тут лише запис: саму позу
+     * рук малює {@code MixinGeneratorWorkThirdPerson}, читаючи
+     * цим станом (він же обслуговує і ВЛАСНИЙ ремонт, тож джерело
+     * правди має бути одне).
+     *
+     * Значення поза межами відомих трактуємо як {@code ACTION_NONE}:
+     * клієнт не має падати чи показувати щось безглузде, якщо на сервері
+     * новіша версія мода з третім видом роботи.
+     */
+    public static void onGeneratorInteraction(java.util.UUID playerId, int action) {
+        ClientMatchState.setGeneratorInteraction(playerId, action);
+    }
+
     // ── Меню налаштувань ─────────────────────────────────────────────────
 
     /**
@@ -233,6 +271,51 @@ public final class ClientPacketHandler {
         } else {
             Minecraft.getInstance().setScreen(
                 new com.log_to_kot.maniacmod.client.screen.settings.SettingsMenuScreen(packet.values()));
+        }
+    }
+
+    /**
+     * "Темна зона" — сервер каже, чи гравець зараз усередині. Плавний
+     * перехід яскравості lightmap рахує сама {@code DarkZoneEffect}
+     * (shaurma-lib) локально щотік — тут лише передаємо цільовий стан
+     * і параметри поточного конфігу (intensity/transitionTicks можуть
+     * змінитись через {@code /maniac reload}, тому їдуть у кожному
+     * пакеті, а не читаються з клієнтського кешу один раз).
+     * <p>
+     * Не викликає {@code DarkZoneEffect.setActive(...)} напряму —
+     * передає пакет {@link com.log_to_kot.maniacmod.client.FlashlightClientHandler#onServerDarkZoneState}
+     * (ліхтарик у руці тимчасово перекриває цей самий ключ ефекту, і
+     * хендлеру потрібно знати РЕАЛЬНИЙ серверний стан, щоб коректно
+     * повернути його, щойно гравець прибере ліхтарик — див. клас-
+     * докстрінг {@code FlashlightClientHandler}, пункт 2).
+     */
+    public static void onDarkZoneState(boolean active, float intensity, int transitionTicks) {
+        com.log_to_kot.maniacmod.client.FlashlightClientHandler.onServerDarkZoneState(active,
+            new dev.shaurmalib.common.overlay.DarkZoneSpec(intensity, transitionTicks));
+    }
+
+    // ── Пастки: підсвітка жертви та міні-гра ───────────────────────────
+
+    /**
+     * Новий склад підсвічених жертв пасток (див. {@code TrapVictimGlowPacket}).
+     * Несе ГОТОВІ id сутностей — пошук і таймер не потрібні, тож ланцюжок
+     * «пакет → контур» тут прямий.
+     */
+    public static void onTrapVictimGlow(int color, int[] entityIds) {
+        com.log_to_kot.maniacmod.client.glow.TrapVictimGlow.show(color, entityIds);
+    }
+
+    /**
+     * Одна спроба в міні-грі визволення з капкана: вердикт + НОВА позиція
+     * цілі. Це повідомлення призначене лише екрану міні-гри; якщо його
+     * чомусь зараз відкрито інший екран — мовчки нічого не робимо (той
+     * самий стиль, що решта обробників міні-ігор).
+     */
+    public static void onTrapEscapeAttempt(
+            com.log_to_kot.maniacmod.net.s2c.minigame.TrapEscapeAttemptPacket packet) {
+        var screen = Minecraft.getInstance().screen;
+        if (screen instanceof com.log_to_kot.maniacmod.client.screen.minigame.TargetMinigameScreen target) {
+            target.onTrapAttempt(packet.hitsSoFar(), packet.hit(), packet.targetPosition());
         }
     }
 

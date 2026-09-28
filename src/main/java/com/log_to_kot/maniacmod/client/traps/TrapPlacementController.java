@@ -63,6 +63,13 @@ public final class TrapPlacementController {
     private static BlockPos target = null;
     private static TrapArchetype.PlacementResult targetResult = TrapArchetype.PlacementResult.UNAVAILABLE;
 
+    /**
+     * ПЕРША точка, уже підтверджена для {@code TWO_POINTS}-пастки
+     * (електричний дріт). Поки вона є — рендерер малює лінію-прев'ю від
+     * неї до поточної цілі (ТЗ 2.2). Для одноточкових пасток завжди null.
+     */
+    private static BlockPos firstPoint = null;
+
     /** ПКМ був затиснутий на попередньому тіку — детекція фронту, як у ClientInputHandler. */
     private static boolean useWasDown = false;
 
@@ -76,6 +83,15 @@ public final class TrapPlacementController {
     }
 
     public static BlockPos target() { return target; }
+
+    /** Перша точка дрібного вибору, або null (див. {@link #firstPoint}). */
+    public static BlockPos firstPoint() { return firstPoint; }
+
+    /** Чи активна ДВОТОЧКОВА пастка (електричний дріт) для поточного слоту. */
+    public static boolean isTwoPointMode() {
+        TrapArchetype type = trapOf(ClientMatchState.activeTrapSlot());
+        return type != null && type.placementShape() == TrapArchetype.PlacementShape.TWO_POINTS;
+    }
 
     /** Чи місце під прицілом придатне (зелений квадрат). false, якщо цілі немає. */
     public static boolean targetValid() {
@@ -94,6 +110,9 @@ public final class TrapPlacementController {
             exit();
         } else {
             ClientMatchState.setActiveTrapSlot(slot);
+            // Новий слот — новий вибір: перша точка з попередньої пастки
+            // не має лишатись «висячою» прев'ю-лінією.
+            firstPoint = null;
             useWasDown = isUseDown(); // ПКМ, затиснутий у момент входу, — не підтвердження
         }
     }
@@ -102,6 +121,9 @@ public final class TrapPlacementController {
         ClientMatchState.setActiveTrapSlot(-1);
         target = null;
         targetResult = TrapArchetype.PlacementResult.UNAVAILABLE;
+        // Вихід із режиму скидає й незавершений вибір першої точки дроту:
+        // наступний вхід має починатись з чистого аркуша.
+        firstPoint = null;
     }
 
     // ── Тік ──────────────────────────────────────────────────────────────
@@ -136,15 +158,58 @@ public final class TrapPlacementController {
     }
 
     private static void updateTarget(Minecraft mc, int slot) {
-        target = TrapAiming.targetFloor(mc.level, mc.player, ClientMatchState.trapPlaceRange());
-        if (target == null) {
+        double range = ClientMatchState.trapPlaceRange();
+        TrapArchetype type = trapOf(slot);
+
+        // 1) Спершу шукаємо блок у межах дальності (звичайний випадок).
+        BlockPos floor = TrapAiming.targetFloor(mc.level, mc.player, range);
+        if (floor != null) {
+            target = floor;
+        } else {
+            // 2) Не на підлогу / задалеко. Куб НЕ зникає: показуємо
+            //    червоний на тому, у що дивимось, щоб було видно, що не так.
+            var hit = TrapAiming.rawHit(mc.level, mc.player, Math.max(range, 1.0) + 8.0);
+            if (hit == null) {
+                target = null;
+                targetResult = TrapArchetype.PlacementResult.TOO_FAR;
+                return;
+            }
+            target = hit.getBlockPos();
+            boolean topFace = hit.getDirection() == net.minecraft.core.Direction.UP;
+            targetResult = topFace
+                ? TrapArchetype.PlacementResult.TOO_FAR
+                : TrapArchetype.PlacementResult.NOT_FULL_BLOCK;
+            return;
+        }
+
+        if (type == null) {
+            targetResult = TrapArchetype.PlacementResult.UNAVAILABLE;
+            return;
+        }
+
+        // Дальність міряємо тією ж формулою, що й сервер
+        // (TrapPlacementRules.isWithinReach): до центру блока, з запасом +1.
+        double limit = range + 1.0;
+        boolean reachable = mc.player.getEyePosition()
+            .distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(target)) <= limit * limit;
+
+        TrapArchetype.PlacementResult single = type.validatePlacement(mc.level, target);
+        if (!single.ok()) {
+            targetResult = single;
+            return;
+        }
+        if (!reachable) {
             targetResult = TrapArchetype.PlacementResult.TOO_FAR;
             return;
         }
-        TrapArchetype type = trapOf(slot);
-        targetResult = type == null
-            ? TrapArchetype.PlacementResult.UNAVAILABLE
-            : type.validatePlacement(mc.level, target);
+
+        // Друга точка дроту: колір має відображати перевірку ПАРИ
+        // (Y, довжина, перешкоди), а не лише цієї точки.
+        if (firstPoint != null && type.placementShape() == TrapArchetype.PlacementShape.TWO_POINTS) {
+            targetResult = type.validatePlacement(mc.level, firstPoint, target);
+            return;
+        }
+        targetResult = single;
     }
 
     /**
@@ -161,7 +226,18 @@ public final class TrapPlacementController {
         if (!pressed) return;
         if (!targetValid()) return;
 
-        ModNetwork.toServer(new TrapPlacePacket(slot));
+        // Двоточкова пастка (електричний дріт): перший ПКМ фіксує точку №1,
+        // другий — точку №2 і ставить дріт (ТЗ 2.1/2.2). Куди саме — все
+        // одно рахує сервер за поглядом; клієнт лише каже, яка це точка.
+        // Локальний firstPoint — винятково для прев'ю-лінії.
+        if (isTwoPointMode()) {
+            boolean second = firstPoint != null;
+            ModNetwork.toServer(new TrapPlacePacket(slot, second, target));
+            firstPoint = second ? null : target;
+            return;
+        }
+
+        ModNetwork.toServer(new TrapPlacePacket(slot, false, target));
     }
 
     // ── Esc ──────────────────────────────────────────────────────────────

@@ -60,14 +60,17 @@ import software.bernie.geckolib.util.GeckoLibUtil;
  * екземпляра сутності.
  *
  * ── Анімація ─────────────────────────────────────────────────────────
- * Один GeckoLib-контролер: "idle" (генератор ще не повністю
- * полагоджений — REPAIR чи FUEL стадія) і "active" (обидві стадії
- * пройдено, {@code GeneratorPoi.isCompleted()}). Перемикання керується
- * {@link #ACTIVE} — синхронізованим прапорцем, який виставляє
- * {@link #syncFromPoi()}, викликаний тіком самої сутності (щотік читає
- * актуальний {@code GeneratorPoi.isCompleted()} за своєю позицією) —
- * так рендер завжди узгоджений із сервером, а не з власним локальним
- * станом, що міг би розійтися при переспавні.
+ * Один GeckoLib-контролер, три анімації з {@code generator.animation.json}:
+ * "idle" (генератор ще не повністю полагоджений — REPAIR чи FUEL
+ * стадія), "running" (обидві стадії пройдено, {@code
+ * GeneratorPoi.isCompleted()}) і одноразовий "boom" на момент вибуху
+ * (після нього контролер сам повертається на "idle"). Перемикання
+ * керується {@link #ACTIVE}/{@link #EXPLODING} — синхронізованими
+ * прапорцями, які виставляє {@link #syncFromPoi()}, викликаний тіком
+ * самої сутності (щотік читає актуальний {@code
+ * GeneratorPoi.isCompleted()}/{@code explosionTicksLeft()} за своєю
+ * позицією) — так рендер завжди узгоджений із сервером, а не з власним
+ * локальним станом, що міг би розійтися при переспавні.
  */
 public class GeneratorEntity extends Entity implements GeoEntity {
 
@@ -114,12 +117,66 @@ public class GeneratorEntity extends Entity implements GeoEntity {
     private static final EntityDataAccessor<Integer> STAGE_PERCENT =
         SynchedEntityData.defineId(GeneratorEntity.class, EntityDataSerializers.INT);
 
+    /**
+     * true на тіках, коли триває вибух ({@code GeneratorPoi.explosionTicksLeft() > 0}).
+     * Синхронізується так само, як {@link #ACTIVE}/{@link #FUEL_STAGE} — потрібне
+     * клієнтському аніматору, щоб програвати одноразовий {@code "boom"}, а не лише
+     * серверному {@code setExplosionGlow}, який керує лише контуром.
+     */
+    private static final EntityDataAccessor<Boolean> EXPLODING =
+        SynchedEntityData.defineId(GeneratorEntity.class, EntityDataSerializers.BOOLEAN);
+
+    /**
+     * true, поки на стадії FUEL хтось РЕАЛЬНО тримає заливку (заряджена
+     * каністра в руці, кнопка затиснута). Виставляється в
+     * {@link #syncFromPoi()} з {@code GeneratorPoi#isFillingThisTick()} —
+     * прямого прапора з того місця, де заряд каністри фактично списується,
+     * а не з приросту округленого {@link #stagePercent()}.
+     * {@code registerControllers} читає це поле, щоб показувати
+     * "idle_fuel" увесь час утримання й повертати "idle" лише після того,
+     * як гравець відпустив кнопку.
+     */
+    private static final EntityDataAccessor<Boolean> FILLING =
+        SynchedEntityData.defineId(GeneratorEntity.class, EntityDataSerializers.BOOLEAN);
+
+    /**
+     * Скільки тіків після ОСТАННЬОГО реального тіку заливу ще тримати
+     * {@link #FILLING}. Не залежить від темпу заливу: джерело правди —
+     * {@code GeneratorPoi#isFillingThisTick()}, який true на КОЖНОМУ тіку
+     * утримання, а не лише на тих, де відсоток виріс. Тому запас потрібен
+     * лише на порядок тіків сервера та мережевий дрейф, а не на діру
+     * Бресенхема.
+     */
+    private static final int FILLING_RELEASE_GRACE_TICKS = 2;
+
+    /** Скільки тіків ще тримати FILLING після останнього реального тіку заливу (лише сервер, не синхронізується). */
+    private int fillingGraceLeft = 0;
+
+
     /** Поворот по Y. Завжди 0 — константа, не синхронізується (як у GroundItemEntity). */
     public static final float ROTATION_Y = 0f;
 
+    /**
+     * Радіус (блоки), у якому {@code client.GeneratorLoopClientSoundHandler}
+     * тримає клієнтський гул (свій радіус — {@code LOOP_RADIUS_BLOCKS}
+     * там); звук заливу ({@code client.GeneratorFuelClientSoundHandler})
+     * не має радіуса взагалі — грає лише для гравця, який сам зараз
+     * заливає. Лишена тут як довідкова межа для решти клієнтського коду
+     * (підсвітка, оверлеї), який досі орієнтується на "чи генератор
+     * взагалі поруч".
+     */
+    public static final double SOUND_TRACK_RANGE = 24.0;
+
     private static final String CONTROLLER_NAME = "generatorController";
+    /** До полагодження, стадія REPAIR — зациклена "спокійна" анімація. */
     private static final RawAnimation ANIM_IDLE = RawAnimation.begin().thenLoop("idle");
-    private static final RawAnimation ANIM_ACTIVE = RawAnimation.begin().thenLoop("active");
+    /** Стадія FUEL, поки хтось РЕАЛЬНО ліє заряджену каністру ({@link #isFilling()}) — окрема поза. */
+    private static final RawAnimation ANIM_IDLE_FUEL = RawAnimation.begin().thenLoop("idle_fuel");
+    /** Після полагодження (isActive()==true) — зациклена анімація роботи генератора. */
+    private static final RawAnimation ANIM_ACTIVE = RawAnimation.begin().thenLoop("running");
+    /** На момент вибуху — одноразовий "boom", потім знову зациклений idle. */
+    private static final RawAnimation ANIM_BOOM =
+        RawAnimation.begin().thenPlay("boom").thenLoop("idle");
 
     private final AnimatableInstanceCache geoCache = GeckoLibUtil.createInstanceCache(this);
 
@@ -165,6 +222,8 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         this.entityData.define(ACTIVE, false);
         this.entityData.define(FUEL_STAGE, false);
         this.entityData.define(STAGE_PERCENT, 0);
+        this.entityData.define(EXPLODING, false);
+        this.entityData.define(FILLING, false);
     }
 
     public float rotationX() {
@@ -190,6 +249,16 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         return this.entityData.get(STAGE_PERCENT);
     }
 
+    /** true під час вибуху — {@code registerControllers} програє за цим {@link #ANIM_BOOM}. */
+    public boolean isExploding() {
+        return this.entityData.get(EXPLODING);
+    }
+
+    /** true — прогрес FUEL реально росте зараз (див. {@link #FILLING} докстрінг). */
+    public boolean isFilling() {
+        return this.entityData.get(FILLING);
+    }
+
     /** Позиція, за якою {@code GeneratorModule}/{@code MatchOrchestrator} шукають {@link GeneratorPoi}. */
     public net.minecraft.core.BlockPos generatorPos() {
         return blockPosition();
@@ -202,6 +271,10 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         super.tick();
         if (level().isClientSide) return;
         syncFromPoi();
+        // Гул роботи (generator_loop) і звук заливу (fuel_fill) тепер
+        // повністю клієнтські — client.GeneratorLoopClientSoundHandler /
+        // client.GeneratorFuelClientSoundHandler читають уже
+        // синхронізований стан напряму, без окремих серверних лупів.
     }
 
     /**
@@ -256,9 +329,44 @@ public class GeneratorEntity extends Entity implements GeoEntity {
             this.entityData.set(STAGE_PERCENT, stagePercent);
         }
 
+        // "idle_fuel" грає ВЕСЬ час, поки хтось РЕАЛЬНО тримає заливку, і
+        // гасне лише тоді, коли гравець відпустив кнопку (або каністра
+        // спорожніла / він відійшов).
+        //
+        // Джерело правди — GeneratorPoi.isFillingThisTick(): прапор, який
+        // GeneratorModule.tickFuel виставляє на КОЖНОМУ тіку, де залив
+        // справді йде (заряджена каністра в руці, сесія жива, стадія FUEL).
+        // Раніше тут вгадували залив за приростом округленого stagePercent
+        // (+ grace) — але приріст іде Бресенхемом, «дірами» по кілька тіків,
+        // а сам відсоток ще й округлюється вниз, тож будь-яке grace-вікно
+        // рано чи пізно було коротшим за діру і idle_fuel зривалась в idle
+        // посеред безперервної заливки.
+        //
+        // Grace лишається, але лише на 1-2 тіки — щоб перекрити одиничний
+        // розрив між порядком тіків GeneratorModule і цієї сутності (порядок
+        // обходу сутностей/фаз не гарантований) та мережевий дрейф
+        // FILLING-синхронізації. Це не «вгадування», а згладжування.
+        boolean filling;
+        if (!fuelStage) {
+            fillingGraceLeft = 0;
+            filling = false;
+        } else if (poi.isFillingThisTick()) {
+            fillingGraceLeft = FILLING_RELEASE_GRACE_TICKS;
+            filling = true;
+        } else {
+            fillingGraceLeft = Math.max(0, fillingGraceLeft - 1);
+            filling = fillingGraceLeft > 0;
+        }
+        if (filling != isFilling()) {
+            this.entityData.set(FILLING, filling);
+        }
+
         boolean exploding = poi.explosionTicksLeft() > 0;
         if (exploding != explosionGlow) {
             setExplosionGlow(exploding);
+        }
+        if (exploding != isExploding()) {
+            this.entityData.set(EXPLODING, exploding);
         }
     }
 
@@ -305,8 +413,10 @@ public class GeneratorEntity extends Entity implements GeoEntity {
      */
     @Override
     public void remove(Entity.RemovalReason reason) {
-        if (!level().isClientSide && explosionGlow) {
-            setExplosionGlow(false);
+        if (!level().isClientSide) {
+            if (explosionGlow) {
+                setExplosionGlow(false);
+            }
         }
         super.remove(reason);
     }
@@ -366,8 +476,12 @@ public class GeneratorEntity extends Entity implements GeoEntity {
 
     @Override
     public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
-        controllers.add(new AnimationController<>(this, CONTROLLER_NAME, 0,
-            state -> state.setAndContinue(isActive() ? ANIM_ACTIVE : ANIM_IDLE)));
+        controllers.add(new AnimationController<>(this, CONTROLLER_NAME, 5,
+            state -> state.setAndContinue(
+                isExploding() ? ANIM_BOOM
+                    : isActive() ? ANIM_ACTIVE
+                    : isFilling() ? ANIM_IDLE_FUEL
+                    : ANIM_IDLE)));
     }
 
     @Override
@@ -391,6 +505,7 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         this.entityData.set(ACTIVE, tag.getBoolean("Active"));
         this.entityData.set(FUEL_STAGE, tag.getBoolean("FuelStage"));
         this.entityData.set(STAGE_PERCENT, tag.getInt("StagePercent"));
+        this.entityData.set(EXPLODING, tag.getBoolean("Exploding"));
     }
 
     @Override
@@ -399,6 +514,7 @@ public class GeneratorEntity extends Entity implements GeoEntity {
         tag.putBoolean("Active", this.entityData.get(ACTIVE));
         tag.putBoolean("FuelStage", this.entityData.get(FUEL_STAGE));
         tag.putInt("StagePercent", this.entityData.get(STAGE_PERCENT));
+        tag.putBoolean("Exploding", this.entityData.get(EXPLODING));
     }
 
     @Override

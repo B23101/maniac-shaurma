@@ -1,5 +1,6 @@
 package com.log_to_kot.maniacmod.client.overlay.notify;
 
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -63,6 +64,8 @@ public final class GeneratorCompletedOverlay {
     public static void show(int index, int total) {
         text = Component.translatable("maniacmod.hud.generator.completed_toast", index, total).getString();
         shownAtMs = System.currentTimeMillis();
+        // Короткий «поп» появи — банер має не просто з'явитись, а «в'їхати» зі звуком.
+        com.log_to_kot.maniacmod.client.style.UiAnim.playAppear();
     }
 
     public static void render(GuiGraphics graphics) {
@@ -83,6 +86,18 @@ public final class GeneratorCompletedOverlay {
         int panelX = screenW / 2 - PANEL_WIDTH / 2;
         int panelY = screenH / 2 - ABOVE_CENTER_OFFSET - PANEL_HEIGHT / 2;
 
+        // Плавна поява з легким «відскоком»: банер виростає з 0.86 до 1.0
+        // (easeOutBack) — не миттєвий хлопок, а сучасний pop-in.
+        float grow = UiAnim
+                .easeOutBack(Math.min(1f, age / (float) FADE_IN_MS), 0.6f);
+        float scale = 0.86f + 0.14f * grow;
+
+        var pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(screenW / 2f, panelY + PANEL_HEIGHT / 2f, 0f);
+        pose.scale(scale, scale, 1f);
+        pose.translate(-screenW / 2f, -(panelY + PANEL_HEIGHT / 2f), 0f);
+
         int panelBg = applyAlpha(ManiacUiTheme.PANEL_BG, alpha);
         int border = applyAlpha(ManiacUiTheme.BORDER_BRIGHT, alpha);
         int textColor = applyAlpha(ManiacUiTheme.TEXT_TITLE, alpha);
@@ -91,6 +106,8 @@ public final class GeneratorCompletedOverlay {
         ManiacUiTheme.border1px(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, border);
         graphics.drawCenteredString(mc.font, text,
             panelX + PANEL_WIDTH / 2, panelY + (PANEL_HEIGHT - mc.font.lineHeight) / 2, textColor);
+
+        pose.popPose();
     }
 
     private static float alphaAt(long ageMs) {

@@ -3,6 +3,8 @@ package com.log_to_kot.maniacmod;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
 import com.log_to_kot.maniacmod.config.MapPointConfigs;
+import com.log_to_kot.maniacmod.config.DarkZoneConfigs;
+import com.log_to_kot.maniacmod.darkzone.DarkZoneModule;
 import com.log_to_kot.maniacmod.core.match.ManiacChatChannels;
 import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
@@ -14,9 +16,11 @@ import com.log_to_kot.maniacmod.registry.ModCreativeTab;
 import com.log_to_kot.maniacmod.registry.ModEntityTypes;
 import com.log_to_kot.maniacmod.registry.ModItems;
 import com.log_to_kot.maniacmod.registry.ModSoundCues;
+import com.log_to_kot.maniacmod.registry.ModParticles;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import com.log_to_kot.maniacmod.server.GroundItemHooks;
 import com.log_to_kot.maniacmod.server.ServerHooks;
+import com.log_to_kot.maniacmod.voice.VoiceRuntime;
 import dev.shaurmalib.common.damage.DamageInterceptorRegistry;
 import dev.shaurmalib.common.lifecycle.DisconnectPolicy;
 import dev.shaurmalib.common.lifecycle.JoinPolicy;
@@ -92,6 +96,7 @@ public class ManiacMod {
         ModBlocks.BLOCK_ITEMS.register(modEventBus);
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
         ModSounds.SOUNDS.register(modEventBus);
+        ModParticles.PARTICLES.register(modEventBus);
         ModCreativeTab.TABS.register(modEventBus);
 
         modEventBus.addListener(this::commonSetup);
@@ -198,6 +203,7 @@ public class ManiacMod {
         // нижче, вже читає справжні значення, а не дефолти.
         ManiacConfigs.init(lib.configModule());
         MapPointConfigs.init(ManiacConfigs.namespaceDirectory());
+        DarkZoneConfigs.init(ManiacConfigs.namespaceDirectory());
         match.reloadConfiguredMap();
 
         // Звуки описуються один раз — далі будь-де досить SoundCenter.play(...).
@@ -273,6 +279,12 @@ public class ManiacMod {
         // match.registerModule(new SurvivorModule());
         // match.registerModule(new LootModule());
         // match.registerModule(new CinematicModule());
+        match.registerModule(new DarkZoneModule());
+
+        // Голосовий шар (Simple Voice Chat). Модулі фаз реєструються
+        // тут-таки, якщо SVC уже піднявся; якщо SVC стартує пізніше —
+        // це зробить VoiceRuntime.attachServerApi із плагіна SVC.
+        VoiceRuntime.onServerStarted();
 
         LOGGER.info("[ManiacMod] shaurma-lib підключено, матч готовий (фаза {})",
             match.phases().current());
@@ -288,6 +300,10 @@ public class ManiacMod {
             match.shutdown();
             match = null;
         }
+        // Голосові групи/канали — серверний стан SVC. Прибираємо їх ПЕРЕД
+        // звільненням решти, щоб наступний світ у тій самій JVM не
+        // успадкував персональні ISOLATED-групи попереднього матчу.
+        VoiceRuntime.clearAll();
         // Реєстри бібліотеки статичні — без очищення наступний світ у
         // тій самій JVM успадкував би причини блокування від попереднього.
         DamageInterceptorRegistry.clear();

@@ -84,6 +84,18 @@ public final class ModSoundCues {
         cue(ModSounds.TRAP_STRUGGLE,    SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.CROWBAR_HIT,      SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.WIRE_ZAP,         SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.WIRE_ZAP_2,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.WIRE_ZAP_3,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.WIRE_PLACE,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.WIRE_CUT,         SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+
+        // Фідбек міні-гри "ціль" — це ЗВУК ІНТЕРФЕЙСУ (гравець чує його
+        // лише у себе, екран відкритий тільки в нього), тому UI, а не
+        // WORLD. Зараз ці звуки грає клієнтський екран напряму
+        // (SimpleSoundInstance.forUI); реєстрація cue — щоб опис не
+        // розійшовся з рештою, якщо колись гра піде через SoundCenter.
+        cue(ModSounds.MINIGAME_HIT,  SoundStage.NON_POSITIONAL, UI, 1.0f);
+        cue(ModSounds.MINIGAME_MISS, SoundStage.NON_POSITIONAL, UI, 1.0f);
 
         // ── Напруга ──────────────────────────────────────────────────────
         // Маньяк рухається, тому звук має слідувати за джерелом.

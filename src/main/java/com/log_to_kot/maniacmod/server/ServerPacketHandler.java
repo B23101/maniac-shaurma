@@ -64,7 +64,8 @@ public final class ServerPacketHandler {
      * дальність, фазу, перезарядку й валідність місця сервер перераховує
      * сам у {@code TrapModule#onPlaceConfirmed}.
      */
-    public static void onTrapPlace(ServerPlayer player, int slot) {
+    public static void onTrapPlace(ServerPlayer player, int slot, boolean secondPoint,
+                                   net.minecraft.core.BlockPos target) {
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return;
         if (slot < 0 || slot >= ManiacArchetype.MAX_TRAP_SLOTS) return;
@@ -74,7 +75,7 @@ public final class ServerPacketHandler {
         // пасток. Той самий прямий прапор, що onAbilityActivate вище.
         if (match.maniacStun().isStunned(player.getUUID())) return;
 
-        match.traps().onPlaceConfirmed(player, slot);
+        match.traps().onPlaceConfirmed(player, slot, secondPoint, target);
     }
 
     /**
@@ -155,6 +156,19 @@ public final class ServerPacketHandler {
         if (match.survivorStateOf(player.getUUID()) != SurvivorState.CRAWLING) return;
 
         match.survivors().onStandUpAttempt(player);
+    }
+
+    /**
+     * Гравець у капкані натиснув F, погодившись почати спробу
+     * визволення. Роль/фазу тут не перевіряємо додатково — сам факт,
+     * що {@code TrapModule} має для нього стан "чекає F", уже означає,
+     * що він жертва в активному капкані (див. {@code TrapModule.onEscapeStart}).
+     */
+    public static void onTrapEscapeStart(ServerPlayer player) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+
+        match.traps().onEscapeStart(player);
     }
 
     public static void onRescueHold(ServerPlayer player, boolean holding) {

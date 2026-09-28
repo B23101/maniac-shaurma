@@ -1,10 +1,10 @@
 {
   "format_version": "1.8.0",
   "animations": {
-    "animation.fuel_canister.idle": {
+    "idle": {
       "loop": true,
       "animation_length": 2.0,
-      "comment": "Заглушка: легке погойдування каністри в руці. Художник замінює на свою анімацію, ім'я 'animation.fuel_canister.idle' лишити незмінним — саме його читає FuelCanisterItem.registerControllers через RawAnimation.begin().thenLoop(\"idle\").",
+      "comment": "Заглушка: легке погойдування каністри в руці. Художник замінює на свою анімацію, ім'я 'idle' лишити незмінним — саме його читає FuelCanisterItem.registerControllers через RawAnimation.begin().thenLoop(\"idle\").",
       "bones": {
         "root": {
           "rotation": {

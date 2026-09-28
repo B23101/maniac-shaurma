@@ -13,13 +13,13 @@ import com.log_to_kot.maniacmod.net.s2c.actionprogress.StandUpProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import dev.shaurmalib.common.overlay.ActionBarMessageType;
+import com.log_to_kot.maniacmod.registry.ModParticles;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import dev.shaurmalib.common.lock.LockType;
 import dev.shaurmalib.forge.stamina.StaminaRules;
 import dev.shaurmalib.forge.stamina.StaminaService;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -661,12 +661,27 @@ public final class SurvivorModule implements PhaseListener {
         // гравець повзе, доки не натисне пробіл (onStandUpAttempt нижче).
         // Чи зламана нога — залежить від ВИСОТИ (legBreakChanceFor):
         // 4–5 блоків лише лягає, з 6 з'являється шанс, що росте до
-        // максимуму. Рішення приймається зараз, але застосовується лише ПІСЛЯ вставання — так дизайн
-        // "CRAWLING = лежить, BROKEN_LEG = ходить без стаміни" не
-        // конфліктує: це два послідовні стани, не одночасні.
+        // максимуму. Перелом ЧУТИ І ВИДНО одразу (хруст + частинки нижче),
+        // а СТАН BROKEN_LEG (без стаміни/стрибка) вмикається після вставання —
+        // так дизайн "CRAWLING = лежить, BROKEN_LEG = ходить без стаміни"
+        // не конфліктує: це два послідовні стани, не одночасні.
         pendingLegBreak.put(player.getUUID(), legBroken);
         beginCrawling(player);
+        if (legBroken) {
+            // Хруст лунає В МОМЕНТ ПРИЗЕМЛЕННЯ, а не коли гравець
+            // підвівся: інакше виглядало, що ногу зламано вставанням.
+            // Стан BROKEN_LEG (без стаміни/стрибка) застосується вже
+            // після вставання — лежачий і так не рухається.
+            playLegBreakEffects(player);
+        }
         return true;
+    }
+
+    /** Хрускіт кісток + частинки — спільне для падіння й пасток. */
+    private void playLegBreakEffects(ServerPlayer player) {
+        player.level().playSound(null, player.blockPosition(),
+            ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+        spawnLegBreakParticles(player);
     }
 
     /**
@@ -762,9 +777,7 @@ public final class SurvivorModule implements PhaseListener {
         if (current != SurvivorState.HEALTHY) return false; // уже BROKEN_LEG / лежить
 
         match().setSurvivorState(id, SurvivorState.BROKEN_LEG);
-        player.level().playSound(null, player.blockPosition(),
-            ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
-        spawnLegBreakParticles(player);
+        playLegBreakEffects(player);
         sendVitals(player, true);
         broadcastRosterFor(player);
         return true;
@@ -790,9 +803,9 @@ public final class SurvivorModule implements PhaseListener {
         if (!(player.level() instanceof ServerLevel level)) return;
         for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
             if (viewer.serverLevel() != level) continue;
-            level.sendParticles(viewer, ParticleTypes.DAMAGE_INDICATOR, true,
-                player.getX(), player.getY() + 1.0, player.getZ(),
-                15, 0.3, 0.5, 0.3, 0.08);
+            level.sendParticles(viewer, ModParticles.BONE_SHARD.get(), true,
+                player.getX(), player.getY() + 0.5, player.getZ(),
+                14, 0.25, 0.4, 0.25, 0.10);
         }
     }
 
@@ -843,18 +856,8 @@ public final class SurvivorModule implements PhaseListener {
         Boolean legBroken = pendingLegBreak.remove(id);
         SurvivorState next = Boolean.TRUE.equals(legBroken) ? SurvivorState.BROKEN_LEG : SurvivorState.HEALTHY;
         match().setSurvivorState(id, next);
-        if (next == SurvivorState.BROKEN_LEG) {
-            // Хрускіт кісток — гравець дізнається про перелом одразу, як
-            // тільки встав (саме тут стан уперше стає BROKEN_LEG, не
-            // раніше: до вставання гравець лежав/повзав і ще не знав,
-            // ціла нога чи ні — те саме, що вирішує pendingLegBreak
-            // вище). Ванільний позиційний playSound, а не SoundCenter:
-            // подія серверна (тут, не в клієнтському хендлері), і має
-            // бути чутна всім поруч, а не лише самому гравцю.
-            player.level().playSound(null, player.blockPosition(),
-                ModSounds.BONE_BREAK.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
-            spawnLegBreakParticles(player);
-        }
+        // Звук/частинки перелому вже зіграні в onFall (момент падіння),
+        // тут лише застосовується наслідок — стан BROKEN_LEG.
         // Гравець встав — рухається знову, з поламаною ногою чи без.
         unlockMovement(player);
         hideStandUpProgress(player);

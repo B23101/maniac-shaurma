@@ -2,6 +2,8 @@ package com.log_to_kot.maniacmod.registry;
 
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.entity.BearTrapEntity;
+import com.log_to_kot.maniacmod.entity.ElectricWireEntity;
+import com.log_to_kot.maniacmod.entity.ElectricWireMountEntity;
 import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
 import net.minecraft.world.entity.EntityType;
@@ -94,6 +96,38 @@ public final class ModEntityTypes {
                 .noSummon()
                 .fireImmune()
                 .build("bear_trap"));
+
+    /**
+     * Електричний дріт — сутність-«тіло» пастки (ТЗ 2.3). Хітбокс
+     * маленький і майже не використовується: справжній бокс повертає
+     * перевизначений {@code ElectricWireEntity.getBoundingBox()} (AABB
+     * уздовж усього відрізка). Тут достатньо формального розміру, щоб
+     * EntityType був валідним (нульовий розмір ваніль не приймає).
+     */
+    public static final RegistryObject<EntityType<ElectricWireEntity>> ELECTRIC_WIRE =
+        ENTITY_TYPES.register("electric_wire", () ->
+            EntityType.Builder.<ElectricWireEntity>of(ElectricWireEntity::new, MobCategory.MISC)
+                .sized(0.2f, 0.2f)
+                .clientTrackingRange(16)
+                .updateInterval(10)
+                .noSummon()
+                .fireImmune()
+                .build("electric_wire"));
+
+    /**
+     * Кріплення електричного дроту (ТЗ 2.3): модель 3×3×4, ставиться по
+     * обидва кінці. Хітбокс — приблизно під модель; сутність невразлива
+     * й нецільова (приціл іде в САМ дріт, а не в опору).
+     */
+    public static final RegistryObject<EntityType<ElectricWireMountEntity>> ELECTRIC_WIRE_MOUNT =
+        ENTITY_TYPES.register("electric_wire_mount", () ->
+            EntityType.Builder.<ElectricWireMountEntity>of(ElectricWireMountEntity::new, MobCategory.MISC)
+                .sized(0.9f, 1.2f)
+                .clientTrackingRange(16)
+                .updateInterval(20)
+                .noSummon()
+                .fireImmune()
+                .build("electric_wire_mount"));
 
     // TODO(міграція maniacs): MANIAC EntityType переїжджає сюди разом
     // з модулем маньяків.

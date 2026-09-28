@@ -1,6 +1,6 @@
 package com.log_to_kot.maniacmod.mixin;
 
-import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.ClientLookLock;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -43,7 +43,10 @@ public abstract class MixinEntityTurnManiacStunned {
 
     @Inject(method = "turn", at = @At("HEAD"), cancellable = true)
     private void maniacmod$blockOwnTurnWhenStunned(double yRot, double xRot, CallbackInfo ci) {
-        if (!ClientMatchState.isManiacStunned()) return;
+        // Оглушення, струм і робота з генератором блокують поворот камери
+        // з різних причин, але правило «кого саме не пускати» живе в
+        // одному місці — ClientLookLock.
+        if (!ClientLookLock.isLocked()) return;
         // Лише СВІЙ гравець: у чужих сутностей поворот приходить із
         // сервера, і глушити його означало б розсинхронізувати модель.
         if ((Object) this != Minecraft.getInstance().player) return;

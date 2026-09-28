@@ -1,10 +1,10 @@
 {
   "format_version": "1.8.0",
   "animations": {
-    "animation.bear_trap.idle_open": {
+    "idle_open": {
       "loop": true,
       "animation_length": 2.0,
-      "comment": "Заглушка: розкритий капкан чекає. Щелепи піднято, легке тремтіння пружини. Ім'я 'animation.bear_trap.idle_open' лишити — його читає BearTrapEntity.registerControllers.",
+      "comment": "Заглушка: розкритий капкан чекає. Щелепи піднято, легке тремтіння пружини. Ім'я 'idle_open' лишити — його читає BearTrapEntity.registerControllers.",
       "bones": {
         "jaw_l": {
           "rotation": {
@@ -55,10 +55,10 @@
         }
       }
     },
-    "animation.bear_trap.idle_closed": {
-      "loop": true,
-      "animation_length": 2.0,
-      "comment": "Заглушка: захлопнутий. Перші 0.25 с — клацання (щелепи з ±65° до 0°), далі нерухома поза. Ім'я лишити — його читає BearTrapEntity.registerControllers.",
+    "snap": {
+      "loop": false,
+      "animation_length": 0.25,
+      "comment": "ТЗ 1.1: ОКРЕМА анімація моменту захлопування — щелепи різко змикаються (з ±65° до 0°) за чверть секунди. Програється ОДИН раз у момент спрацювання (BearTrapEntity.ANIM_SNAPPED: thenPlay('snap')), після чого контролер переходить у 'catch_loop'. Ім'я 'snap' лишити — його читає BearTrapEntity.",
       "bones": {
         "jaw_l": {
           "rotation": {
@@ -70,13 +70,6 @@
               ]
             },
             "0.25": {
-              "vector": [
-                0,
-                0,
-                0
-              ]
-            },
-            "2.0": {
               "vector": [
                 0,
                 0,
@@ -99,6 +92,70 @@
                 0,
                 0,
                 0
+              ]
+            }
+          }
+        }
+      }
+    },
+    "catch_loop": {
+      "loop": true,
+      "animation_length": 2.0,
+      "comment": "Заглушка: капкан ЗАХЛОПНУВСЯ й тримає жертву — щелепи зімкнуті, легке дрижання, наче хтось смикається. Це HOLD-поза після одноразового 'snap'; ім'я 'catch_loop' лишити — його читає BearTrapEntity.",
+      "bones": {
+        "jaw_l": {
+          "rotation": {
+            "0.0": {
+              "vector": [
+                0,
+                0,
+                0
+              ]
+            },
+            "0.5": {
+              "vector": [
+                0,
+                0,
+                -2
+              ]
+            },
+            "1.5": {
+              "vector": [
+                0,
+                0,
+                1
+              ]
+            },
+            "2.0": {
+              "vector": [
+                0,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        "jaw_r": {
+          "rotation": {
+            "0.0": {
+              "vector": [
+                0,
+                0,
+                0
+              ]
+            },
+            "0.5": {
+              "vector": [
+                0,
+                0,
+                2
+              ]
+            },
+            "1.5": {
+              "vector": [
+                0,
+                0,
+                -1
               ]
             },
             "2.0": {

@@ -6,6 +6,7 @@ import com.log_to_kot.maniacmod.core.match.ManiacChatChannels;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hint.GeneratorHintOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hint.GroundItemHintOverlay;
+import com.log_to_kot.maniacmod.client.overlay.hint.TrapEscapeHintOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorCompletedOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.RescueOverlay;
@@ -22,6 +23,8 @@ import com.log_to_kot.maniacmod.client.renderer.CrowbarDurabilityDecorator;
 import com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator;
 import com.log_to_kot.maniacmod.client.renderer.GroundItemRenderer;
 import com.log_to_kot.maniacmod.client.renderer.BearTrapRenderer;
+import com.log_to_kot.maniacmod.client.renderer.ElectricWireMountRenderer;
+import com.log_to_kot.maniacmod.client.renderer.ElectricWireRenderer;
 import com.log_to_kot.maniacmod.client.renderer.GeneratorRenderer;
 import com.log_to_kot.maniacmod.client.renderer.maniac.ManiacRenderHandler;
 import com.log_to_kot.maniacmod.registry.ModEntityTypes;
@@ -34,6 +37,7 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.EntityRenderersEvent;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
 import net.minecraftforge.client.event.RegisterItemDecorationsEvent;
+import net.minecraftforge.client.event.RegisterParticleProvidersEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
 import net.minecraftforge.common.MinecraftForge;
@@ -83,6 +87,19 @@ public final class ClientSetup {
         // клієнтських реєстрацій у цьому методі. Файл самої анімації:
         // assets/maniacmod/player_animations/medkit_use.json.
         com.log_to_kot.maniacmod.items.LiveHeldItemAction.registerUsePose("medkit");
+
+        // Пози СТАНУ ТІЛА — лежачий, ремонт, залив, підбір — малюють
+        // міксини на PlayerModel.setupAnim (MixinDownedPoseThirdPerson,
+        // MixinGeneratorWorkThirdPerson), не PAL: PAL-шар не перекривав
+        // ванільну SWIMMING-позу, і вони накладались одна на одну.
+        // Ремонт/залив/підбір рук — через MixinGeneratorWorkThirdPerson
+        // (прямий запис у PlayerModel.setupAnim, як у ліхтарика), не PAL.
+
+        // Поза руки для ліхтарика в третій особі більше НЕ через
+        // PAL/LiveHeldItemAction — див. MixinFlashlightHoldUpThirdPerson
+        // (пряма правка PlayerModel.setupAnim, 1:1 з підходом
+        // NotEnoughAnimations). Перша особа лишається окремим міксом,
+        // MixinHoldFlashlightPose, на ItemInHandRenderer.
 
         // Бібліотека сама малює дефолтну шкалу стаміни по центру екрана
         // (shaurma-lib StaminaClientHooks), поки withStamina() підключено —
@@ -139,6 +156,8 @@ public final class ClientSetup {
         event.registerEntityRenderer(ModEntityTypes.GROUND_ITEM.get(), GroundItemRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.GENERATOR.get(), GeneratorRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.BEAR_TRAP.get(), BearTrapRenderer::new);
+        event.registerEntityRenderer(ModEntityTypes.ELECTRIC_WIRE.get(), ElectricWireRenderer::new);
+        event.registerEntityRenderer(ModEntityTypes.ELECTRIC_WIRE_MOUNT.get(), ElectricWireMountRenderer::new);
         // Рендерер маньяка не реєструється за EntityType (усі маньяки —
         // звичайні Player), тому тут лише будується його контекст; саме
         // малювання підміняє ванільний рендер гравця через
@@ -158,6 +177,12 @@ public final class ClientSetup {
         event.register(ModItems.get("crowbar").get(), new CrowbarDurabilityDecorator());
     }
 
+    /** Кастомні частинки: провайдери й кадри ({@code particles/*.json}). */
+    @SubscribeEvent
+    public static void onRegisterParticleProviders(RegisterParticleProvidersEvent event) {
+        com.log_to_kot.maniacmod.client.particle.ManiacParticles.register(event);
+    }
+
     @SubscribeEvent
     public static void onRegisterOverlays(RegisterGuiOverlaysEvent event) {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_progress",
@@ -169,6 +194,9 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_ground_item_hint",
             (gui, graphics, partialTick, width, height) ->
                 GroundItemHintOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_trap_escape_hint",
+            (gui, graphics, partialTick, width, height) ->
+                TrapEscapeHintOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_generator_completed",
             (gui, graphics, partialTick, width, height) ->
                 GeneratorCompletedOverlay.render(graphics));

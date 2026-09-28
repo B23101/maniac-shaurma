@@ -8,6 +8,8 @@ import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.BearTrapEntity;
+import com.log_to_kot.maniacmod.entity.ElectricWireEntity;
+import com.log_to_kot.maniacmod.items.GeoScissorsItem;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.map.minigame.TargetMinigameSpec;
 import com.log_to_kot.maniacmod.net.ModNetwork;
@@ -16,6 +18,10 @@ import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameResultPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.TrapEscapePromptPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.TrapVictimGlowPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.WireShockPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.TrapEscapeAttemptPacket;
 import com.log_to_kot.maniacmod.net.s2c.traps.TrapCatalogPacket;
 import com.log_to_kot.maniacmod.net.s2c.traps.TrapLoadoutPacket;
 import com.log_to_kot.maniacmod.registry.ModSounds;
@@ -27,8 +33,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -109,8 +118,53 @@ public final class TrapModule implements PhaseListener {
      */
     private final Map<UUID, TrapEscapeMinigame> escapes = new HashMap<>();
 
+    /**
+     * UUID жертви → скільки тіків лишилось, щоб натиснути F і почати
+     * саму спробу ({@link #escapes}). Запис тут — це стан "капкан щойно
+     * захлопнувся, клієнт бачить текстову підказку", ДО того, як
+     * гравець натиснув F і повзунок узагалі почав рухатись.
+     *
+     * ── Навіщо окремий стан, а не одразу {@link #escapes} ────────────
+     * За дизайном гравець спершу бачить лише напис "Натисни F" — без
+     * запущеного повзунка, без тайм-ауту самої міні-гри. Секунди, що
+     * йдуть на прочитання підказки й натискання клавіші, НЕ повинні
+     * витрачати час {@code trapEscapeTicks} (інакше повільна реакція
+     * забирала б шанс ще до першого влучання). Тому в цьому записі
+     * лише окремий, коротший ліміт {@code trapEscapePromptTicks} — і
+     * лише коли він мине НАТИСНУТИМ F, стартує {@link TrapEscapeMinigame}
+     * зі своїм власним годинником.
+     */
+    private final Map<UUID, Integer> escapePromptTicks = new HashMap<>();
+
+    /** UUID жертви → UUID капкана, у якому вона чекає F (для {@link #onEscapeStart}). */
+    private final Map<UUID, UUID> escapePromptTrap = new HashMap<>();
+
     /** Лише для розкладки міні-гри (позиція цілі, seed) — ігровий стан не тримає. */
     private final Random rng = new Random();
+
+    /**
+     * UUID маньяка → ПЕРША точка вже встановленого дроту, що чекає на
+     * другу (ТЗ 2.1). Запису немає = маньяк ще не вибрав жодної точки.
+     * Це стан ТИМЧАСОВОГО вибору, а не матчeвий: він живе лише між двома
+     * ПКМ одного розміщення.
+     */
+    private final Map<UUID, BlockPos> pendingFirstPoint = new HashMap<>();
+
+    /**
+     * Активний удар струмом (ТЗ 5). Ключ — UUID дроту-сутності, бо
+     * охопити може лише одна людина на дріт (ТЗ 7).
+     */
+    private final Map<UUID, WireShock> wireShocks = new HashMap<>();
+
+    /**
+     * Одна сесія удару струмом.
+     *
+     * @param victimId  хто зараз під струмом
+     * @param ticksLeft скільки тіків ще діє (від {@code electricWireShockTicks})
+     * @param elapsed   скільки тіків МИНУЛО — за ним раз на 20 тіків
+     *                  наноситься шкода й грає наступний звук
+     */
+    private record WireShock(UUID victimId, int ticksLeft, int elapsed) {}
 
     /**
      * UUID капкана → тіків до наступного звуку боротьби жертви.
@@ -127,6 +181,17 @@ public final class TrapModule implements PhaseListener {
      * клацає, і лише потім починається боротьба.
      */
     private final Map<UUID, Integer> struggleCooldown = new HashMap<>();
+
+    /**
+     * UUID капкана → скільки разів боротьби ще МОЖНА програти.
+     *
+     * <p>Раніше звук боротьби повторювався, доки капкан тримав жертву, —
+     * тобто НЕСКІНЧЕННО, і саме це було претензією з ТЗ ("безкінечний
+     * звук зловлення"). Тепер лічильник скінченний і береться з
+     * {@code ConfigSchema.BEAR_TRAP_STRUGGLE_REPEATS}: капкан клацнув,
+     * кілька разів смикнувся — і затих.</p>
+     */
+    private final Map<UUID, Integer> strugglePlaysLeft = new HashMap<>();
 
     /** Тривалість звуку боротьби в тіках; 0 — файл недоступний, звук не граємо. */
     private final int struggleSoundTicks = OggSoundLength.ticksOf("trap_struggle");
@@ -191,9 +256,19 @@ public final class TrapModule implements PhaseListener {
         // ті самі UUID не повторяться, але тримати мертві записи нема сенсу
         // (і саме цей виклик робить скидання повним, а не частковим).
         struggleCooldown.clear();
+        strugglePlaysLeft.clear();
+        pendingFirstPoint.clear();
+        wireShocks.clear();
         victims.clear();
+        // Підсвітка жертв не переживає матч: id сутностей зникнуть, а
+        // клієнтський шар треба явно погасити, інакше наступний матч
+        // почнеться з чужими контурами (ті самі id теоретично могли б
+        // належати новим сутностям).
+        broadcastVictimGlow();
         immunity.clear();
         closeAllEscapes(players);
+        escapePromptTicks.clear();
+        escapePromptTrap.clear();
         java.util.Arrays.fill(slotCooldown, 0);
         // chosenSlots чистимо лише при поверненні в LOBBY/RESET: вибір у
         // меню робиться ДО ігрової фази (ROLE_REVEAL — теж неігрова), і
@@ -210,6 +285,7 @@ public final class TrapModule implements PhaseListener {
         tickImmunity();
         // Не звільнений, але вибулий / від'єднаний / більше не виживий — знімаємо лок.
         releaseInvalidVictims(players);
+        tickEscapePrompts(players);
         tickEscapes(players);
     }
 
@@ -377,46 +453,178 @@ public final class TrapModule implements PhaseListener {
      *
      * @return результат: {@code OK} — поставлено; інше — причина відмови для повідомлення
      */
-    public TrapArchetype.PlacementResult onPlaceConfirmed(ServerPlayer maniac, int slot) {
+    public TrapArchetype.PlacementResult onPlaceConfirmed(ServerPlayer maniac, int slot, boolean secondPoint,
+                                                          BlockPos clientTarget) {
         MatchOrchestrator m = match();
         if (m == null || !m.isManiac(maniac.getUUID())) return TrapArchetype.PlacementResult.UNAVAILABLE;
         if (!m.phases().allows(PhaseRule.TRAPS)) return TrapArchetype.PlacementResult.UNAVAILABLE;
 
-        BlockPos floor = TrapAiming.targetFloor(maniac.level(), maniac,
-            ManiacConfigs.get(ConfigSchema.TRAP_PLACE_RANGE_BLOCKS));
-        if (floor == null) return TrapArchetype.PlacementResult.TOO_FAR;
+        TrapArchetype type = trapForSlot(slot);
+        if (type == null) return TrapArchetype.PlacementResult.UNAVAILABLE;
 
-        TrapArchetype.PlacementResult result = check(maniac, slot, floor);
+        BlockPos point = resolveTarget(maniac, clientTarget);
+        if (point == null) {
+            notifyPlaceFailure(maniac, TrapArchetype.PlacementResult.TOO_FAR);
+            return TrapArchetype.PlacementResult.TOO_FAR;
+        }
+
+        // TWO_POINTS (електричний дріт) — окремий шлях: спершу перша точка,
+        // потім друга + перевірка пари. SINGLE_BLOCK (капкан, міна) — як було.
+        if (type.placementShape() == TrapArchetype.PlacementShape.TWO_POINTS) {
+            return confirmTwoPoint(maniac, slot, type, point, secondPoint);
+        }
+
+        TrapArchetype.PlacementResult result = check(maniac, slot, point);
         if (!result.ok()) {
-            notify(maniac, ActionBarMessageType.ERROR, "maniacmod.trap.place_" + result.name().toLowerCase());
+            notifyPlaceFailure(maniac, result);
             return result;
         }
 
-        TrapArchetype type = trapForSlot(slot);
-        Entity body = type.spawn(maniac.serverLevel(), floor, maniac);
+        Entity body = type.spawn(maniac.serverLevel(), point, maniac);
         if (body == null) return TrapArchetype.PlacementResult.NO_ROOM_ABOVE;
 
-        placed.put(body.getUUID(), new PlacedTrap(type, body.getUUID()));
-
-        int cooldown = type.placementCooldownTicks();
-        slotCooldown[slot] = cooldown;
-        ModNetwork.toPlayer(maniac,
-            new AbilityCooldownPacket(AbilityCooldownPacket.trapId(slot), cooldown));
-
-        // Звук установки — з МІСЦЯ ПАСТКИ, а не з маньяка: чутно тому, хто
-        // поруч, і саме там, де щось поставили. Ванільний позиційний
-        // playSound, а не SoundCenter — подія серверна й має бути чутна
-        // всім поблизу, а не лише тому, хто її викликав.
-        maniac.serverLevel().playSound(null, floor,
+        finishPlacement(maniac, slot, type, body, point);
+        maniac.serverLevel().playSound(null, point,
             ModSounds.TRAP_PLACE.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
         return TrapArchetype.PlacementResult.OK;
     }
 
-    /** Чи на цьому блоці вже стоїть пастка (будь-якого типу). */
+    /**
+     * Який блок вважати обраним. Пріоритет — блок, який ПОКАЗУВАВ клієнт
+     * (щоб пастка стала рівно там, де світився квадрат), але лише якщо
+     * погляд гравця справді проходить біля нього й він у межах дальності.
+     * Інакше — власний рейкаст сервера (старий шлях): так клієнт, який
+     * прислав нісенітницю, отримує звичайну відмову, а не обхід правил.
+     */
+    private BlockPos resolveTarget(ServerPlayer maniac, BlockPos clientTarget) {
+        double range = ManiacConfigs.get(ConfigSchema.TRAP_PLACE_RANGE_BLOCKS);
+        if (clientTarget != null
+            && maniac.level().isLoaded(clientTarget)
+            && TrapPlacementRules.isWithinReach(clientTarget, maniac)
+            && TrapAiming.isLookingAtFloor(maniac.level(), maniac, clientTarget, range)) {
+            return clientTarget;
+        }
+        return TrapAiming.targetFloor(maniac.level(), maniac, range);
+    }
+
+    /**
+     * Друге підтвердження для {@code TWO_POINTS}-пастки (електричний дріт).
+     *
+     * <p>{@code secondPoint=false} — маньяк вибрав ПЕРШУ точку: її треба
+     * лише перевірити як окрему опору й запам'ятати. {@code true} — ДРУГА:
+     * перевіряємо пару й ставимо пастку.</p>
+     *
+     * <p>Якщо друга точка прийшла без першої (клієнт загубив стан,
+     * модифікований клієнт, перезайшов) — трактуємо її як першу, а не
+     * відкидаємо: так те саме натискання не «губиться» і гравець просто
+     * продовжує вибір з поточного погляду.</p>
+     */
+    private TrapArchetype.PlacementResult confirmTwoPoint(ServerPlayer maniac, int slot, TrapArchetype type,
+                                                          BlockPos point, boolean secondPoint) {
+        UUID id = maniac.getUUID();
+        BlockPos first = pendingFirstPoint.get(id);
+
+        if (!secondPoint || first == null) {
+            TrapArchetype.PlacementResult single = check(maniac, slot, point);
+            if (!single.ok()) {
+                pendingFirstPoint.remove(id);
+                notifyPlaceFailure(maniac, single);
+                return single;
+            }
+            pendingFirstPoint.put(id, point);
+            // Тихо підтверджуємо першу точку — звук самого встановлення
+            // грає аж на другій, коли пастка реально з'являється.
+            notify(maniac, ActionBarMessageType.INFO, "maniacmod.trap.wire_first_point");
+            return TrapArchetype.PlacementResult.OK;
+        }
+
+        pendingFirstPoint.remove(id);
+        TrapArchetype.PlacementResult pair = checkPair(maniac, slot, type, first, point);
+        if (!pair.ok()) {
+            notifyPlaceFailure(maniac, pair);
+            return pair;
+        }
+
+        Entity body = type.spawn(maniac.serverLevel(), first, point, maniac);
+        if (body == null) return TrapArchetype.PlacementResult.NO_ROOM_ABOVE;
+
+        finishPlacement(maniac, slot, type, body, point);
+        maniac.serverLevel().playSound(null, point,
+            ModSounds.WIRE_PLACE.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
+        return TrapArchetype.PlacementResult.OK;
+    }
+
+    /** Записує тіло пастки в реєстр, ставить перезарядку слоту й шле її клієнту. */
+    private void finishPlacement(ServerPlayer maniac, int slot, TrapArchetype type, Entity body, BlockPos at) {
+        placed.put(body.getUUID(), new PlacedTrap(type, body.getUUID()));
+        int cooldown = type.placementCooldownTicks();
+        slotCooldown[slot] = cooldown;
+        ModNetwork.toPlayer(maniac,
+            new AbilityCooldownPacket(AbilityCooldownPacket.trapId(slot), cooldown));
+    }
+
+    /**
+     * Спільний вихід відмови розміщення: локальний ключ для повідомлення
+     * маньяку. Один метод, щоб усі нові причини (зокрема для дроту)
+     * отримували текст без дублювання рядка.
+     */
+    private void notifyPlaceFailure(ServerPlayer maniac, TrapArchetype.PlacementResult result) {
+        notify(maniac, ActionBarMessageType.ERROR, "maniacmod.trap.place_" + result.name().toLowerCase());
+    }
+
+    /**
+     * Перевірка ПАРИ точок для {@code TWO_POINTS}-пастки: спільні правила
+     * (не ближче до гравця, у межах дальності) для КОЖНОЇ точки, форма
+     * кожної точки окремо і, нарешті, обмеження самої пари (Y, довжина,
+     * перешкоди) — у архетипу.
+     */
+    private TrapArchetype.PlacementResult checkPair(ServerPlayer maniac, int slot, TrapArchetype type,
+                                                    BlockPos a, BlockPos b) {
+        if (slotCooldown[slot] > 0) return TrapArchetype.PlacementResult.UNAVAILABLE;
+        ServerLevel level = maniac.serverLevel();
+
+        for (BlockPos point : new BlockPos[] { a, b }) {
+            // Дальність — лише для щойно вибраної точки (b). Перша (a)
+            // пройшла її, коли її обирали; маньяк потім відійшов, щоб
+            // вибрати другу, тож повторна перевірка «від очей зараз»
+            // відхиляла б будь-який дріт довший за пів дальності.
+            TrapArchetype.PlacementResult shared = point.equals(b)
+                ? TrapPlacementRules.check(level, point, maniac)
+                : TrapPlacementRules.checkIgnoringReach(level, point, maniac);
+            if (!shared.ok()) return shared;
+            TrapArchetype.PlacementResult own = type.validatePlacement(level, point);
+            if (!own.ok()) return own;
+            if (isOccupied(level, point)) return TrapArchetype.PlacementResult.OCCUPIED;
+        }
+
+        return type.validatePlacement(level, a, b);
+    }
+
+    /**
+     * Чи коло цього блока вже стоїть пастка (будь-якого типу). Дріт
+     * враховується так само, як капкан: інакше маньяк ставив би дві
+     * пастки в одній точці, а хітбокс дроту (увесь його відрізок)
+     * перетинався б із другою пасткою.
+     */
     private boolean isOccupied(ServerLevel level, BlockPos floor) {
         AABB box = new AABB(floor.above());
-        for (Entity e : level.getEntities((Entity) null, box.inflate(0.3), x -> x instanceof BearTrapEntity)) {
+        for (Entity e : level.getEntities((Entity) null, box.inflate(0.3),
+                x -> x instanceof BearTrapEntity)) {
             if (isRegistered(e)) return true;
+        }
+
+        // Дріт має крихітний бокс у центрі (див. WireGeometry), тож
+        // перетин боксів його не бачить — міряємо відстань від центру
+        // блока до ВІДРІЗКА кожного дроту поруч.
+        double maxLen = ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_MAX_LENGTH_BLOCKS);
+        Vec3 probe = ElectricWireArchetype.wireAnchor(level, floor);
+        double limitSqr = 0.6 * 0.6;
+        for (ElectricWireEntity wire : level.getEntitiesOfClass(ElectricWireEntity.class,
+                box.inflate(maxLen + 1.0))) {
+            if (!isRegistered(wire)) continue;
+            if (WireGeometry.distanceToSegmentSqr(probe, wire.anchorA(), wire.anchorB()) < limitSqr) {
+                return true;
+            }
         }
         return false;
     }
@@ -472,6 +680,12 @@ public final class TrapModule implements PhaseListener {
      * тімейт має почути, що когось узяло, навіть коли не бачить.
      */
     private void tickStruggle(BearTrapEntity trap) {
+        // Скінченна кількість повторів (ТЗ: «звук не повинен
+        // зациклюватися нескінченно»). Лічильник виставлений у
+        // {@link #trigger} і не поповнюється, доки капкан тримає ту саму
+        // жертву, — тому звук природно затихає.
+        int playsLeft = strugglePlaysLeft.getOrDefault(trap.getUUID(), 0);
+        if (playsLeft <= 0) return;
         if (struggleSoundTicks <= 0) return;
 
         int left = struggleCooldown.getOrDefault(trap.getUUID(), 0);
@@ -482,6 +696,7 @@ public final class TrapModule implements PhaseListener {
 
         trap.level().playSound(null, trap.blockPosition(),
             ModSounds.TRAP_STRUGGLE.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
+        strugglePlaysLeft.put(trap.getUUID(), playsLeft - 1);
         // -1, а не повна довжина: тік, у якому ми граємо, теж витрачається
         // на відлік, тож наступне програвання стане рівно за один період
         // від цього — без шва на стику двох файлів.
@@ -509,6 +724,262 @@ public final class TrapModule implements PhaseListener {
         return standsUp(m.survivorStateOf(candidate.getUUID()));
     }
 
+    // ── Електричний дріт (ТЗ 2-9) ─────────────────────────────────────────
+
+    /**
+     * Тік дроту (викликається з {@code ElectricWireEntity.tick}).
+     *
+     * <p>Або веде вже активний удар струмом, або перевіряє, чи хтось його
+     * перетнув. Торкання ловиться ТОЧНОЮ відстанню до ВІДРІЗКА, а не
+     * лише перетином AABB: хітбокс дроту — прямокутник навколо всієї
+     * лінії, тож у його кутах гравець стояв би «в пастці», фізично не
+     * торкаючись дроту.</p>
+     */
+    public void tickWire(ElectricWireEntity wire) {
+        PlacedTrap info = placed.get(wire.getUUID());
+        if (info == null) return;
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return;
+
+        WireShock shock = wireShocks.get(wire.getUUID());
+        if (shock != null) {
+            tickShock(wire, shock);
+            return;
+        }
+
+        Vec3 a = wire.anchorA();
+        Vec3 b = wire.anchorB();
+
+        // Грубий відбір сусідів — велика рамка навколо дроту (лише
+        // прискорення). Саме торкання — ТОЧНЕ: відрізок дроту проти
+        // справжнього AABB гравця, тож ноги теж рахуються, а кут
+        // «порожнього прямокутника» діагоналі — ні.
+        for (ServerPlayer candidate : wire.level().getEntitiesOfClass(ServerPlayer.class,
+                wire.getBoundingBoxForCulling().inflate(0.5))) {
+            if (immunity.containsKey(candidate.getUUID())) continue;
+            if (victims.containsKey(candidate.getUUID())) continue;
+            if (!canCatch(candidate)) continue;
+            if (!info.type().shouldTrigger(candidate)) continue;
+            if (!WireGeometry.segmentTouchesBox(a, b, candidate.getBoundingBox())) continue;
+            startShock(wire, candidate);
+            return;
+        }
+    }
+
+    /** Жертва торкнулась дроту: починаємо удар струмом (ТЗ 5). */
+    private void startShock(ElectricWireEntity wire, ServerPlayer victim) {
+        wireShocks.put(wire.getUUID(), new WireShock(victim.getUUID(),
+            ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHOCK_TICKS), 0));
+        victims.put(victim.getUUID(), wire.getUUID());
+        ManiacMod.lib().interactionLockModule()
+            .lock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
+
+        MatchOrchestrator m = match();
+        if (m != null) m.survivors().forceVitalsRefresh(victim);
+        // Окремий прапор для клієнта: рух і так глушиться trapped, але
+        // дріт додатково блокує камеру й трясе нею (ТЗ 5).
+        ModNetwork.toPlayer(victim, new WireShockPacket(true,
+            ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_DEGREES),
+            ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_HZ)));
+        broadcastVictimGlow();
+        playZap(wire, 0);
+    }
+
+    /** Раз на тік активного удару: секундна шкода, почергові звуки, частинки, завершення. */
+    private void tickShock(ElectricWireEntity wire, WireShock shock) {
+        MatchOrchestrator m = match();
+        ServerPlayer victim = onlinePlayer(shock.victimId());
+        // Жертва зникла або більше не «на ногах» (непритомність — пастка
+        // мусить відпустити, ТЗ 7) — завершуємо й прибираємо пастку.
+        if (victim == null || m == null || !canCatch(victim)) {
+            endShock(wire, victim, true);
+            return;
+        }
+
+        if (shock.elapsed() % 20 == 0) {
+            int damage = ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_DAMAGE_PER_SECOND);
+            if (damage > 0 && m.damageSurvivor(victim.getUUID(), damage)) {
+                m.survivors().onSurvivorDowned(victim);
+            }
+            playZap(wire, shock.elapsed() / 20);
+        }
+        spawnShockParticles(victim);
+
+        int ticksLeft = shock.ticksLeft() - 1;
+        if (ticksLeft <= 0) {
+            // 15 секунд минуло — пастка повністю зникає, жертва вільна (ТЗ 5.1/7).
+            endShock(wire, victim, true);
+            return;
+        }
+        wireShocks.put(wire.getUUID(), new WireShock(shock.victimId(), ticksLeft, shock.elapsed() + 1));
+    }
+
+    /**
+     * Завершує удар струмом. {@code removeTrap} прибирає сам дріт (і,
+     * через {@code remove()}, обидва кріплення) — за ТЗ 7 пастка після
+     * спрацювання не залишається.
+     */
+    private void endShock(ElectricWireEntity wire, ServerPlayer victim, boolean removeTrap) {
+        wireShocks.remove(wire.getUUID());
+        if (victim != null) {
+            victims.remove(victim.getUUID());
+            ManiacMod.lib().interactionLockModule()
+                .unlock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
+            ModNetwork.toPlayer(victim, WireShockPacket.stop());
+            // Імунітет — як після капкана: гравець стоїть на тому місці,
+            // де був дріт.
+            immunity.put(victim.getUUID(), RELEASE_IMMUNITY_TICKS);
+            MatchOrchestrator m = match();
+            if (m != null) m.survivors().forceVitalsRefresh(victim);
+        }
+        broadcastVictimGlow();
+        if (removeTrap) {
+            placed.remove(wire.getUUID());
+            wire.discard();
+        }
+    }
+
+    /**
+     * Geo-ножиці по дроту (ПКМ, ТЗ 4/8). Спільна точка входу і для
+     * нейтралізації ДО спрацювання, і для звільнення жертви, яка вже
+     * під струмом (ТЗ: «якщо переріже, поки гравець попався — вибирається
+     * зразу») — тому логіка одна.
+     */
+    public void onWireScissors(ServerPlayer player, ElectricWireEntity wire) {
+        if (!placed.containsKey(wire.getUUID())) return;
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return;
+
+        // Дальність рахуємо до найближчої точки ВІДРІЗКА, а не до центру
+        // сутності: дріт довгий, і «в центр» означало б різати лише з
+        // середини.
+        Vec3 a = wire.anchorA();
+        Vec3 b = wire.anchorB();
+        // Запас на радіус прицілу ({@link #SCISSORS_AIM_RADIUS}): промінь
+        // міг зачепити дріт трохи далі за номінальну дальність.
+        double range = ManiacConfigs.get(ConfigSchema.GEO_SCISSORS_RANGE_BLOCKS) + SCISSORS_AIM_RADIUS;
+        if (distanceToSegmentSqr(player.getEyePosition(), a, b) > range * range) return;
+
+        ItemStack scissors = scissorsInHand(player);
+        if (scissors.isEmpty()) return;
+
+        // Звук розмінування — з місця дроту, чутний обом сторонам.
+        player.level().playSound(null, wire.blockPosition(),
+            ModSounds.WIRE_CUT.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+
+        // Звільняємо жертву, якщо хтось під струмом (endShock сам знімає
+        // лок і шле WireShockPacket(false)).
+        WireShock shock = wireShocks.get(wire.getUUID());
+        ServerPlayer victim = shock == null ? null : onlinePlayer(shock.victimId());
+        endShock(wire, victim, false);
+
+        // Одноразовість: предмет зникає (ТЗ 4/8).
+        scissors.shrink(1);
+
+        placed.remove(wire.getUUID());
+        wire.discard();
+        broadcastVictimGlow();
+    }
+
+    /** Наскільки близько промінь погляду має пройти від дроту, щоб «влучити» (блоки). */
+    private static final double SCISSORS_AIM_RADIUS = 0.25;
+
+    /**
+     * ПКМ ножицями: ПРОМІНЬ погляду проти відрізків усіх дротів поруч.
+     * Вибираємо найближчий влучений, якщо його не закриває блок.
+     *
+     * Чому промінь, а не ванільний приціл сутності: у дроту немає
+     * хітбокса (див. {@link WireGeometry}), а AABB діагоналі — це великий
+     * порожній прямокутник, у який цілилися б повз сам дріт.
+     *
+     * @return {@code true}, якщо дріт перерізано
+     */
+    public boolean onScissorsUse(ServerPlayer player) {
+        if (scissorsInHand(player).isEmpty()) return false;
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return false;
+
+        ServerLevel level = player.serverLevel();
+        double range = ManiacConfigs.get(ConfigSchema.GEO_SCISSORS_RANGE_BLOCKS);
+        Vec3 eye = player.getEyePosition();
+        Vec3 look = player.getViewVector(1.0f).normalize();
+
+        // Блок на шляху променя закриває дріт за собою (не різати крізь стіну).
+        double blockDist = range;
+        var blockHit = level.clip(new net.minecraft.world.level.ClipContext(
+            eye, eye.add(look.scale(range)),
+            net.minecraft.world.level.ClipContext.Block.COLLIDER,
+            net.minecraft.world.level.ClipContext.Fluid.NONE, player));
+        if (blockHit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
+            blockDist = eye.distanceTo(blockHit.getLocation());
+        }
+
+        // Бокс сутності дроту — крихітний, у центрі; тому шукаємо з запасом
+        // на пів-довжини дроту, а не за перетином боксів.
+        double maxLen = ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_MAX_LENGTH_BLOCKS);
+        AABB search = player.getBoundingBox().inflate(range + maxLen + 1.0);
+
+        ElectricWireEntity best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (ElectricWireEntity wire : level.getEntitiesOfClass(ElectricWireEntity.class, search)) {
+            if (!placed.containsKey(wire.getUUID())) continue;
+            double d = WireGeometry.rayHitDistance(eye, look, range,
+                wire.anchorA(), wire.anchorB(), SCISSORS_AIM_RADIUS);
+            if (Double.isNaN(d)) continue;
+            if (d > blockDist + 0.3) continue;   // закритий блоком
+            if (d < bestDist) {
+                bestDist = d;
+                best = wire;
+            }
+        }
+        if (best == null) return false;
+
+        onWireScissors(player, best);
+        return true;
+    }
+
+    /** Ножиці в будь-якій руці, або {@code EMPTY} — зокрема для перевірки «а що тримає». */
+    private static ItemStack scissorsInHand(ServerPlayer player) {
+        if (player.getItemInHand(InteractionHand.MAIN_HAND).getItem() instanceof GeoScissorsItem) {
+            return player.getItemInHand(InteractionHand.MAIN_HAND);
+        }
+        if (player.getItemInHand(InteractionHand.OFF_HAND).getItem() instanceof GeoScissorsItem) {
+            return player.getItemInHand(InteractionHand.OFF_HAND);
+        }
+        return ItemStack.EMPTY;
+    }
+
+    /** Одна з ТРЬОХ звукових подій удару — почергово (ТЗ 6), не випадково. */
+    private void playZap(ElectricWireEntity wire, int index) {
+        var sound = switch (Math.floorMod(index, 3)) {
+            case 0 -> ModSounds.WIRE_ZAP;
+            case 1 -> ModSounds.WIRE_ZAP_2;
+            default -> ModSounds.WIRE_ZAP_3;
+        };
+        wire.level().playSound(null, wire.blockPosition(), sound.get(),
+            SoundSource.BLOCKS, 1.0f, 1.0f);
+    }
+
+    /**
+     * Електричні частинки по тілу жертви (ТЗ 5.4). Шлемо не-сильними
+     * (normal=false прибирає far-видимість) — ефект тілесний, він має
+     * бути прив'язаний до гравця й повторюватись щотіка.
+     */
+    private static void spawnShockParticles(ServerPlayer victim) {
+        if (!(victim.level() instanceof ServerLevel level)) return;
+        for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
+            if (viewer.serverLevel() != level) continue;
+            level.sendParticles(viewer, com.log_to_kot.maniacmod.registry.ModParticles.WIRE_SPARK.get(), true,
+                victim.getX(), victim.getY() + 0.9, victim.getZ(),
+                8, 0.35, 0.8, 0.35, 0.02);
+        }
+    }
+
+    /** Квадрат відстані від точки до ВІДРІЗКА (не до прямої й не до кінців). */
+    private static double distanceToSegmentSqr(Vec3 p, Vec3 a, Vec3 b) {
+        return WireGeometry.distanceToSegmentSqr(p, a, b);
+    }
+
     /** Чи стан гравця дозволяє тримати його в пастці (див. {@link #canCatch}). */
     private static boolean standsUp(SurvivorState state) {
         return state != null && !state.isCrawlOnly() && !state.isTerminal();
@@ -523,6 +994,16 @@ public final class TrapModule implements PhaseListener {
         trap.level().playSound(null, trap.blockPosition(),
             ModSounds.TRAP_SNAP.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
         struggleCooldown.put(trap.getUUID(), Math.max(1, struggleSoundTicks));
+        // Звук боротьби — СКІНЧЕННА кількість разів (ТЗ: без вічного
+        // циклу). 0 у конфігу — капкан лише клацає.
+        strugglePlaysLeft.put(trap.getUUID(),
+            ManiacConfigs.get(ConfigSchema.BEAR_TRAP_STRUGGLE_REPEATS));
+
+        // Візуальна підсвітка жертви — щоб було чітко видно, що вона в
+        // пастці (ТЗ 1.1). Сервер шле новий склад усім: жертва світиться
+        // контуром у КОЖНОГО гравця, а не лише в себе (це і є сенс —
+        // товариші мають знайти того, хто потрапив).
+        broadcastVictimGlow();
 
         // Жертву притягуємо до центру капкана: нога має опинитись «в зубах»,
         // а не збоку від моделі.
@@ -540,17 +1021,34 @@ public final class TrapModule implements PhaseListener {
         MatchOrchestrator m = match();
         if (m != null) m.survivors().forceVitalsRefresh(victim);
 
-        // А вже потім — міні-гра: клієнт вибирає заголовок екрана за
-        // власним станом «я в пастці», тож знімок HUD мусить прийти
-        // раніше за пакет відкриття (інакше на секунду блимнув би
-        // заголовок генератора).
-        startEscapeMinigame(victim, trap);
+        // А вже потім — підказка "Натисни F": клієнт вибирає її вигляд
+        // за власним станом «я в пастці» (той самий стиль тексту, що
+        // GeneratorHintOverlay), тож знімок HUD мусить прийти раніше за
+        // цей стан (інакше на кадр блимнула б чужа підказка).
+        openEscapePrompt(victim, trap);
     }
 
     // ── Саморятунок: міні-гра «попади в ціль» ─────────────────────────────
 
     /**
-     * Відкриває жертві спробу вибратися з капкана.
+     * Відкриває жертві ПІДКАЗКУ "Натисни F, щоб вибратися" — ще не саму
+     * міні-гру. Повзунок і відлік {@code trapEscapeTicks} не запущені:
+     * вони стартують лише в {@link #onEscapeStart}, коли гравець
+     * фактично натисне F. Тут лише виставляється короткий ліміт
+     * {@code trapEscapePromptTicks} на саме натискання (див. клас-докстрінг
+     * {@link #escapePromptTicks}).
+     */
+    private void openEscapePrompt(ServerPlayer victim, BearTrapEntity trap) {
+        escapePromptTicks.put(victim.getUUID(),
+            ManiacConfigs.get(ConfigSchema.TRAP_ESCAPE_PROMPT_TICKS));
+        escapePromptTrap.put(victim.getUUID(), trap.getUUID());
+        ModNetwork.toPlayer(victim, new TrapEscapePromptPacket(true));
+    }
+
+    /**
+     * Відкриває жертві спробу вибратися з капкана — викликається лише
+     * з {@link #onEscapeStart}, коли гравець натиснув F у відповідь на
+     * підказку.
      *
      * Спільна з генератором геометрія ({@link TargetMinigameSpec}), але
      * СВОЇ значення з конфігу — капкан і ремонт настроюються окремо.
@@ -562,7 +1060,7 @@ public final class TrapModule implements PhaseListener {
         double cursorSpeed = ManiacConfigs.get(ConfigSchema.TRAP_ESCAPE_CURSOR_SPEED);
         double hitZoneWidth = ManiacConfigs.get(ConfigSchema.TRAP_ESCAPE_HIT_ZONE_WIDTH);
         int hitsRequired = ManiacConfigs.get(ConfigSchema.TRAP_ESCAPE_HITS_REQUIRED);
-        double targetPosition = 0.15 + rng.nextDouble() * 0.70;
+        double targetPosition = randomTargetPosition();
 
         TargetMinigameSpec spec = new TargetMinigameSpec(
             rng.nextLong(), cursorSpeed, hitZoneWidth, targetPosition, hitsRequired);
@@ -583,6 +1081,28 @@ public final class TrapModule implements PhaseListener {
     }
 
     /**
+     * Гравець, що бачить підказку "Натисни F", фактично натиснув F.
+     *
+     * Мовчки ігнорує, якщо в гравця немає активної підказки (не в
+     * капкані, вже почав спробу, чи спроба вже закінчилась) — той самий
+     * стиль, що решта хендлерів C2S-намірів: клієнт може бути
+     * модифікований і слати пакет коли завгодно.
+     */
+    public void onEscapeStart(ServerPlayer player) {
+        UUID trapId = escapePromptTrap.remove(player.getUUID());
+        Integer left = escapePromptTicks.remove(player.getUUID());
+        if (trapId == null || left == null) return;
+
+        ModNetwork.toPlayer(player, new TrapEscapePromptPacket(false));
+        BearTrapEntity trap = trapEntity(trapId, player);
+        // Капкан зник (звільнений тимчасом ломом товариша) — підказка
+        // закрита без наслідків, розкривати міні-гру нема для чого.
+        if (trap == null) return;
+
+        startEscapeMinigame(player, trap);
+    }
+
+    /**
      * Клік у міні-грі визволення — приходить із {@code ServerPacketHandler}
      * (той самий пакет кліку, що й у міні-гри генератора: на клієнті все
      * одно відкритий лише один екран).
@@ -600,8 +1120,20 @@ public final class TrapModule implements PhaseListener {
         // розійшовся б із генераторним без причини.
         switch (game.attempt(cursorPosition,
                 ManiacConfigs.get(ConfigSchema.TARGET_MINIGAME_LAG_TOLERANCE_MS))) {
-            case HIT, MISS -> ModNetwork.toPlayer(player,
-                RepairMinigameProgressPacket.attempt(game.hits()));
+            case HIT, MISS -> {
+                // ТЗ 1.2: ціль ПЕРЕМІЩУЄТЬСЯ після КОЖНОЇ спроби — і
+                // після влучання, і після промаху. Сервер підставляє нову
+                // позицію у спеку (щоб наступний клік звірявся вже з нею)
+                // і везе її клієнту в тому самому пакеті, що й вердикт, —
+                // клієнт не вгадує, куди переїхала ціль.
+                rerollTarget(game);
+                ModNetwork.toPlayer(player, new TrapEscapeAttemptPacket(
+                    game.hits(),
+                    // ВЕРДИКТ із сервера, а не «число змінилось» — клієнту
+                    // потрібна окрема реакція на попадання й на промах.
+                    game.lastResult() == TrapEscapeMinigame.Result.HIT,
+                    game.spec().targetPosition()));
+            }
             case ESCAPED -> {
                 escapes.remove(player.getUUID());
                 ModNetwork.toPlayer(player, new RepairMinigameResultPacket(true));
@@ -609,6 +1141,23 @@ public final class TrapModule implements PhaseListener {
             }
         }
         return true;
+    }
+
+    /** Нова випадкова позиція цілі в межах смуги (та сама формула, що при відкритті гри). */
+    private double randomTargetPosition() {
+        return 0.15 + rng.nextDouble() * 0.70;
+    }
+
+    /**
+     * Переносить ціль міні-гри в нове місце, зберігаючи решту параметрів
+     * спроби. Використовується після кожної спроби (див.
+     * {@link #onEscapeAttempt}); при старті гри ціль ставить
+     * {@link #startEscapeMinigame}.
+     */
+    private void rerollTarget(TrapEscapeMinigame game) {
+        TargetMinigameSpec old = game.spec();
+        game.setSpec(new TargetMinigameSpec(old.seed(), old.cursorSpeed(), old.hitZoneWidth(),
+            randomTargetPosition(), old.hitsRequired()));
     }
 
     /**
@@ -626,6 +1175,35 @@ public final class TrapModule implements PhaseListener {
             struggleCooldown.remove(trap.getUUID());
         }
         notify(victim, ActionBarMessageType.SUCCESS, "maniacmod.trap.escape_success");
+    }
+
+    /**
+     * Раз на тік для кожної відкритої підказки "Натисни F". Час вийшов
+     * (гравець не встиг чи не захотів натиснути) — та сама доля, що
+     * провал самої міні-гри: підказка гасне, гравець лишається в
+     * капкані й чекає на товариша з ломом. Спроба вважається
+     * витраченою, як і у {@link #tickEscapes}, тож повторної підказки
+     * на це саме захлопування не буде.
+     */
+    private void tickEscapePrompts(List<ServerPlayer> players) {
+        for (Map.Entry<UUID, Integer> entry : new ArrayList<>(escapePromptTicks.entrySet())) {
+            UUID id = entry.getKey();
+            int left = entry.getValue() - 1;
+            if (left > 0) {
+                escapePromptTicks.put(id, left);
+                continue;
+            }
+
+            escapePromptTicks.remove(id);
+            escapePromptTrap.remove(id);
+            ServerPlayer player = onlinePlayer(id);
+            if (player == null) continue;
+            // Клієнт сам НЕ здогадається сховати підказку: isTrapped()
+            // лишається true. Тому сервер явно каже "ховай". Екран
+            // міні-гри ще не відкривався — закривати нічого.
+            ModNetwork.toPlayer(player, new TrapEscapePromptPacket(false));
+            notify(player, ActionBarMessageType.COOLDOWN, "maniacmod.trap.escape_timeout");
+        }
     }
 
     /**
@@ -653,23 +1231,39 @@ public final class TrapModule implements PhaseListener {
         }
     }
 
-    /** Закриває спробу визволення цього гравця, якщо вона є (напр. товариш зірвав капкан ломом). */
+    /**
+     * Закриває підказку "Натисни F" і/або активну спробу визволення
+     * цього гравця, якщо вони є (напр. товариш зірвав капкан ломом).
+     * Підказка ховається явним {@code TrapEscapePromptPacket(false)},
+     * відкритий екран міні-гри — {@code RepairMinigameResultPacket}.
+     */
     private void closeEscape(ServerPlayer player) {
+        if (escapePromptTicks.remove(player.getUUID()) != null) {
+            ModNetwork.toPlayer(player, new TrapEscapePromptPacket(false));
+        }
+        escapePromptTrap.remove(player.getUUID());
         if (escapes.remove(player.getUUID()) == null) return;
         ModNetwork.toPlayer(player, new RepairMinigameResultPacket(false));
     }
 
     /**
-     * Закриває УСІ відкриті спроби — вихід із ігрової фази чи кінець
-     * матчу. Без цього екран міні-гри лишився б висіти на екрані гравця
-     * (сервер уже нічого не тікає, отже й не надішле результат).
+     * Закриває УСІ відкриті підказки й спроби — вихід із ігрової фази
+     * чи кінець матчу. Без цього екран міні-гри лишився б висіти на
+     * екрані гравця (сервер уже нічого не тікає, отже й не надішле
+     * результат); підказку так само гасимо явним пакетом.
      */
     private void closeAllEscapes(List<ServerPlayer> players) {
         for (UUID id : new ArrayList<>(escapes.keySet())) {
             ServerPlayer player = onlinePlayer(id);
             if (player != null) ModNetwork.toPlayer(player, new RepairMinigameResultPacket(false));
         }
+        for (UUID id : new ArrayList<>(escapePromptTicks.keySet())) {
+            ServerPlayer player = onlinePlayer(id);
+            if (player != null) ModNetwork.toPlayer(player, new TrapEscapePromptPacket(false));
+        }
         escapes.clear();
+        escapePromptTicks.clear();
+        escapePromptTrap.clear();
     }
 
     /** Сутність капкана за UUID, якщо вона зараз завантажена у світі гравця. */
@@ -762,6 +1356,37 @@ public final class TrapModule implements PhaseListener {
         // ломом, а не через кадр-два.
         MatchOrchestrator m = match();
         if (m != null) m.survivors().forceVitalsRefresh(victim);
+
+        // Підсвітка знімається разом із локом — інакше вільний гравець
+        // ще світився б контуром «в пастці» (ТЗ 1.1 вимагає чіткої
+        // відповідності підсвітки стану).
+        broadcastVictimGlow();
+    }
+
+    /**
+     * Надсилає всім актуальний склад підсвічених жертв. ПОВНИЙ набір, а
+     * не дельту (див. {@code TrapVictimGlowPacket}) — тому викликається
+     * після будь-якої зміни {@link #victims}, а не лише на додавання.
+     *
+     * <p>Шлемо {@code toAll}, а не в конкретний вимір: клієнт світить
+     * лише ті сутності, які справді рендерить, тож зайвий запис у
+     * реєстрі нічого не показує. Так не треба знати, у якому вимірі
+     * кожна жертва, і поведінка лишається коректною, навіть якщо
+     * пастки колись стануть можливими в кількох вимірах.</p>
+     */
+    private void broadcastVictimGlow() {
+        MatchOrchestrator m = match();
+        int[] ids = new int[0];
+        if (m != null && !victims.isEmpty()) {
+            List<Integer> collected = new ArrayList<>();
+            for (UUID victimId : victims.keySet()) {
+                ServerPlayer victim = m.onlinePlayer(victimId);
+                if (victim != null) collected.add(victim.getId());
+            }
+            ids = new int[collected.size()];
+            for (int i = 0; i < ids.length; i++) ids[i] = collected.get(i);
+        }
+        ModNetwork.toAll(new TrapVictimGlowPacket(TrapVictimGlowPacket.VICTIM_COLOR, ids));
     }
 
     private UUID victimOf(UUID trapId) {
@@ -801,13 +1426,25 @@ public final class TrapModule implements PhaseListener {
             BearTrapEntity trap = trapEntity(trapId, p);
             if (trap != null) trap.setSnapped(false);
         }
+        // Хтось із жертв перестав бути «в пастці» (вибув/ліг/вийшов) —
+        // склад підсвітки змінився, навіть якщо жодного разу не
+        // потрапляли в гілку вище.
+        broadcastVictimGlow();
     }
 
     private void releaseEveryone(List<ServerPlayer> players) {
         for (UUID id : new ArrayList<>(victims.keySet())) {
             ManiacMod.lib().interactionLockModule().unlock(id, LockType.MOVEMENT, LOCK_REASON);
+            ServerPlayer victim = onlinePlayer(id);
+            // Кінець матчу — гарантовано гасимо і прапор тряски камери
+            // (WireShockPacket), інакше він лишився б висіти на клієнті,
+            // якщо гравець був під струмом у момент завершення.
+            if (victim != null) ModNetwork.toPlayer(victim, WireShockPacket.stop());
         }
         victims.clear();
+        wireShocks.clear();
+        pendingFirstPoint.clear();
+        broadcastVictimGlow();
     }
 
     /** Гравець вийшов із сервера — не лишаємо замок і запис у мапах. */
@@ -815,10 +1452,14 @@ public final class TrapModule implements PhaseListener {
         UUID id = player.getUUID();
         if (victims.remove(id) != null) {
             ManiacMod.lib().interactionLockModule().unlock(id, LockType.MOVEMENT, LOCK_REASON);
+            broadcastVictimGlow();
         }
         immunity.remove(id);
-        // Спроба визволення померла разом із сесією: пакет шукати нема кому.
+        // Спроба визволення (і підказка "Натисни F") померли разом із
+        // сесією: пакет шукати нема кому.
         escapes.remove(id);
+        escapePromptTicks.remove(id);
+        escapePromptTrap.remove(id);
     }
 
     // ── Запити ───────────────────────────────────────────────────────────

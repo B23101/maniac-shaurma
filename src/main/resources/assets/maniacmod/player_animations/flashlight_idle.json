@@ -1,0 +1,53 @@
+{
+	"format_version": "1.8.0",
+	"animations": {
+		"animation.flashlight_idle": {
+			"loop": true,
+			"animation_length": 0.5,
+			"bones": {
+				"rightArm": {
+					"rotation": {
+						"0.0": {
+							"vector": [-71.62, -11.46, 17.19]
+						},
+						"0.25": {
+							"vector": [-74.62, -11.46, 17.19]
+						},
+						"0.5": {
+							"vector": [-71.62, -11.46, 17.19]
+						}
+					}
+				},
+				"rightItem": {
+					"rotation": {
+						"vector": [-15, 0, 0]
+					},
+					"position": {
+						"0.0": {
+							"vector": [0, 3, 1]
+						},
+						"0.25": {
+							"vector": [0, 3.5, 1]
+						},
+						"0.5": {
+							"vector": [0, 3, 1]
+						}
+					}
+				},
+				"right_arm": {
+					"rotation": {
+						"vector": [-122.5247, 2.1083, -1.3439]
+					}
+				},
+				"right_item": {
+					"rotation": {
+						"vector": [30, 0, 0]
+					},
+					"position": {
+						"vector": [0, 4, 12]
+					}
+				}
+			}
+		}
+	}
+}

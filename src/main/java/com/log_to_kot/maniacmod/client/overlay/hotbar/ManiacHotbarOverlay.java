@@ -117,9 +117,20 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
 
     private float animatedFrameIndex = 0f;
     private float animatedScale = 1f;
-    private long lastFrameNanos = 0L;
+    private final long[] lastFrameNanos = new long[1];
+
+    /** Прогрес появи хотбара (0 = знизу за екраном, 1 = на місці) — плавний в'їзд замість миттєвої появи. */
+    private float entrance = 0f;
+
+    /** Спалах рамки вибору (0..1) — коротке «пружне» збільшення одразу після зміни слота. */
+    private float selectionPulse = 0f;
+
+    /** Попередній вибраний слот — щоб озвучити й пульснути рівно на ЗМІНІ, а не щокадру. */
+    private int lastSelectedIndex = -1;
 
     private static final float CATCH_UP_SPEED = 14f;
+    private static final float ENTRANCE_SPEED = 8f;
+    private static final float PULSE_DECAY_SPEED = 6f;
 
     private static final int MAX_POWER_CHARGES = 3;
     private int powerCharges = MAX_POWER_CHARGES;
@@ -140,7 +151,11 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
 
         int totalWidth = allowedSlots.size() * SLOT_SIZE + (allowedSlots.size() - 1) * SLOT_GAP;
         int left = screenWidth - MARGIN_RIGHT - totalWidth;
-        int top = screenHeight - MARGIN_BOTTOM - SLOT_SIZE;
+        // Плавний в'їзд знизу: поки entrance росте 0→1, хотбар піднімається
+        // на місце (ease-out, тож гальмує в кінці, а не лінійно).
+        int entranceOffset = Math.round((1f - com.log_to_kot.maniacmod.client.style.UiAnim.easeOutCubic(entrance))
+                * (SLOT_SIZE + MARGIN_BOTTOM));
+        int top = screenHeight - MARGIN_BOTTOM - SLOT_SIZE + entranceOffset;
 
         long currentTick = minecraft.level != null ? minecraft.level.getGameTime() : 0L;
 
@@ -193,7 +208,8 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
     private void renderSelectionFrame(GuiGraphics graphics, int left, int top, boolean isStrikeSlot, int color) {
         float slotCenterX = left + animatedFrameIndex * (SLOT_SIZE + SLOT_GAP) + SLOT_SIZE / 2f;
         float slotCenterY = top + SLOT_SIZE / 2f;
-        int size = Math.round(SLOT_SIZE * animatedScale);
+        // Пульс вибору — короткий «пружний» надлишок масштабу одразу після зміни слота.
+        int size = Math.round(SLOT_SIZE * (animatedScale + selectionPulse * 0.12f));
         int drawX = Math.round(slotCenterX - size / 2f);
         int drawY = Math.round(slotCenterY - size / 2f);
 
@@ -205,17 +221,26 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
     }
 
     private void advanceAnimation(int targetIndex) {
-        long now = System.nanoTime();
-        float dt = lastFrameNanos == 0L ? 0f : (now - lastFrameNanos) / 1_000_000_000f;
-        lastFrameNanos = now;
-        dt = Math.min(dt, 0.1f);
+        float dt = com.log_to_kot.maniacmod.client.style.UiAnim.frameDt(lastFrameNanos);
 
-        float factor = 1f - (float) Math.exp(-CATCH_UP_SPEED * dt);
-
-        animatedFrameIndex += (targetIndex - animatedFrameIndex) * factor;
+        animatedFrameIndex = com.log_to_kot.maniacmod.client.style.UiAnim
+                .approach(animatedFrameIndex, targetIndex, CATCH_UP_SPEED, dt);
         if (Math.abs(targetIndex - animatedFrameIndex) < 0.01f) animatedFrameIndex = targetIndex;
 
-        animatedScale += (SELECTED_SCALE - animatedScale) * factor;
+        animatedScale = com.log_to_kot.maniacmod.client.style.UiAnim
+                .approach(animatedScale, SELECTED_SCALE, CATCH_UP_SPEED, dt);
+        entrance = com.log_to_kot.maniacmod.client.style.UiAnim
+                .approach(entrance, 1f, ENTRANCE_SPEED, dt);
+        selectionPulse = com.log_to_kot.maniacmod.client.style.UiAnim
+                .approach(selectionPulse, 0f, PULSE_DECAY_SPEED, dt);
+
+        // Звук і пульс — рівно на ЗМІНІ вибраного слота (не щокадру).
+        if (targetIndex != lastSelectedIndex) {
+            if (lastSelectedIndex != -1) {
+                selectionPulse = 1f;
+            }
+            lastSelectedIndex = targetIndex;
+        }
     }
 
     // ── Виживий: звичайний слот ────────────────────────────────────────

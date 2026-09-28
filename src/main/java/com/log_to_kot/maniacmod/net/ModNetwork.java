@@ -14,6 +14,7 @@ import com.log_to_kot.maniacmod.net.c2s.selection.ManiacSelectPacket;
 import com.log_to_kot.maniacmod.net.c2s.hold.RescueHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.hold.GeneratorRepairHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.StandUpPacket;
+import com.log_to_kot.maniacmod.net.c2s.intent.TrapEscapeStartPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.TrapPlacePacket;
 import com.log_to_kot.maniacmod.net.c2s.traps.TrapChoosePacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
@@ -29,6 +30,13 @@ import com.log_to_kot.maniacmod.net.s2c.notify.CountdownPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorExplosionPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ManiacStunPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.TrapEscapePromptPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorInteractionPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.ItemPickupPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.TrapVictimGlowPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.WireShockPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.TrapEscapeAttemptPacket;
+import com.log_to_kot.maniacmod.net.s2c.darkzone.DarkZoneStatePacket;
 import com.log_to_kot.maniacmod.net.s2c.loot.GroundItemVisualSettingsPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorProgressPacket;
@@ -73,7 +81,7 @@ public final class ModNetwork {
      * з різними версіями просто не з'єднаються — це краще, ніж
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
      */
-    private static final String PROTOCOL_VERSION = "9";
+    private static final String PROTOCOL_VERSION = "12";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -127,6 +135,14 @@ public final class ModNetwork {
         c2s(ManiacStrikePacket.class,            ManiacStrikePacket::new);
 
         // Нові пакети — ТІЛЬКИ в кінець свого блоку.
+        s2c(DarkZoneStatePacket.class,           DarkZoneStatePacket::new);
+        c2s(TrapEscapeStartPacket.class,          TrapEscapeStartPacket::new);
+        s2c(TrapEscapePromptPacket.class,         TrapEscapePromptPacket::new);
+        s2c(TrapVictimGlowPacket.class,           TrapVictimGlowPacket::new);
+        s2c(TrapEscapeAttemptPacket.class,        TrapEscapeAttemptPacket::new);
+        s2c(WireShockPacket.class,                WireShockPacket::new);
+        s2c(GeneratorInteractionPacket.class,     GeneratorInteractionPacket::new);
+        s2c(ItemPickupPacket.class,               ItemPickupPacket::new);
     }
 
     // ── Реєстрація ───────────────────────────────────────────────────────
@@ -170,6 +186,15 @@ public final class ModNetwork {
 
     public static void toAll(ModPacket packet) {
         CHANNEL.send(PacketDistributor.ALL.noArg(), packet);
+    }
+
+    /**
+     * Усім гравцям, що зараз у ЦЬОМУ рівні. Потрібно для подій,
+     * релевантних лише тим, хто в світі (напр. підсвітка жертви пастки:
+     * гравці в лобі/іншому вимірі сутності не бачать).
+     */
+    public static void toLevel(net.minecraft.server.level.ServerLevel level, ModPacket packet) {
+        CHANNEL.send(PacketDistributor.DIMENSION.with(level::dimension), packet);
     }
 
     /** Усім, крім одного — типовий випадок «усі бачать очікування, крім того, хто вибирає». */

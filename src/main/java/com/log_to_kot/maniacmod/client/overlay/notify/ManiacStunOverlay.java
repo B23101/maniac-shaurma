@@ -27,18 +27,37 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 @OnlyIn(Dist.CLIENT)
 public final class ManiacStunOverlay {
 
-    private static final float OUTER_RADIUS = 8f;
-    private static final float RING_RADIUS = 34f;
+    /**
+     * Розмір однієї зірочки (радіус до кінчиків променів, px GUI).
+     *
+     * ── Чому такий великий ───────────────────────────────────────────
+     * Дизайн вимагає, щоб стан оглушення було видно З ПЕРШОГО ПОГЛЯДУ:
+     * це стан, у якому маньяк безпорадний, і гравець має миттєво
+     * зрозуміти, що з ним сталося. Варіант «дрібні зірочки десь біля
+     * прицілу» цієї задачі не виконував — їх легко не помітити за
+     * зброєю та хотбаром.
+     */
+    private static final float OUTER_RADIUS = 16f;
+
+    /** Радіус кола, по якому розкладені зірочки (px GUI). */
+    private static final float RING_RADIUS = 66f;
 
     /** Один повний оберт за цей час, мс. Трохи швидше за world-версію — зірочки "перед очима", мають виглядати гарячково. */
     private static final long ROTATION_PERIOD_MS = 1400L;
 
     private static final int STAR_ARGB = 0xFFFFE066;
 
+    /** Попередній стан оглушення — щоб озвучити й пульснути рівно на переході, а не щокадру. */
+    private static boolean wasStunned = false;
+
     private ManiacStunOverlay() {}
 
     public static void render(GuiGraphics graphics) {
-        if (!ClientMatchState.isManiacStunned()) return;
+        boolean stunned = ClientMatchState.isManiacStunned();
+        if (stunned != wasStunned) {
+            wasStunned = stunned;
+        }
+        if (!stunned) return;
 
         Minecraft mc = Minecraft.getInstance();
         int width = mc.getWindow().getGuiScaledWidth();
@@ -49,11 +68,14 @@ public final class ManiacStunOverlay {
         long now = System.currentTimeMillis();
         float ringRotation = (now % ROTATION_PERIOD_MS) / (float) ROTATION_PERIOD_MS * 360f;
 
+        // Легке дихання зірочок (розмір ±12%) — щоб ефект не виглядав «застиглим».
+        float breath = 1f + 0.12f * (float) Math.sin(now / 170.0);
+
         for (int i = 0; i < 5; i++) {
             double angle = Math.toRadians(ringRotation + i * 72.0);
             float sx = cx + (float) (RING_RADIUS * Math.cos(angle));
             float sy = cy + (float) (RING_RADIUS * 0.5 * Math.sin(angle));
-            StarShape.draw(graphics, sx, sy, OUTER_RADIUS, ringRotation * 2f, STAR_ARGB);
+            StarShape.draw(graphics, sx, sy, OUTER_RADIUS * breath, ringRotation * 2f, STAR_ARGB);
         }
     }
 }

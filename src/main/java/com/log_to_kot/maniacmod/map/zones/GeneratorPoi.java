@@ -87,6 +87,22 @@ public class GeneratorPoi extends PointOfInterestArchetype {
     /** Залитий бензин у відсотках (0 … FUEL_REQUIRED_PERCENT). */
     private int fuelPercent = 0;
 
+    /**
+     * true, якщо ЦЬОГО тіку {@code GeneratorModule.tickFuel} реально
+     * викликався для когось (заряджена каністра в руці, стадія FUEL) —
+     * прямий сигнал "зараз ліють", а не вгадування з приросту
+     * округленого {@code stagePercent()}. Раніше клієнтська поза
+     * "idle_fuel" (GeneratorEntity) визначала залив за тим, чи виріс
+     * округлений 0-100 відсоток між тіками — але fuelGainForTick
+     * (Бресенхем-розклад rate/сек на 20 тіків) реально приймає
+     * ненульовий приріст лише РАЗ НА N тіків, тож округлений відсоток
+     * стоїть на місці довше за будь-яке розумне grace-вікно, і поза
+     * блимала idle_fuel/idle посеред безперервної заливки. Прапор тут —
+     * пряма правда з того самого місця, де заряд ФАКТИЧНО списується,
+     * без жодного округлення чи grace.
+     */
+    private boolean fillingThisTick = false;
+
     private VisualState visualState = VisualState.IDLE;
 
     /** Скільки тіків ще показувати червону підсвітку після зриву. */
@@ -118,6 +134,20 @@ public class GeneratorPoi extends PointOfInterestArchetype {
     }
     public int fuelPercent()            { return fuelPercent; }
     public VisualState visualState()    { return visualState; }
+
+    /** Хтось РЕАЛЬНО ліє прямо зараз (див. {@link #fillingThisTick} докстрінг). */
+    public boolean isFillingThisTick()  { return fillingThisTick; }
+
+    /** Викликає {@code GeneratorModule.tickFuel} на кожному реальному тіку заливки. */
+    public void markFillingThisTick()   { fillingThisTick = true; }
+
+    /**
+     * Скидає прапор перед фазою тіку сесій — викликає
+     * {@code GeneratorModule} ПЕРЕД тим, як пройтись по гравцях, щоб
+     * якщо цього тіку ніхто не тримає заливку, прапор лишився
+     * {@code false} без ручного стеження за "хто саме" вже перевіряв.
+     */
+    public void resetFillingTick()      { fillingThisTick = false; }
 
     /**
      * Скільки тіків суцільного утримання потрібно, щоб пройти REPAIR

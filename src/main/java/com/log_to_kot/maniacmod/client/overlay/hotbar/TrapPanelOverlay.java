@@ -4,6 +4,7 @@ import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.ManiacKeybinds;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -54,33 +55,85 @@ public final class TrapPanelOverlay {
     /** Активний слот — той самий жовтогарячий акцент, що й пастки в хотбарі маньяка. */
     private static final int ACTIVE_BORDER = 0xFFFF9838;
 
+    // ── Анімаційний стан (статичний — клас без інстансу, як і хотбар) ────
+    // entrance       : плавний в'їзд колонки зліва, 0 → 1.
+    // selectionPulse : короткий спалах рамки активного слота при зміні.
+    // lastActiveSlot : попередній активний слот — звук/пульс рівно на ЗМІНІ.
+    // lastReadyMask  : бітова маска готових слотів — «тіньк» на відкаті таймера.
+    private static final long[] lastFrameNanos = new long[1];
+    private static float entrance = 0f;
+    private static float selectionPulse = 0f;
+    private static final int NO_SLOT = Integer.MIN_VALUE;
+    private static int lastActiveSlot = NO_SLOT;
+    private static int lastReadyMask = 0;
+    private static boolean readyMaskInit = false;
+
+    private static final float ENTRANCE_SPEED = 8f;
+    private static final float PULSE_DECAY_SPEED = 6f;
+
     private TrapPanelOverlay() {}
 
+    /** Скидає анімаційний стан, коли панель невидима — наступна поява знову плавна. */
+    private static void resetAnims() {
+        lastFrameNanos[0] = 0L;
+        entrance = 0f;
+        selectionPulse = 0f;
+        lastActiveSlot = NO_SLOT;
+        lastReadyMask = 0;
+        readyMaskInit = false;
+    }
+
     public static void render(GuiGraphics graphics) {
-        if (!ClientMatchState.isManiac()) return;
-        if (!ClientMatchState.allows(PhaseRule.HUD)) return;
+        if (!ClientMatchState.isManiac()) { resetAnims(); return; }
+        if (!ClientMatchState.allows(PhaseRule.HUD)) { resetAnims(); return; }
 
         List<String> ids = ClientMatchState.trapIds();
-        if (ids.isEmpty()) return;
+        if (ids.isEmpty()) { resetAnims(); return; }
 
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.player.isSpectator()) return;
+        if (mc.player == null || mc.player.isSpectator()) { resetAnims(); return; }
+
+        float dt = UiAnim.frameDt(lastFrameNanos);
+        entrance = UiAnim.approach(entrance, 1f, ENTRANCE_SPEED, dt);
+        selectionPulse = UiAnim.approach(selectionPulse, 0f, PULSE_DECAY_SPEED, dt);
+
+        // Зміна активного слота («в руці») — клік і пружний спалах рамки.
+        int activeSlot = ClientMatchState.activeTrapSlot();
+        if (activeSlot != lastActiveSlot) {
+            if (lastActiveSlot != NO_SLOT) {
+                selectionPulse = 1f;
+            }
+            lastActiveSlot = activeSlot;
+        }
 
         int screenH = mc.getWindow().getGuiScaledHeight();
         int total = ids.size() * SLOT + (ids.size() - 1) * GAP;
-        // Знизу зліва (той самий MARGIN_BOTTOM, що хотбар маньяка), не по
-        // центру вертикалі: панель пасток — периферійний HUD-елемент, а не
-        // те, на що дивляться постійно, і центр екрана заважав приціленню.
         int top = screenH - MARGIN_BOTTOM - total;
         long tick = mc.level != null ? mc.level.getGameTime() : 0L;
 
+        // Готовність слотів — маска, щоб озвучити «тіньк» рівно тоді, коли
+        // пастка вийшла з відкату (а не щокадру).
+        int readyMask = 0;
         for (int slot = 0; slot < ids.size(); slot++) {
-            renderSlot(graphics, mc, slot, ids.get(slot), MARGIN_LEFT, top + slot * (SLOT + GAP), tick);
+            String cooldownId = AbilityCooldownPacket.trapId(slot);
+            if (ClientMatchState.abilityCooldownFraction(cooldownId, tick) <= 0f) readyMask |= (1 << slot);
+        }
+        readyMaskInit = true;
+        lastReadyMask = readyMask;
+
+        // Плавний в'їзд колонки зліва-знизу: поки entrance росте 0→1,
+        // панель піднімається на місце (ease-out — гальмує в кінці).
+        int slide = Math.round((1f - UiAnim.easeOutCubic(UiAnim.clamp01(entrance))) * (SLOT + MARGIN_LEFT));
+        int x = MARGIN_LEFT - slide;
+        int yShift = Math.round((1f - UiAnim.easeOutCubic(UiAnim.clamp01(entrance))) * MARGIN_BOTTOM * 0.5f);
+
+        for (int slot = 0; slot < ids.size(); slot++) {
+            renderSlot(graphics, mc, slot, ids.get(slot), x, top + slot * (SLOT + GAP) + yShift, tick, selectionPulse);
         }
     }
 
     private static void renderSlot(GuiGraphics graphics, Minecraft mc, int slot, String trapId,
-                                   int x, int y, long tick) {
+                                   int x, int y, long tick, float pulse) {
         String cooldownId = AbilityCooldownPacket.trapId(slot);
         float remaining = ClientMatchState.abilityCooldownFraction(cooldownId, tick);
         boolean ready = remaining <= 0f;
@@ -93,6 +146,11 @@ public final class TrapPanelOverlay {
             : ready ? ManiacUiTheme.MENU_ACCENT_GOLD : ManiacUiTheme.BORDER;
         ManiacUiTheme.border1px(graphics, x, y, SLOT, SLOT, border);
         if (active) ManiacUiTheme.border1px(graphics, x + 1, y + 1, SLOT - 2, SLOT - 2, border);
+
+        // Пружний спалах довкола активного слота — затухає за PULSE_DECAY_SPEED.
+        if (active && pulse > 0.03f) {
+            ManiacUiTheme.border1px(graphics, x - 1, y - 1, SLOT + 2, SLOT + 2, withAlpha(ACTIVE_BORDER, pulse));
+        }
 
         drawIcon(graphics, trapId, x, y, ready ? 1.0f : 0.40f);
 
@@ -114,6 +172,12 @@ public final class TrapPanelOverlay {
         String key = ManiacKeybinds.TRAPS[slot].getTranslatedKeyMessage().getString();
         graphics.drawString(mc.font, key, x + 4, y + 3,
             active ? ACTIVE_BORDER : ready ? ManiacUiTheme.TEXT_ACCENT : ManiacUiTheme.TEXT_BODY, true);
+    }
+
+    /** Накладає прозорість на колір 0xFFRRGGBB, зберігаючи його RGB. */
+    private static int withAlpha(int color, float alpha) {
+        int a = Math.round(UiAnim.clamp01(alpha) * 255f);
+        return (a << 24) | (color & 0x00FFFFFF);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.log_to_kot.maniacmod.client.overlay.vitals;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.log_to_kot.maniacmod.client.ManiacKeybinds;
@@ -126,8 +127,29 @@ public final class SurvivorVitalsOverlay {
     private static final ResourceLocation TEX_PANEL_OVERLAY =
         new ResourceLocation("maniacmod", "textures/gui/vitals/vitals_panel_overlay.png");
 
+    // ── Анімаційний стан (статичний — клас без інстансу, як і решта простих оверлеїв) ──
+    // entrance   : 0 → 1 поява всієї панелі (підйом + масштаб).
+    // displayedHp/displayedStamina : плавно догнане значення шкал, щоб
+    //                                  втрата/лікування не «стрибали» в один кадр.
+    private static final long[] lastFrameNanos = new long[1];
+    private static float entrance = 0f;
+    private static float displayedHp = -1f;
+    private static float displayedStamina = -1f;
+    private static SurvivorState lastState = null;
+    private static boolean highlightWasReady = true;
+
+    /** Скидає анімаційний стан, коли оверлей невидимий — наступна поява знову плавна. */
+    private static void resetAnims() {
+        lastFrameNanos[0] = 0L;
+        entrance = 0f;
+        displayedHp = -1f;
+        displayedStamina = -1f;
+        lastState = null;
+        highlightWasReady = true;
+    }
+
     public static void render(GuiGraphics graphics) {
-        if (!ClientMatchState.isSurvivor()) return;
+        if (!ClientMatchState.isSurvivor()) { resetAnims(); return; }
         // Видимість — за дозволом фази HUD, а не за "чи фаза ігрова":
         // ROLE_REVEAL технічна, але сервер уже надіслав ролі й перший
         // знімок vitals (SurvivorModule.onPhaseEnter), і гравець має
@@ -139,20 +161,36 @@ public final class SurvivorVitalsOverlay {
         // HUD (у LOBBY немає PhaseRule.HUD).
         boolean hudPhase = ClientMatchState.allows(com.log_to_kot.maniacmod.core.phase.PhaseRule.HUD)
             || ClientMatchState.phase() == com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY;
-        if (!hudPhase) return;
+        if (!hudPhase) { resetAnims(); return; }
 
         Minecraft mc = Minecraft.getInstance();
         int screenHeight = mc.getWindow().getGuiScaledHeight();
 
         int hp = ClientMatchState.hp();
         int maxHp = ClientMatchState.maxHp();
-        if (maxHp <= 0) return; // vitals ще не прийшли жодного разу цього матчу
+        if (maxHp <= 0) { resetAnims(); return; } // vitals ще не прийшли жодного разу цього матчу
 
         SurvivorState state = ClientMatchState.survivorState();
         boolean hasIcons = state != SurvivorState.HEALTHY;
 
         int panelLeft = 10;
         int panelTop = screenHeight - 10 - PANEL_H;
+
+        // Поява панелі + плавні шкали. dt кадро-незалежний, тож анімація
+        // однакова і на 30, і на 240 FPS.
+        float dt = UiAnim.frameDt(lastFrameNanos);
+        entrance = UiAnim.approach(entrance, 1f, 8f, dt);
+        float appear = UiAnim.easeOutCubic(UiAnim.clamp01(entrance));
+
+        lastState = state;
+
+        graphics.pose().pushPose();
+        float panelCx = panelLeft + PANEL_W / 2f;
+        float panelCy = panelTop + PANEL_H / 2f;
+        graphics.pose().translate(panelCx, panelCy + (1f - appear) * 12f, 0f);
+        float appearScale = 0.94f + 0.06f * appear;
+        graphics.pose().scale(appearScale, appearScale, 1f);
+        graphics.pose().translate(-panelCx, -panelCy, 0f);
 
         // 1) Фон панелі — один шар на весь канвас.
         blitFull(graphics, TEX_PANEL_BG, panelLeft, panelTop, PANEL_W, PANEL_H, PANEL_W, PANEL_H);
@@ -161,11 +199,15 @@ public final class SurvivorVitalsOverlay {
         renderHeart(graphics, panelLeft + MEDALLION_CX, panelTop + MEDALLION_CY, ClientMatchState.heartbeat());
 
         // 3) Шкали HP і стаміни — суцільна смужка, crop зліва-направо.
-        float hpFraction = maxHp <= 0 ? 0f : clamp01((float) hp / maxHp);
-        float staminaFraction = clamp01(ClientMatchState.stamina());
+        // Малюємо не «сире» значення, а плавно догнане (displayedHp) —
+        // різка втрата хп читається як швидкий спад, а не телепорт.
+        float hpTarget = maxHp <= 0 ? 0f : clamp01((float) hp / maxHp);
+        float staminaTarget = clamp01(ClientMatchState.stamina());
+        displayedHp = displayedHp < 0f ? hpTarget : UiAnim.approach(displayedHp, hpTarget, 9f, dt);
+        displayedStamina = displayedStamina < 0f ? staminaTarget : UiAnim.approach(displayedStamina, staminaTarget, 9f, dt);
 
         renderCroppedBar(graphics, panelLeft + BAR_LEFT + BAR_FRAME_THICKNESS, panelTop + HP_TOP + BAR_FRAME_THICKNESS,
-            TEX_HP_FULL, TEX_HP_EMPTY, hpFraction);
+            TEX_HP_FULL, TEX_HP_EMPTY, displayedHp);
 
         // Поламана нога = стаміна 0 до лікування. Сервер уже шле 0 у
         // цьому стані (SurvivorModule.sendVitals), але клієнт не
@@ -174,7 +216,7 @@ public final class SurvivorVitalsOverlay {
         // значення.
         boolean staminaLocked = state == SurvivorState.BROKEN_LEG;
         renderCroppedBar(graphics, panelLeft + BAR_LEFT + BAR_FRAME_THICKNESS, panelTop + STA_TOP + BAR_FRAME_THICKNESS,
-            TEX_STAMINA_FULL, TEX_STAMINA_EMPTY, staminaLocked ? 0f : staminaFraction);
+            TEX_STAMINA_FULL, TEX_STAMINA_EMPTY, staminaLocked ? 0f : displayedStamina);
 
         // 4) Декоративний шар поверх усього (рамка/скло) — той самий
         // розмір і позиція, що фон (п. 1), малюється ОСТАННІМ із усіх
@@ -192,6 +234,8 @@ public final class SurvivorVitalsOverlay {
         }
 
         renderHighlightSlot(graphics, mc, panelLeft, panelTop);
+
+        graphics.pose().popPose();
 
         if (state == SurvivorState.CRAWLING) {
             renderStandUpBar(graphics, mc);
@@ -259,6 +303,8 @@ public final class SurvivorVitalsOverlay {
         String key = ManiacKeybinds.HIGHLIGHT.getTranslatedKeyMessage().getString();
         graphics.drawString(mc.font, key, x + 4, y + 3,
             ready ? ManiacUiTheme.TEXT_ACCENT : ManiacUiTheme.TEXT_BODY, true);
+
+        highlightWasReady = ready;
     }
 
     private static float clamp01(float v) {

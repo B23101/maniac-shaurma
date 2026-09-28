@@ -53,4 +53,55 @@ public final class TrapAiming {
         if (hit.getDirection() != Direction.UP) return null;
         return hit.getBlockPos();
     }
+
+    /**
+     * Будь-який блок, у який влучає погляд, разом із гранню — навіть якщо
+     * це не верхня грань і навіть якщо далеко. Клієнт використовує це, щоб
+     * ЧЕРВОНИЙ квадрат не зникав, коли пастку тут поставити не можна
+     * (стіна, стеля, задалеко): маньяк має бачити, ЩО саме не так, а не
+     * «куб просто пропав».
+     *
+     * @param reach довжина променя (може бути більшою за дальність
+     *              розміщення — тоді «задалеко» стає червоним, а не порожнім)
+     * @return влучання або {@code null}, якщо погляд у небо
+     */
+    public static BlockHitResult rawHit(Level level, Entity viewer, double reach) {
+        Vec3 eye = viewer.getEyePosition();
+        Vec3 end = eye.add(viewer.getViewVector(1.0f).scale(reach));
+        BlockHitResult hit = level.clip(new ClipContext(
+            eye, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, viewer));
+        return hit.getType() == HitResult.Type.BLOCK ? hit : null;
+    }
+
+    /**
+     * Чи справді {@code viewer} зараз дивиться у верхню грань блока
+     * {@code floor} (з допуском). Сервер використовує це, щоб ПРИЙНЯТИ блок,
+     * який показав клієнт, замість того щоб сліпо перерахувати свій —
+     * інакше пакет, що прийшов на тік пізніше (гравець встиг повернути
+     * голову, позиція ока інша), ставив би пастку не на той куб, що
+     * світився.
+     *
+     * Допуск — {@code TOLERANCE} блока навколо верхньої грані: достатньо,
+     * щоб пережити мережеву затримку й рух, замало, щоб «клікнути» блок
+     * у сусідній кімнаті.
+     */
+    public static boolean isLookingAtFloor(Level level, Entity viewer, BlockPos floor, double range) {
+        Vec3 eye = viewer.getEyePosition();
+        Vec3 look = viewer.getViewVector(1.0f);
+        Vec3 center = new Vec3(floor.getX() + 0.5, floor.getY() + 1.0, floor.getZ() + 0.5);
+
+        // Проєкція центру верхньої грані на промінь погляду.
+        Vec3 toCenter = center.subtract(eye);
+        double along = toCenter.dot(look);
+        if (along < 0.0 || along > range + 1.5) return false;
+
+        // Наскільки промінь «промахується» повз центр грані.
+        Vec3 closest = eye.add(look.scale(along));
+        double miss = closest.distanceTo(center);
+        // Половина діагоналі грані (~0.71) + допуск на затримку/поворот.
+        return miss <= 0.71 + TOLERANCE;
+    }
+
+    /** Допуск (блоки), з яким сервер довіряє блоку, який показав клієнт. */
+    private static final double TOLERANCE = 0.75;
 }

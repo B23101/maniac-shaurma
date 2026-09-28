@@ -1,0 +1,48 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.electric_wire_mount",
+        "texture_width": 16,
+        "texture_height": 16,
+        "visible_bounds_width": 1,
+        "visible_bounds_height": 1,
+        "visible_bounds_offset": [
+          0,
+          0.2,
+          0
+        ]
+      },
+      "bones": [
+        {
+          "name": "root",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "comment": "Стовп-кріплення 3x3x4 пікселя (0.1875 x 0.1875 x 0.25 блока), центрований по X/Z, стоїть на верхній грані блока.",
+              "origin": [
+                -1.5,
+                0,
+                -1.5
+              ],
+              "size": [
+                3,
+                4,
+                3
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -36,6 +36,11 @@ public final class LootTables {
     public static LootTable itemPoints() {
         return new LootTable(List.of(
             new LootEntry(ModItems.get("fuel_canister").get(), 1, 1.0f),
+            // Ліхтарик — ключовий предмет для темних зон (без нього там
+            // майже нічого не видно). Тому його вага висока — виживий
+            // має реальний шанс знайти його на ITEM-точках карти ще до
+            // того, як темна зона стане критичною.
+            new LootEntry(ModItems.get("flashlight").get(), 1, 0.7f),
             new LootEntry(ModItems.get("medkit").get(), 1, 0.5f),
             new LootEntry(ModItems.get("splint").get(), 1, 0.5f),
             // Лом потрібен лише тоді, коли хтось потрапив у капкан, тож він

@@ -584,6 +584,23 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> TRAP_ESCAPE_TICKS =
         ConfigKey.integer("maniac", "trapEscapeTicks", 300, 20, 1200);
 
+    /**
+     * Скільки тіків жертва бачить лише текстову підказку "Натисни F,
+     * щоб вибратися" ПЕРЕД тим, як почнеться сама спроба
+     * ({@link #TRAP_ESCAPE_TICKS}). Це вікно НЕ входить у час спроби:
+     * повзунок і відлік спроби стартують лише в момент натискання F
+     * (див. {@code TrapModule#onEscapeStart}), тож ці два ліміти не
+     * складаються в один прихований довший тайм-аут — гравець, що
+     * довго вагався перед F, просто пізніше побачить сам повзунок, а
+     * не втрачає з цього часу спробу.
+     *
+     * Час вийшов, а F не натиснуто — та сама доля, що провал самої
+     * міні-гри: гравець лишається в капкані й чекає на товариша з
+     * ломом (спроба одна на захлопування).
+     */
+    public static final ConfigKey<Integer> TRAP_ESCAPE_PROMPT_TICKS =
+        ConfigKey.integer("maniac", "trapEscapePromptTicks", 300, 20, 1200);
+
     public static final ConfigKey<Integer> BEAR_TRAP_DAMAGE =
         ConfigKey.integer("maniac", "bearTrapDamage", 15, 0, 100);
 
@@ -599,6 +616,50 @@ public final class ConfigSchema {
     /** Скільки міцності ніг відновлюється за секунду, коли гравець НЕ в пастці. 0 = не відновлюється. */
     public static final ConfigKey<Double> LEG_INTEGRITY_REGEN_PER_SECOND =
         ConfigKey.decimal("maniac", "legIntegrityRegenPerSecond", 0.5, 0.0, 20.0);
+
+    /**
+     * Скільки разів поспіль програється звук боротьби в захлопнутому
+     * капкані. 0 — не грати взагалі.
+     *
+     * <p>Раніше звук повторювався БЕЗ КІНЦЯ, поки капкан когось тримав
+     * ({@code TrapModule.tickStruggle}), — саме цей «вічний звук» і є
+     * претензією з ТЗ. Тепер це скінченне число повторів після клацка:
+     * капкан «покрутився» й затих, а не гуде до кінця матчу.</p>
+     */
+    public static final ConfigKey<Integer> BEAR_TRAP_STRUGGLE_REPEATS =
+        ConfigKey.integer("maniac", "bearTrapStruggleRepeats", 3, 0, 64);
+
+    // ── electric wire (електричний дріт) ────────────────────────────────
+    // Новa пастка: маньяк вибирає ДВІ точки на одному Y, між ними без
+    // перешкод, дріт ≤ 4 блоків. Торкання — удар струмом.
+
+    /** Перезарядка після встановлення дроту, у тіках. 1200 = 60 с (ТЗ 9). */
+    public static final ConfigKey<Integer> ELECTRIC_WIRE_PLACE_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "electricWirePlaceCooldownTicks", 1200, 20, 12000);
+
+    /** Максимальна відстань між кріпленнями (блоків), ТЗ 2.1: 4. */
+    public static final ConfigKey<Double> ELECTRIC_WIRE_MAX_LENGTH_BLOCKS =
+        ConfigKey.decimal("maniac", "electricWireMaxLengthBlocks", 4.0, 1.0, 8.0);
+
+    /** Скільки тіків діє удар струмом. 300 = 15 с (ТЗ 5.1). */
+    public static final ConfigKey<Integer> ELECTRIC_WIRE_SHOCK_TICKS =
+        ConfigKey.integer("maniac", "electricWireShockTicks", 300, 20, 2400);
+
+    /** Скільки HP знімає удар струмом за КОЖНУ секунду дії (ТЗ 5.1: 1 HP/с). */
+    public static final ConfigKey<Integer> ELECTRIC_WIRE_DAMAGE_PER_SECOND =
+        ConfigKey.integer("maniac", "electricWireDamagePerSecond", 1, 0, 20);
+
+    /** Амплітуда тряски камери під час удару струмом, градуси (ТЗ 5.2). */
+    public static final ConfigKey<Double> ELECTRIC_WIRE_SHAKE_DEGREES =
+        ConfigKey.decimal("maniac", "electricWireShakeDegrees", 2.5, 0.0, 15.0);
+
+    /** Частота тряски камери, Гц (ТЗ 5.2). */
+    public static final ConfigKey<Double> ELECTRIC_WIRE_SHAKE_HZ =
+        ConfigKey.decimal("maniac", "electricWireShakeHz", 9.0, 0.5, 30.0);
+
+    /** Дальність, з якої Geo-ножиці перерізають дріт (блоків від очей). */
+    public static final ConfigKey<Double> GEO_SCISSORS_RANGE_BLOCKS =
+        ConfigKey.decimal("maniac", "geoScissorsRangeBlocks", 3.5, 1.0, 8.0);
 
     // ── crowbar (лом) ────────────────────────────────────────────────────
 
@@ -618,11 +679,17 @@ public final class ConfigSchema {
 
     /**
      * Скільки тіків триває стан "оглушений маньяк" після влучання ломом.
-     * 100 = 5 с. Протягом цього часу маньяк не може рухатись, стрибати,
-     * повертати камеру, бити, ставити пастки й активувати здібності.
+     * 160 = 8 с (МІНІМУМ за дизайном: коротше оглушення робить удар ломом
+     * майже безкарним для маньяка). Протягом цього часу маньяк не може
+     * рухатись, стрибати, повертати камеру, бити, ставити пастки й
+     * активувати здібності — і РІВНО стільки ж триває нудота.
+     *
+     * <p>Нижня межа прибита до 160, а не залишена вільною: значення менше
+     * за 8 с суперечить самому сенсу стану (див. вище), тож це свідомо не
+     * "гнучка настройка", а захист від випадкового послаблення.</p>
      */
     public static final ConfigKey<Integer> CROWBAR_STUN_DURATION_TICKS =
-        ConfigKey.integer("maniac", "crowbarStunDurationTicks", 100, 20, 600);
+        ConfigKey.integer("maniac", "crowbarStunDurationTicks", 160, 160, 600);
 
     /**
      * Перезарядка лома між ударами ПО МАНЬЯКУ, у тіках. Окремо від
@@ -723,6 +790,39 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> INVENTORY_BYPASS_CREATIVE =
         ConfigKey.bool("inventory", "bypassCreative", true);
 
+    // ── voice ────────────────────────────────────────────────────────────
+    //
+    // Голос маньяка (Simple Voice Chat). Ефект активує САМА гра за
+    // роллю й фазою матчу — у гравця немає жодної ручки й жодного UI
+    // для нього (див. voice/VoiceActivation). Тут лише те, що адмін
+    // справді може хотіти змінити: чи вмикати ефект, який пресет і
+    // наскільки він сильний.
+
+    /**
+     * Чи вмикати «жахливий» голос маньяка взагалі. Вимкнено — голос
+     * маньяка звучить як звичайний, але решта голосових фаз (тиша,
+     * спільний ефір) працюють так само.
+     */
+    public static final ConfigKey<Boolean> VOICE_ENABLED =
+        ConfigKey.bool("voice", "enabled", true);
+
+    /**
+     * Пресет голосу. DEMON — “одержимий”, TITAN — “велетень у залі”,
+     * BATMAN — “на октаву нижче, тісна кімната”. Числа приховуються в
+     * {@code voice/ManiacVoiceProfile}, тут лише вибір.
+     */
+    public static final ConfigKey<String> VOICE_PROFILE =
+        ConfigKey.option("voice", "profile", "DEMON",
+            List.of("DEMON", "TITAN", "BATMAN"));
+
+    /**
+     * Сила ефекту, 0..100. 0 — голос майже не змінюється, 100 — повний
+     * пресет. Проміжні значення інтерполюються до нейтрального профілю,
+     * тому перехід плавний і без службових артефактів.
+     */
+    public static final ConfigKey<Integer> VOICE_STRENGTH =
+        ConfigKey.integer("voice", "strength", 100, 0, 100);
+
     // ── Реєстр блоків ────────────────────────────────────────────────────
 
     /**
@@ -780,7 +880,12 @@ public final class ConfigSchema {
         CROWBAR_HIT_WEAR_PERCENT, CROWBAR_COOLDOWN_TICKS, CROWBAR_RANGE_BLOCKS,
         TRAP_ESCAPE_HITS_REQUIRED, TRAP_ESCAPE_MISS_PENALTY,
         TRAP_ESCAPE_CURSOR_SPEED, TRAP_ESCAPE_HIT_ZONE_WIDTH, TRAP_ESCAPE_TICKS,
-        BEAR_TRAP_DAMAGE, BEAR_TRAP_LEG_DAMAGE, LEG_INTEGRITY_REGEN_PER_SECOND,
+        TRAP_ESCAPE_PROMPT_TICKS,
+        BEAR_TRAP_DAMAGE, BEAR_TRAP_LEG_DAMAGE, BEAR_TRAP_STRUGGLE_REPEATS, LEG_INTEGRITY_REGEN_PER_SECOND,
+        ELECTRIC_WIRE_PLACE_COOLDOWN_TICKS, ELECTRIC_WIRE_MAX_LENGTH_BLOCKS,
+        ELECTRIC_WIRE_SHOCK_TICKS, ELECTRIC_WIRE_DAMAGE_PER_SECOND,
+        ELECTRIC_WIRE_SHAKE_DEGREES, ELECTRIC_WIRE_SHAKE_HZ,
+        GEO_SCISSORS_RANGE_BLOCKS,
         CROWBAR_STUN_DURATION_TICKS, CROWBAR_STUN_COOLDOWN_TICKS, CROWBAR_STUN_RANGE_BLOCKS,
         CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER);
 
@@ -797,6 +902,11 @@ public final class ConfigSchema {
         "Скільки слотів хотбару бачить кожна роль і чи діють правила в креативі.",
         INVENTORY_BYPASS_CREATIVE);
 
+    public static final ConfigBlock VOICE = ConfigBlock.settings("voice", "voice.yml",
+        "Голос маньяка через Simple Voice Chat: вмикання, пресет і сила ефекту. "
+        + "Ефект керує гра за роллю й фазою матчу — у гравця немає налаштувань голосу.",
+        VOICE_ENABLED, VOICE_PROFILE, VOICE_STRENGTH);
+
     public static final ConfigBlock SPAWN_POINTS = ConfigBlock.data("spawn_points",
         "Розмітка точок. Наповнюється командою /maniac point add. "
         + "Вміст ніколи не відновлюється з дефолту — видалена точка лишається видаленою.");
@@ -804,6 +914,40 @@ public final class ConfigSchema {
     public static final ConfigBlock ZONES = ConfigBlock.data("zones",
         "Зони карти (втеча, лут). Наповнюється командами. "
         + "Вміст ніколи не відновлюється з дефолту.");
+
+    // ── darkzones ────────────────────────────────────────────────────────
+    //
+    // Розмітка самих темних зон (точки) — це DATA-блок ZONES вище
+    // (файл zones.yml, наповнюється /maniac darkzone). Тут — лише СИЛА
+    // ефекту, спільна для всіх темних зон карти: скільки max темнішає
+    // lightmap і як плавно переходить край зони.
+
+    /**
+     * Найбільше зниження яскравості lightmap у темній зоні, 0..3.
+     * Дефолт лишається 0.55 — "помітно темніше, ніж зараз, але гравець
+     * ще нормально орієнтується". Верхню межу підняли з 1.0 до 3.0:
+     * при 1.0 lightmap уже гаситься повністю (0 яскравості), тож щоб
+     * мати запас для ЩЕ темніших налаштувань (напр. якщо
+     * {@code DarkZoneEffect} у shaurma-lib згодом враховує значення
+     * понад 1 — напр. для повільнішого "вигорання" світла ліхтарика
+     * чи інтенсивнішого ефекту в комбінації з іншими джерелами) —
+     * значення 1..3 більше не підтягуються (CLAMP) до 1.0.
+     */
+    public static final ConfigKey<Double> DARKZONE_INTENSITY =
+        ConfigKey.decimal("darkzones", "intensity", 0.55, 0.0, 3.0);
+
+    /**
+     * За скільки тіків затемнення плавно доїжджає до цільового рівня
+     * при вході в зону (і назад до нуля при виході) — щоб перетин межі
+     * зони не виглядав різким клацанням lightmap. 20 тіків = 1 с.
+     */
+    public static final ConfigKey<Integer> DARKZONE_TRANSITION_TICKS =
+        ConfigKey.integer("darkzones", "transitionTicks", 20, 0, 200);
+
+    public static final ConfigBlock DARKZONES = ConfigBlock.settings("darkzones", "darkzones.yml",
+        "Сила справжньої темряви (не оверлей — зниження яскравості освітлення) "
+        + "у темних зонах, розмічених /maniac darkzone.",
+        DARKZONE_INTENSITY, DARKZONE_TRANSITION_TICKS);
 
     /**
      * Порядок = порядок блоків у згенерованому файлі та порядок табів у
@@ -815,7 +959,8 @@ public final class ConfigSchema {
      * статичні — див. док класу {@link ConfigBlock}.
      */
     public static final List<ConfigBlock> BLOCKS = new java.util.ArrayList<>(List.of(
-        GAME, WORLD, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION, LOOT, INVENTORY));
+        GAME, WORLD, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION,
+        VOICE, LOOT, INVENTORY, DARKZONES));
 
     /**
      * Реєструє блок параметрів маньяка, ставлячи його одразу після

@@ -4,6 +4,7 @@ import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.ManiacKeybinds;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay;
 import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.items.FuelCanisterItem;
@@ -61,7 +62,7 @@ public final class GeneratorHintOverlay {
 
     // БАГФІКС: та сама уніфікація масштабу, що GeneratorProgressOverlay —
     // панель була вдвічі більшою за решту HUD мода.
-    private static final int PANEL_WIDTH = 250;
+    private static final int MIN_PANEL_WIDTH = 250;
     private static final int PADDING = 10;
     private static final int TEXT_ROW_HEIGHT = 10;
     private static final int GAP_BEFORE_BAR = 8;
@@ -71,23 +72,55 @@ public final class GeneratorHintOverlay {
 
     private GeneratorHintOverlay() {}
 
+    // ── Анімаційний стан ─────────────────────────────────────────────────
+    // appear: плавна поява панелі (підйом + масштаб), 0 → 1.
+    private static final long[] lastFrameNanos = new long[1];
+    private static float appear = 0f;
+    private static boolean wasVisible = false;
+
     public static void render(GuiGraphics graphics) {
-        if (!ClientMatchState.isSurvivor()) return;
-        if (!ClientMatchState.allows(PhaseRule.GENERATOR_REPAIR)) return;
-
-        // Утримання вже триває — прогрес-панель сама показує статус,
-        // друга підказка тут була б зайвою.
-        if (GeneratorProgressOverlay.isVisible()) return;
-
-        // Утримання почато, але ще не долетів перший пакет з сервера
-        // (рідкісний проміжок в один-два тіки) — теж не дублюємо хінт.
-        if (ManiacKeybinds.isRepairHeld()) return;
-
         Minecraft mc = Minecraft.getInstance();
         HitResult hit = mc.hitResult;
-        if (!(hit instanceof EntityHitResult entityHit)) return;
-        if (!(entityHit.getEntity() instanceof GeneratorEntity generator)) return;
-        if (generator.isActive()) return; // DONE — саботажний ПКМ маньяка інший потік, тут виживому нічого тримати
+        GeneratorEntity generator = (hit instanceof EntityHitResult entityHit
+            && entityHit.getEntity() instanceof GeneratorEntity g) ? g : null;
+
+        // Усі умови показу зібрані в одному місці — так само, як раніше
+        // окремі ранні return, лише тепер дозволяють розрізнити «показати»
+        // від «сховати» й анімувати появу замість миттєвого стрибка.
+        boolean visible = ClientMatchState.isSurvivor()
+            && ClientMatchState.allows(PhaseRule.GENERATOR_REPAIR)
+            // Утримання вже триває — прогрес-панель сама показує статус,
+            // друга підказка тут була б зайвою.
+            && !GeneratorProgressOverlay.isVisible()
+            // Утримання почато, але ще не долетів перший пакет з сервера
+            // (рідкісний проміжок в один-два тіки) — теж не дублюємо хінт.
+            && !ManiacKeybinds.isRepairHeld()
+            && generator != null
+            // БАГФІКС: mc.player буває null у короткому вікні (спавн/
+            // деспавн, вихід зі світу, спектатор без сутності) — без
+            // цієї перевірки fuelHintText(mc) нижче падав з NPE на
+            // mc.player.getItemInHand(...), і трест вилазив прямо на
+            // екран у момент, коли приціл встиг зловити генератор
+            // раніше, ніж клієнтський гравець "живий".
+            && mc.player != null
+            // DONE — саботажний ПКМ маньяка інший потік, тут виживому нічого тримати
+            && !generator.isActive();
+
+        if (!visible) {
+            if (wasVisible) {
+                wasVisible = false;
+            }
+            appear = 0f;
+            lastFrameNanos[0] = 0L;
+            return;
+        }
+        if (!wasVisible) {
+            wasVisible = true;
+        }
+
+        float dt = UiAnim.frameDt(lastFrameNanos);
+        appear = UiAnim.approach(appear, 1f, 11f, dt);
+        float ease = UiAnim.easeOutCubic(UiAnim.clamp01(appear));
 
         boolean fuelStage = generator.isFuelStage();
         Component text = fuelStage
@@ -102,7 +135,7 @@ public final class GeneratorHintOverlay {
         // те саме значення, що бачить прогрес-панель під час утримання).
         float fraction = generator.stagePercent() / 100f;
 
-        drawHint(graphics, mc.font, text.getString(), fraction);
+        drawHint(graphics, mc.font, text.getString(), fraction, ease);
     }
 
     /**
@@ -132,15 +165,37 @@ public final class GeneratorHintOverlay {
         return Component.translatable("maniacmod.hud.generator.fuel_hint_no_canister");
     }
 
-    private static void drawHint(GuiGraphics graphics, Font font, String text, float fraction) {
+    private static void drawHint(GuiGraphics graphics, Font font, String text, float fraction, float ease) {
         Minecraft mc = Minecraft.getInstance();
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
 
-        int panelX = screenW / 2 - PANEL_WIDTH / 2;
+        // БАГФІКС: ширина панелі раніше була жорсткою константою
+        // (250px), а текст підказки береться з перекладу і може бути
+        // довшим за неї (напр. український "Утримуй Shift+ПКМ, щоб
+        // ремонтувати генератор") — рядок вилазив за праву межу панелі
+        // замість того, щоб панель підлаштувалась під нього. Тепер
+        // ширина рахується від РЕАЛЬНОЇ ширини тексту (font.width),
+        // з мінімумом MIN_PANEL_WIDTH — короткі підказки й далі
+        // виглядають так само, як раніше.
+        int textWidth = font.width(text);
+        int panelWidth = Math.max(MIN_PANEL_WIDTH, textWidth + PADDING * 2);
+
+        int panelX = screenW / 2 - panelWidth / 2;
         int panelY = screenH / 2 - ABOVE_CROSSHAIR_GAP - PANEL_HEIGHT / 2;
 
-        GeneratorFuelUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
+        // Плавна поява: підйом знизу + легкий масштаб навколо центру.
+        // Малюємо в зсунутій системі координат, тож усі внутрішні
+        // обчислення (panelX/panelY) лишаються незмінними.
+        graphics.pose().pushPose();
+        float cx = panelX + panelWidth / 2f;
+        float cy = panelY + PANEL_HEIGHT / 2f;
+        graphics.pose().translate(cx, cy + (1f - ease) * 10f, 0f);
+        float scale = 0.94f + 0.06f * ease;
+        graphics.pose().scale(scale, scale, 1f);
+        graphics.pose().translate(-cx, -cy, 0f);
+
+        GeneratorFuelUiTheme.drawPanel(graphics, panelX, panelY, panelWidth, PANEL_HEIGHT);
 
         int textX = panelX + PADDING;
         int textY = panelY + PADDING;
@@ -148,11 +203,13 @@ public final class GeneratorHintOverlay {
 
         int barY = textY + TEXT_ROW_HEIGHT + GAP_BEFORE_BAR;
         int barX = panelX + PADDING;
-        int barWidth = PANEL_WIDTH - PADDING * 2;
+        int barWidth = panelWidth - PADDING * 2;
         // БАГФІКС: раніше тут завжди був жорсткий 0f — бар підказки не
         // показував реальний прогрес заливу/ремонту. Тепер малює те, що
         // фактично вже накопичено на генераторі (той самий заглиблений
         // трек, що на прогрес-панелі під час утримання).
         GeneratorFuelUiTheme.drawBar(graphics, barX, barY, barWidth, BAR_HEIGHT, fraction);
+
+        graphics.pose().popPose();
     }
 }
