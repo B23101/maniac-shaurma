@@ -112,6 +112,18 @@ public final class TrapModule implements PhaseListener {
     private final Map<UUID, Integer> immunity = new HashMap<>();
 
     /**
+     * Позиція гравця в момент останнього запиту {@link #sweptBox} і на тік
+     * раніше — щоб дріт бачив не лише те, де гравець СТОЇТЬ зараз, а й
+     * шлях, яким він пройшов за тік (див. {@link #tickWire}).
+     */
+    private record Trail(long tick, Vec3 previous, Vec3 current) {}
+
+    private final Map<UUID, Trail> trails = new HashMap<>();
+
+    /** Більший за це зсув за тік (блоків) — телепорт, а не рух: шлях не рахуємо. */
+    private static final double MAX_SWEEP_BLOCKS = 5.0;
+
+    /**
      * UUID жертви → її спроба вибратися з капкана. Запису немає = жертва
      * вже не має шансу вибратися сама (спроба використана) і чекає на
      * товариша з ломом.
@@ -266,6 +278,7 @@ public final class TrapModule implements PhaseListener {
         // належати новим сутностям).
         broadcastVictimGlow();
         immunity.clear();
+        trails.clear();
         closeAllEscapes(players);
         escapePromptTicks.clear();
         escapePromptTrap.clear();
@@ -751,19 +764,58 @@ public final class TrapModule implements PhaseListener {
         Vec3 b = wire.anchorB();
 
         // Грубий відбір сусідів — велика рамка навколо дроту (лише
-        // прискорення). Саме торкання — ТОЧНЕ: відрізок дроту проти
-        // справжнього AABB гравця, тож ноги теж рахуються, а кут
-        // «порожнього прямокутника» діагоналі — ні.
+        // прискорення). Рамка з запасом (1.5 блока), бо гравець міг
+        // ПЕРЕСКОЧИТИ дріт за один тік і опинитись уже за межами вузької
+        // рамки. Саме торкання — ТОЧНЕ: відрізок дроту проти AABB гравця
+        // ({@link #sweptBox}), тож кут «порожнього прямокутника»
+        // діагоналі не рахується.
         for (ServerPlayer candidate : wire.level().getEntitiesOfClass(ServerPlayer.class,
-                wire.getBoundingBoxForCulling().inflate(0.5))) {
+                wire.getBoundingBoxForCulling().inflate(1.5))) {
             if (immunity.containsKey(candidate.getUUID())) continue;
             if (victims.containsKey(candidate.getUUID())) continue;
             if (!canCatch(candidate)) continue;
             if (!info.type().shouldTrigger(candidate)) continue;
-            if (!WireGeometry.segmentTouchesBox(a, b, candidate.getBoundingBox())) continue;
+            if (!WireGeometry.segmentTouchesBox(a, b, sweptBox(candidate))) continue;
             startShock(wire, candidate);
             return;
         }
+    }
+
+    /**
+     * AABB гравця, ПРОТЯГНУТИЙ від позиції минулого тіка до поточної.
+     *
+     * ── Чому не просто {@code getBoundingBox()} ──────────────────────
+     * Дріт перевіряється раз на тік. Бігом, ривком чи стрибком гравець
+     * зсувається за тік настільки, що між двома перевірками бокс міг
+     * опинитись ПО РІЗНІ боки тонкого дроту (висота 2 пікселі, радіус
+     * 0.06), жодного разу його не перетнувши — і розтяжка «не
+     * спрацьовувала» на гравця, який фізично через неї пройшов.
+     *
+     * Позиція минулого тіка береться з власного {@link #trails}, а не з
+     * {@code xo/yo/zo} гравця: коли саме ванільний код оновлює {@code xo},
+     * залежить від порядку тіків сутностей і мережі, тож покладатись на
+     * це не можна. Запис оновлюється лениво — раз на тік, при першому
+     * запиті; якщо минулого тіка гравця не питали (був далеко від усіх
+     * дротів), шлях не рахуємо — стара позиція була б застарілою.
+     */
+    private AABB sweptBox(ServerPlayer player) {
+        AABB now = player.getBoundingBox();
+        long tick = player.level().getGameTime();
+        Vec3 pos = player.position();
+
+        Trail trail = trails.get(player.getUUID());
+        if (trail == null || tick - trail.tick() > 1) {
+            trail = new Trail(tick, pos, pos);
+        } else if (trail.tick() != tick) {
+            trail = new Trail(tick, trail.current(), pos);
+        }
+        trails.put(player.getUUID(), trail);
+
+        Vec3 back = trail.previous().subtract(pos);
+        if (back.lengthSqr() < 1.0E-6 || back.lengthSqr() > MAX_SWEEP_BLOCKS * MAX_SWEEP_BLOCKS) {
+            return now;
+        }
+        return now.minmax(now.move(back));
     }
 
     /** Жертва торкнулась дроту: починаємо удар струмом (ТЗ 5). */
@@ -1332,6 +1384,8 @@ public final class TrapModule implements PhaseListener {
         struggleCooldown.remove(trap.getUUID());
 
         int left = com.log_to_kot.maniacmod.items.CrowbarItem.wear(crowbar);
+        // 0% — лом ламається повністю й зникає з руки.
+        com.log_to_kot.maniacmod.items.CrowbarItem.breakIfWornOut(hitter, crowbar);
         hitter.getCooldowns().addCooldown(crowbar.getItem(),
             ManiacConfigs.get(ConfigSchema.CROWBAR_COOLDOWN_TICKS));
         notify(hitter, left > 0 ? ActionBarMessageType.INFO : ActionBarMessageType.ERROR,
@@ -1455,6 +1509,7 @@ public final class TrapModule implements PhaseListener {
             broadcastVictimGlow();
         }
         immunity.remove(id);
+        trails.remove(id);
         // Спроба визволення (і підказка "Натисни F") померли разом із
         // сесією: пакет шукати нема кому.
         escapes.remove(id);

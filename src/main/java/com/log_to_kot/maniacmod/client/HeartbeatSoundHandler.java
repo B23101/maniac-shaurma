@@ -1,6 +1,8 @@
 package com.log_to_kot.maniacmod.client;
 
 import com.log_to_kot.maniacmod.ManiacMod;
+import com.log_to_kot.maniacmod.core.phase.GamePhase;
+import com.log_to_kot.maniacmod.client.overlay.vitals.LowHpVignetteOverlay;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import dev.shaurmalib.forge.sound.SoundCenter;
@@ -14,127 +16,104 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.registries.RegistryObject;
 
 /**
- * Звук серцебиття, коли поруч маньяк — озвучує те саме значення
- * {@code ClientMatchState.heartbeat()} (0..1, 0 = маньяка не чути,
- * 1 = впритул), яке вже смикає розмір іконки серця в
- * {@link com.log_to_kot.maniacmod.client.overlay.vitals.SurvivorVitalsOverlay#renderHeart}.
+ * Звук серцебиття, коли поруч маньяк, + крок {@link HeartbeatClock}.
  *
- * <p><b>Перенесено з мода "снайпери"</b> (система
- * {@code EnhancedVisuals HeartbeatHandler}): один цикл серцебиття —
- * два коротких удари, {@code heartbeat_out} одразу на старті циклу й
- * {@code heartbeat_in} за {@link #IN_OFFSET_MS} до його кінця — той
- * самий двотактний "тук-тук", що й там (в оригіналі — буфер тіків
- * {@code effectBufferTicks} з другим ударом на позначці {@code == 5}
- * із 20-тікового циклу; тут той самий інтервал ({@code 5 тіків = 250мс})
- * перевиражений у мілісекундах, бо цей клас працює від
- * {@code System.currentTimeMillis()}, а не від лічильника тіків).</p>
+ * <p>Озвучує те саме значення {@code ClientMatchState.heartbeat()} (0..1,
+ * 0 = маньяка не чути, 1 = впритул), яким живиться іконка серця у
+ * {@code SurvivorVitalsOverlay}. <b>Перенесено з мода "снайпери"</b>
+ * (двотактний "тук-тук": {@code heartbeat_out} → {@code heartbeat_in}).</p>
  *
- * <h3>Чому НЕ окрема система, а той самий {@code heartbeat}</h3>
- * У мода снайперів heartbeat реагував на НИЗЬКЕ ХП. У маніяк-моді це
- * ім'я вже зайняте іншим сенсом — "наскільки близько маньяк" (див.
- * {@code SurvivorModule.computeHeartbeat}), і саме цей сенс тут
- * озвучується: HUD уже показує пульс, тепер його ще й чути.
+ * <h3>Що змінено (звук "дивний впритул до маньяка")</h3>
+ * <ul>
+ *   <li>Раніше цикл рахувався в {@code ClientTickEvent} (крок 50 мс) з періодом
+ *       {@code 900 - 640*hb} → 260 мс впритул, а другий удар ставився за
+ *       250 мс до кінця циклу, тобто через ~10 мс після першого. Обидва
+ *       семпли по 300 мс — вони накладались у кашу й тремтіли на джитері
+ *       тіків. Тепер ритм веде {@link HeartbeatClock}: покадровий, з
+ *       мінімальним проміжком ~170 мс між ударами.</li>
+ *   <li>Гучність і висота тону ростуть плавно зі згладженим рівнем, тому
+ *       серце не "стрибає" при кожному пакеті від сервера.</li>
+ *   <li>Та сама фаза читається оверлеєм — звук і візуал синхронні за
+ *       побудовою.</li>
+ * </ul>
  *
- * <h3>Частота</h3>
- * Один період = {@code 900 - 640 * heartbeat} мс — та сама формула,
- * що й пульс іконки серця в {@code SurvivorVitalsOverlay.renderHeart}
- * (900мс на дальній межі, 260мс впритул до маньяка): звук і візуал
- * завжди б'ються в такт, бо рахуються з однієї точки й одного вхідного
- * значення. Що ближче маньяк — то частіше серце.
- *
- * <h3>Чому клієнтський тригер, не сервер + пакет</h3>
- * Той самий принцип, що {@link ExhaustedBreathClientHooks}: сервер
- * уже щотік шле {@code heartbeat} у {@code SurvivorVitalsPacket} —
- * тут лише читається те, що вже прийшло, без додаткового мережевого
- * трафіку.
+ * <p>Клієнтський тригер, а не сервер + пакет: сервер уже щотік шле
+ * {@code heartbeat} у {@code SurvivorVitalsPacket} — той самий принцип, що
+ * {@link ExhaustedBreathClientHooks}.</p>
  */
 @Mod.EventBusSubscriber(modid = ManiacMod.MOD_ID, value = Dist.CLIENT,
                         bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class HeartbeatSoundHandler {
 
-    /**
-     * Скільки мс до кінця циклу грає другий удар (IN). В оригіналі —
-     * 5 тіків із 20-тікового циклу за замовчуванням, тобто чверть
-     * циклу до кінця; тут той самий інтервал у мс (5 тіків × 50мс).
-     */
-    private static final long IN_OFFSET_MS = 250;
+    /** Нижче цього згладженого рівня серце не озвучується (край радіуса). */
+    private static final float AUDIBLE_LEVEL = 0.02f;
 
-    /** Момент (мс), коли почався поточний цикл серцебиття. -1 = цикл не йде. */
-    private static long cycleStartMs = -1L;
-
-    /** Чи вже програвався другий удар (IN) у поточному циклі — щоб не повторити його щотік. */
-    private static boolean inPlayedThisCycle = false;
+    private static long lastFrameNanos = 0L;
 
     private HeartbeatSoundHandler() {}
 
+    /**
+     * Покадровий крок — саме кадр, а не клієнтський тік: тік дає 50 мс
+     * гранулярності, яка на швидкому ритмі чутна як тремтіння.
+     */
     @SubscribeEvent
-    public static void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) return;
+    public static void onRenderTick(TickEvent.RenderTickEvent event) {
+        if (event.phase != TickEvent.Phase.START) return;
 
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) {
-            cycleStartMs = -1L;
+        long nowNanos = System.nanoTime();
+        float dt = lastFrameNanos == 0L ? 0f : (nowNanos - lastFrameNanos) / 1_000_000_000f;
+        lastFrameNanos = nowNanos;
+
+        if (mc.player == null || mc.level == null || !ClientMatchState.isSurvivor()) {
+            HeartbeatClock.reset();
             return;
         }
+        // Пауза (одиночна гра): годинник стоїть, звук не накопичується.
+        if (mc.isPaused()) return;
 
-        boolean vitalsAllowed = ClientMatchState.allows(PhaseRule.SURVIVOR_VITALS)
-            || ClientMatchState.phase() == com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY;
-        if (!ClientMatchState.isSurvivor() || !vitalsAllowed) {
-            cycleStartMs = -1L;
-            return;
+        // Серце б'ється не лише від маньяка поруч, а й від малого хп:
+        // нижче порога віньєтки воно з'являється тихо й повільно, а на
+        // межі смерті — гучно й швидко. Береться більше з двох джерел,
+        // тож близький маньяк усе ще прискорює ритм сильніше.
+        float target = Math.max(ClientMatchState.heartbeat(), lowHpHeartbeat());
+        int events = HeartbeatClock.update(dt, target);
+
+        boolean soundAllowed = ClientMatchState.allows(PhaseRule.SURVIVOR_VITALS)
+            || ClientMatchState.phase() == GamePhase.LOBBY;
+        float level = HeartbeatClock.level();
+        if (!soundAllowed || level < AUDIBLE_LEVEL) return;
+
+        if ((events & HeartbeatClock.EVENT_LUB) != 0) {
+            playHeartbeatSound(ModSounds.HEARTBEAT_OUT, level, 1.0f);
         }
-
-        float heartbeat = ClientMatchState.heartbeat();
-        if (heartbeat <= 0f) {
-            cycleStartMs = -1L; // маньяк вийшов за межі радіуса — серце затихло, наступний вхід стартує з чистого циклу
-            return;
-        }
-
-        long periodMs = Math.round(900 - 640 * heartbeat); // та сама формула, що SurvivorVitalsOverlay.renderHeart
-        long now = System.currentTimeMillis();
-
-        if (cycleStartMs < 0) {
-            // Новий цикл: перший удар (OUT) грає одразу, як і в оригіналі
-            // (effectBufferTicks <= 0 стартує overlay+blur+OUT в одному кадрі).
-            cycleStartMs = now;
-            inPlayedThisCycle = false;
-            playHeartbeatSound(ModSounds.HEARTBEAT_OUT, heartbeat);
-            return;
-        }
-
-        long elapsed = now - cycleStartMs;
-
-        if (elapsed >= periodMs) {
-            // Цикл завершився — новий одразу з тим самим "миттєвим OUT".
-            cycleStartMs = now;
-            inPlayedThisCycle = false;
-            playHeartbeatSound(ModSounds.HEARTBEAT_OUT, heartbeat);
-            return;
-        }
-
-        // Другий удар (IN) за IN_OFFSET_MS до кінця циклу, рівно один раз.
-        // periodMs на близькій межі (260мс) коротший за IN_OFFSET_MS (250мс)
-        // лише-лише — clamp знизу нулем не дає "негативного" вікна.
-        long inOffset = Math.min(IN_OFFSET_MS, periodMs);
-        if (!inPlayedThisCycle && elapsed >= periodMs - inOffset) {
-            inPlayedThisCycle = true;
-            playHeartbeatSound(ModSounds.HEARTBEAT_IN, heartbeat);
+        if ((events & HeartbeatClock.EVENT_DUB) != 0) {
+            // Другий удар трохи тихіший і вищий — природне "тук-ТУК".
+            playHeartbeatSound(ModSounds.HEARTBEAT_IN, level * 0.88f, 1.04f);
         }
     }
 
+    /** Рівень серцебиття (0..1) від малого хп: 0 вище порога, від {@link #LOW_HP_MIN_LEVEL} до {@link #LOW_HP_MAX_LEVEL} нижче. */
+    private static final float LOW_HP_MIN_LEVEL = 0.18f;
+    private static final float LOW_HP_MAX_LEVEL = 0.75f;
+
+    private static float lowHpHeartbeat() {
+        float severity = LowHpVignetteOverlay.lowHpSeverity();
+        if (severity <= 0f) return 0f;
+        return LOW_HP_MIN_LEVEL + (LOW_HP_MAX_LEVEL - LOW_HP_MIN_LEVEL) * severity;
+    }
+
     /**
-     * @param heartbeat 0..1 — гучність росте разом із близькістю
-     *                  маньяка (тихе далеке серце, гучне впритул), той
-     *                  самий діапазон {@code Math.min(0.7f, intensity)}
-     *                  підхід, що в оригінальному {@code EVHeartbeatHandler},
-     *                  тільки джерело інтенсивності тут — дистанція,
-     *                  не хп.
+     * @param level рівень близькості 0..1 (згладжений) — гучність росте разом із ним
+     * @param pitchBase базова висота: до неї додається до +8% впритул до маньяка
      */
-    private static void playHeartbeatSound(RegistryObject<SoundEvent> sound, float heartbeat) {
+    private static void playHeartbeatSound(RegistryObject<SoundEvent> sound, float level, float pitchBase) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        float volume = 0.4f + 0.6f * Math.min(1f, heartbeat);
-        SoundCenter.playAt(sound.getId().toString(), SoundSource.PLAYERS, volume, 1.0f,
+        float l = Math.min(1f, level);
+        float volume = 0.30f + 0.70f * l;
+        float pitch = pitchBase + 0.08f * l;
+        SoundCenter.playAt(sound.getId().toString(), SoundSource.PLAYERS, volume, pitch,
             mc.player.getX(), mc.player.getY(), mc.player.getZ());
     }
 }

@@ -3,7 +3,7 @@ package com.log_to_kot.maniacmod.client.chat;
 import dev.shaurmalib.common.chat.ChatEntry;
 import dev.shaurmalib.common.chat.ChatFormatEngine;
 import dev.shaurmalib.forge.chat.ChatEntryRenderer;
-import dev.shaurmalib.forge.overlay.OverlayPanelStyle;
+import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -37,9 +37,15 @@ import java.util.UUID;
 public final class ManiacChatEntryRenderer implements ChatEntryRenderer {
 
     private static final int HEAD_SIZE = 11;
-    private static final int HEAD_GAP = 4;
-    private static final int LINE_SPACING = 1;
-    private static final int NAME_COLOR_FALLBACK = 0xFFFFFFFF;
+    private static final int HEAD_GAP = 6;
+    private static final int LINE_SPACING = 2;
+    /** Додатковий просвіт між ніком і текстом повідомлення. */
+    private static final int NAME_GAP = 1;
+    private static final int NAME_COLOR_FALLBACK = ManiacUiTheme.TEXT_TITLE;
+    /** Текст повідомлення гравця. */
+    private static final int TEXT_PLAYER = ManiacUiTheme.TEXT_TITLE;
+    /** Системні/смертні повідомлення — трохи приглушені, щоб не змагатись із репліками гравців. */
+    private static final int TEXT_SYSTEM = 0xFFC9CDD3;
 
     @Override
     public int contentHeight(ChatEntry entry, Font font, int maxWidth) {
@@ -48,7 +54,8 @@ public final class ManiacChatEntryRenderer implements ChatEntryRenderer {
         }
         int textWidth = Math.max(1, maxWidth - HEAD_SIZE - HEAD_GAP);
         List<FormattedCharSequence> lines = font.split(rawText(entry), textWidth);
-        int textBlock = font.lineHeight + Math.max(1, lines.size()) * (font.lineHeight + LINE_SPACING);
+        int textBlock = font.lineHeight + NAME_GAP + LINE_SPACING
+            + Math.max(1, lines.size()) * (font.lineHeight + LINE_SPACING) - LINE_SPACING;
         return Math.max(HEAD_SIZE, textBlock);
     }
 
@@ -58,7 +65,7 @@ public final class ManiacChatEntryRenderer implements ChatEntryRenderer {
         if (!entry.isPlayerMessage()) {
             int textY = y;
             for (FormattedCharSequence line : font.split(message(entry), width)) {
-                graphics.drawString(font, line, x, textY, OverlayPanelStyle.TEXT_DEFAULT, true);
+                graphics.drawString(font, line, x, textY, TEXT_SYSTEM, true);
                 textY += font.lineHeight + LINE_SPACING;
             }
             return;
@@ -71,15 +78,17 @@ public final class ManiacChatEntryRenderer implements ChatEntryRenderer {
         int nameColor = ChatFormatEngine.parseColorOrDefault(entry.colorHex(), NAME_COLOR_FALLBACK);
         graphics.drawString(font, entry.senderName(), textX, y, nameColor, true);
 
-        int lineY = y + font.lineHeight + LINE_SPACING;
+        int lineY = y + font.lineHeight + NAME_GAP + LINE_SPACING;
         for (FormattedCharSequence line : font.split(rawText(entry), textWidth)) {
-            graphics.drawString(font, line, textX, lineY, OverlayPanelStyle.TEXT_DEFAULT, true);
+            graphics.drawString(font, line, textX, lineY, TEXT_PLAYER, true);
             lineY += font.lineHeight + LINE_SPACING;
         }
     }
 
     /** 2D-голова: скін онлайн-гравця, інакше дефолтний скін за UUID. */
     private void drawPlayerHead(GuiGraphics graphics, UUID uuid, int x, int y) {
+        // Тонка рамка навколо голови — у тому ж кольорі, що й рамки панелей мода.
+        graphics.fill(x - 1, y - 1, x + HEAD_SIZE + 1, y + HEAD_SIZE + 1, ManiacUiTheme.BORDER_BRIGHT);
         PlayerFaceRenderer.draw(graphics, skinOf(uuid), x, y, HEAD_SIZE);
     }
 

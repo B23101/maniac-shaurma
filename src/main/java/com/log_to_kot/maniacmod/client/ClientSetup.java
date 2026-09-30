@@ -11,9 +11,10 @@ import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorCompletedOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker;
 import com.log_to_kot.maniacmod.client.overlay.actionprogress.RescueOverlay;
 import com.log_to_kot.maniacmod.client.overlay.notify.DownedSurvivorMarker;
-import com.log_to_kot.maniacmod.client.overlay.notify.ManiacStunWorldMarker;
 import com.log_to_kot.maniacmod.client.overlay.notify.ManiacStunOverlay;
+import com.log_to_kot.maniacmod.client.overlay.notify.RoleRevealOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacHotbarOverlay;
+import com.log_to_kot.maniacmod.client.overlay.hotbar.ManiacStrikeOverlay;
 import com.log_to_kot.maniacmod.client.overlay.hotbar.TrapPanelOverlay;
 import com.log_to_kot.maniacmod.client.overlay.roster.TabRosterOverlay;
 import com.log_to_kot.maniacmod.client.overlay.debug.DebugOverlay;
@@ -125,9 +126,16 @@ public final class ClientSetup {
         // під ним) — це вигляд САМЕ цього режиму, тому він реєструється
         // тут, а не зашитий у бібліотеку.
         ChatEntryRendererRegistry.set(new ManiacChatEntryRenderer());
-        MinecraftForge.EVENT_BUS.addListener((ScreenEvent.Opening screenEvent) ->
-            ShaurmaLib.attachChatScreenIntercept(screenEvent, () -> false, visible -> {
-            }));
+        // Екран чату (T або /) — власний ManiacChatScreen у стилі мода, а не
+        // бібліотечний ChatHistoryScreen: у бібліотечного стрічка повідомлень
+        // заходила під ряд кнопок дій (⚙ Налаштування гри лягала на текст),
+        // а вигляд не збігався з рештою інтерфейсу. Дані (історія, канали,
+        // кнопки з ChatScreenButtonRegistry, пакет відправки) — ті самі.
+        MinecraftForge.EVENT_BUS.addListener((ScreenEvent.Opening screenEvent) -> {
+            if (screenEvent.getScreen() instanceof net.minecraft.client.gui.screens.ChatScreen) {
+                screenEvent.setNewScreen(new com.log_to_kot.maniacmod.client.chat.ManiacChatScreen());
+            }
+        });
 
         // Кнопка "⚙ Налаштування гри" у вікні чату — видима лише
         // операторам (та сама межа прав, що вимагає корінь команди
@@ -175,6 +183,12 @@ public final class ClientSetup {
     public static void onRegisterItemDecorations(RegisterItemDecorationsEvent event) {
         event.register(ModItems.get("fuel_canister").get(), new FuelCanisterChargeDecorator());
         event.register(ModItems.get("crowbar").get(), new CrowbarDurabilityDecorator());
+        // Викрутка: число міцності (знімається -5%/с під час ремонту).
+        event.register(ModItems.get("screwdriver").get(), new CrowbarDurabilityDecorator());
+        // Біта: число міцності (правий верхній кут) + ВЛАСНИЙ бар перезарядки під іконкою.
+        event.register(ModItems.get("bat").get(), new CrowbarDurabilityDecorator());
+        event.register(ModItems.get("bat").get(),
+            new com.log_to_kot.maniacmod.client.renderer.ItemCooldownBarDecorator(com.log_to_kot.maniacmod.items.BatItem.COOLDOWN_KEY));
     }
 
     /** Кастомні частинки: провайдери й кадри ({@code particles/*.json}). */
@@ -206,15 +220,15 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_downed_marker",
             (gui, graphics, partialTick, width, height) ->
                 DownedSurvivorMarker.render(graphics));
-        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_stun_world_marker",
-            (gui, graphics, partialTick, width, height) ->
-                ManiacStunWorldMarker.render(graphics));
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_stun_overlay",
             (gui, graphics, partialTick, width, height) ->
                 ManiacStunOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_rescue",
             (gui, graphics, partialTick, width, height) ->
                 RescueOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "maniac_strike_slot",
+            (gui, graphics, partialTick, width, height) ->
+                ManiacStrikeOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "maniac_trap_panel",
             (gui, graphics, partialTick, width, height) ->
                 TrapPanelOverlay.render(graphics));
@@ -224,6 +238,19 @@ public final class ClientSetup {
         // Поверх усього ігрового HUD (той самий шар, що debug-режим) —
         // вінʼєтка має лишатись видимою крайовим зором незалежно від
         // того, що ще малюється (прогрес-панелі, підказки, ростер).
+        // Оголошення ролі — поверх усього HUD, щоб хотбар і панелі не
+        // перекривали великий текст (той самий шар, що віньєтки нижче).
+        // Кіно-вступ: затемнення, letterbox і loader. Нижче за оголошення ролі
+        // (те малюється вже після розтемнення) і вище за весь звичайний HUD.
+        event.registerAboveAll(com.log_to_kot.maniacmod.client.intro.IntroClient.OVERLAY_ID,
+            (gui, graphics, partialTick, width, height) ->
+                com.log_to_kot.maniacmod.client.intro.IntroOverlay.render(graphics));
+        event.registerAboveAll("maniac_role_reveal",
+            (gui, graphics, partialTick, width, height) ->
+                RoleRevealOverlay.render(graphics));
+        event.registerAboveAll("maniac_hit_effect",
+            (gui, graphics, partialTick, width, height) ->
+                ManiacHitEffect.render(graphics));
         event.registerAboveAll("maniac_low_hp_vignette",
             (gui, graphics, partialTick, width, height) ->
                 LowHpVignetteOverlay.render(graphics));

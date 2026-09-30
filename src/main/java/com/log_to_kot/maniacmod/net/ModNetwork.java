@@ -4,6 +4,7 @@ import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.RescueProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.AbilityActivatePacket;
+import com.log_to_kot.maniacmod.net.c2s.intent.GroundItemPickupPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.HighlightTogglePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.ManiacStrikePacket;
 import com.log_to_kot.maniacmod.net.c2s.minigame.TargetMinigameClickPacket;
@@ -30,6 +31,7 @@ import com.log_to_kot.maniacmod.net.s2c.notify.CountdownPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorExplosionPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ManiacStunPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.TrapEscapePromptPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorInteractionPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ItemPickupPacket;
@@ -80,8 +82,10 @@ public final class ModNetwork {
      * Піднімати при БУДЬ-ЯКІЙ зміні формату пакетів. Клієнт і сервер
      * з різними версіями просто не з'єднаються — це краще, ніж
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
+     *
+     * 15: {@code WireMinigameOpenPacket} несе ще й кольори правої колодки.
      */
-    private static final String PROTOCOL_VERSION = "12";
+    private static final String PROTOCOL_VERSION = "15";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -143,6 +147,13 @@ public final class ModNetwork {
         s2c(WireShockPacket.class,                WireShockPacket::new);
         s2c(GeneratorInteractionPacket.class,     GeneratorInteractionPacket::new);
         s2c(ItemPickupPacket.class,               ItemPickupPacket::new);
+        s2c(ManiacHitPacket.class,                ManiacHitPacket::new);
+        // Кіно-вступ (PROTOCOL 14): старт з параметрами подачі й сигнал розтемнення.
+        s2c(com.log_to_kot.maniacmod.net.s2c.intro.IntroStartPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.intro.IntroStartPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.intro.IntroRevealPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.intro.IntroRevealPacket::new);
+        c2s(GroundItemPickupPacket.class,         GroundItemPickupPacket::new);
     }
 
     // ── Реєстрація ───────────────────────────────────────────────────────

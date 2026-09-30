@@ -1,7 +1,9 @@
 package com.log_to_kot.maniacmod.client.renderer;
 
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.items.BatItem;
 import com.log_to_kot.maniacmod.items.CrowbarItem;
+import com.log_to_kot.maniacmod.items.ScrewdriverItem;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.world.item.ItemStack;
@@ -17,6 +19,10 @@ import net.minecraftforge.client.IItemDecorator;
  *
  * Пороги кольору: понад 50% — нейтральний, 20–50% — попередження,
  * менше 20% (тобто останній удар) — небезпека.
+ *
+ * Той самий декоратор показує міцність ВИКРУТКИ ({@link ScrewdriverItem}) і БІТИ ({@link BatItem}). Біта має власний
+ * бар перезарядки внизу іконки ({@link ItemCooldownBarDecorator}), тому її число
+ * ставиться у ПРАВИЙ ВЕРХНІЙ кут ({@code topRight = true}), щоб не накладатись на бар.
  */
 @OnlyIn(Dist.CLIENT)
 public final class CrowbarDurabilityDecorator implements IItemDecorator {
@@ -28,14 +34,27 @@ public final class CrowbarDurabilityDecorator implements IItemDecorator {
 
     @Override
     public boolean render(GuiGraphics graphics, Font font, ItemStack stack, int xOffset, int yOffset) {
-        if (!(stack.getItem() instanceof CrowbarItem)) return false;
-
-        int durability = CrowbarItem.getDurability(stack);
+        boolean topRight;
+        int durability;
+        if (stack.getItem() instanceof CrowbarItem) {
+            durability = CrowbarItem.getDurability(stack);
+            topRight = false;
+        } else if (stack.getItem() instanceof BatItem) {
+            durability = BatItem.getDurability(stack);
+            topRight = true;
+        } else if (stack.getItem() instanceof ScrewdriverItem) {
+            // Викрутка без власного бару перезарядки — число в звичному
+            // правому нижньому куті, як у лома.
+            durability = ScrewdriverItem.getDurability(stack);
+            topRight = false;
+        } else {
+            return false;
+        }
         String text = durability + "%";
         int textWidth = font.width(text);
 
         float right = xOffset + 16f;
-        float bottom = yOffset + 16f;
+        float bottom = topRight ? yOffset + 1f + font.lineHeight * TEXT_SCALE : yOffset + 16f;
 
         var pose = graphics.pose();
         pose.pushPose();

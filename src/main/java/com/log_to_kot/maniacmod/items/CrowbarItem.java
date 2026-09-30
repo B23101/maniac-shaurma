@@ -176,4 +176,22 @@ public class CrowbarItem extends Item implements GeoItem {
         setDurability(stack, next);
         return next;
     }
+
+    /**
+     * Лом дійшов до 0% — він ПОВНІСТЮ ламається: зникає з руки гравця,
+     * з ванільним звуком і уламками. Викликати одразу після {@link #wear},
+     * ДО того, як стек кудись передається далі, і лише для стека, що
+     * лежить у головній руці (саме його віддають хуки удару).
+     *
+     * @return true, якщо лом зламано й видалено
+     */
+    public static boolean breakIfWornOut(net.minecraft.server.level.ServerPlayer owner, ItemStack stack) {
+        if (!isBroken(stack)) return false;
+        // Уламки беруться з предмета в руці — тому подія ДО shrink.
+        owner.broadcastBreakEvent(net.minecraft.world.InteractionHand.MAIN_HAND);
+        owner.level().playSound(null, owner.blockPosition(),
+            net.minecraft.sounds.SoundEvents.ITEM_BREAK, net.minecraft.sounds.SoundSource.PLAYERS, 1.0f, 0.9f);
+        stack.shrink(1);
+        return true;
+    }
 }

@@ -37,13 +37,13 @@ public final class ItemRegistry {
         register("splint", SplintItem::new, Group.SURVIVOR);  // Шина
         register("fuel_canister", FuelCanisterItem::new, Group.SURVIVOR);  // Бензин
         register("crowbar", CrowbarItem::new, Group.SURVIVOR);  // Лом
+        register("bat", BatItem::new, Group.SURVIVOR);  // Біта (оглушення маньяка, власна перезарядка)
         register("flashlight", FlashlightItem::new, Group.SURVIVOR);  // Ліхтарик
         register("geo_scissors", GeoScissorsItem::new, Group.SURVIVOR);  // Geo-ножиці (розмінування пасток)
+        register("screwdriver", ScrewdriverItem::new, Group.SURVIVOR);  // Викрутка (ремонт генератора ×2, -5%/с)
+        register("adrenaline", AdrenalineItem::new, Group.SURVIVOR);  // Адреналін (швидкість, без витрати стаміни, потім відкат)
         // TODO(міграція items): у міру перенесення з v3 ItemImplementations
-        //   register("bat",          BatItem::new,          Group.SURVIVOR);
-        //   register("screwdriver",  ScrewdriverItem::new,  Group.SURVIVOR);
         //   register("scissors",     ScissorsItem::new,     Group.SURVIVOR);
-        //   register("adrenaline",   AdrenalineItem::new,   Group.SURVIVOR);
 
         // ── Зброя маньяків ──────────────────────────────────────────────
         // TODO(міграція maniacs): назви предметів беруться з id архетипу

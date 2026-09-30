@@ -11,9 +11,13 @@ import net.minecraft.network.FriendlyByteBuf;
  * {@code initialRightSlotForLeft[i]} — з яким правим контактом дріт
  * лівого контакту {@code i} з'єднаний НА СТАРТІ (навмисно неправильно,
  * жоден дріт не стоїть на своєму місці — див. {@link WireMinigameLayout}).
- * Індекс = "колір": лівий {@code i} завжди шукає правий {@code i}, а
- * як саме розфарбувати контакт {@code i} — вирішує клієнтський рендер
- * (текстура/константний список кольорів), сервер кольорів не знає.
+ *
+ * {@code rightColors[slot]} — колір (індекс) правого контакту в рядку
+ * {@code slot}. Праву колодку ПЕРЕМІШАНО відносно лівої, тож правильний
+ * контакт для лівого {@code i} — той правий, чий колір теж {@code i}, і
+ * стоїть він у ДОВІЛЬНОМУ рядку (а не навпроти). Як саме розфарбувати
+ * колір {@code i} — вирішує клієнтський рендер (константний список
+ * кольорів), сервер кольорів не знає, лише їхні індекси.
  *
  * {@code timeLimitTicks} прийшло тут (а не читається з конфігу
  * клієнтом), щоб адмінська зміна WIRE_MINIGAME_TICKS під час матчу не
@@ -23,11 +27,12 @@ import net.minecraft.network.FriendlyByteBuf;
 public record WireMinigameOpenPacket(
         BlockPos generatorPos,
         int[] initialRightSlotForLeft,
+        int[] rightColors,
         int timeLimitTicks
 ) implements S2CPacket {
 
     public WireMinigameOpenPacket(FriendlyByteBuf buf) {
-        this(buf.readBlockPos(), readSlots(buf), buf.readVarInt());
+        this(buf.readBlockPos(), readSlots(buf), readSlots(buf), buf.readVarInt());
     }
 
     private static int[] readSlots(FriendlyByteBuf buf) {
@@ -42,6 +47,8 @@ public record WireMinigameOpenPacket(
         buf.writeBlockPos(generatorPos);
         buf.writeVarInt(initialRightSlotForLeft.length);
         for (int slot : initialRightSlotForLeft) buf.writeVarInt(slot);
+        buf.writeVarInt(rightColors.length);
+        for (int color : rightColors) buf.writeVarInt(color);
         buf.writeVarInt(timeLimitTicks);
     }
 

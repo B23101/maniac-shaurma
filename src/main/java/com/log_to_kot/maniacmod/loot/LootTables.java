@@ -46,7 +46,14 @@ public final class LootTables {
             // Лом потрібен лише тоді, коли хтось потрапив у капкан, тож він
             // рідкісніший за пальне. Свіжий лом має 100% (немає тега = повна
             // міцність, див. CrowbarItem#getDurability) — окремо не ініціалізується.
-            new LootEntry(ModItems.get("crowbar").get(), 1, 0.5f)
+            new LootEntry(ModItems.get("crowbar").get(), 1, 0.5f),
+            // Біта — друге оглушення маньяка (12 с, 2 удари). Рідкісніша за лом:
+            // лом ще й рятує з капкана, біта лише глушить.
+            new LootEntry(ModItems.get("bat").get(), 1, 0.35f),
+            // Викрутка — ремонт ×2, але лише ~20 с роботи на екземпляр, тож
+            // не надто рідкісна. Адреналін — одноразовий ривок із відкатом.
+            new LootEntry(ModItems.get("screwdriver").get(), 1, 0.4f),
+            new LootEntry(ModItems.get("adrenaline").get(), 1, 0.35f)
             // Нові предмети — сюди, тим самим рядком.
         ));
     }

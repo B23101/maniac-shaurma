@@ -1,10 +1,13 @@
 package com.log_to_kot.maniacmod.client.overlay.hotbar;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import dev.shaurmalib.forge.inventory.InventorySlotAllocationClientHooks;
 import net.minecraft.client.Minecraft;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
@@ -71,32 +74,26 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
     /** Суцільна темна заливка фону кожного слота — і виживого, і маньяка. Спільне джерело з {@link ManiacUiTheme#SLOT_FILL}. */
     private static final int SLOT_FILL = ManiacUiTheme.SLOT_FILL;
 
-    // Звичайний предмет виживого — нейтральний білий, як на референсі.
-    private static final int PLAYER_BORDER = 0x90FFFFFF;
-    private static final int PLAYER_SELECTED = 0xFFFFFFFF;
+    // ── Палітра: стиль панелей генератора (срібло на темному) ───────────
+    // Тип слота маньяка читається тонкою кольоровою смужкою зверху слота
+    // (здібність — срібло, пастка — бурштин); сама рамка й вибір — єдині
+    // для всіх, як у GeneratorFuelUiTheme.
+    private static final int SLOT_BORDER = GeneratorFuelUiTheme.PANEL_BORDER;
+    private static final int PLAYER_SELECTED = GeneratorFuelUiTheme.HIGHLIGHT;
+    private static final int STRIKE_BORDER = GeneratorFuelUiTheme.PANEL_BORDER;
+    private static final int STRIKE_GLYPH_COLOR = GeneratorFuelUiTheme.FILL;
+    private static final int ABILITY_STRIP = GeneratorFuelUiTheme.FILL;
+    private static final int TRAP_STRIP = GeneratorFuelUiTheme.FILL_WARN;
+    private static final int SELECTION_COLOR = GeneratorFuelUiTheme.HIGHLIGHT;
 
-    // Удар маньяка — той самий нейтральний білий (це базова зброя, не спец-слот).
-    private static final int STRIKE_BORDER = 0x90FFFFFF;
-    private static final int STRIKE_GLYPH_COLOR = 0xFFEDEDED;
-
-    // Здібності маньяка — акцентний холодний блакитний.
-    private static final int ABILITY_BORDER = 0x9059C7FF;
-    private static final int ABILITY_SELECTED = 0xFF59C7FF;
-    private static final int ABILITY_PROGRESS = 0xFF59C7FF;
-
-    // Пастки маньяка — акцентний жовтогарячий.
-    private static final int TRAP_BORDER = 0x90FF9838;
-    private static final int TRAP_SELECTED = 0xFFFF9838;
-    private static final int TRAP_PROGRESS = 0xFFFF9838;
-
-    private static final int POWER_CHARGE_LIT = 0xFFFFD24A;
+    private static final int POWER_CHARGE_LIT = GeneratorFuelUiTheme.FILL;
     private static final int POWER_CHARGE_UNLIT = 0x50666666;
 
     private static final int STRIKE_ICON_SIZE = 32;
     private static final int POWER_CHARGE_SIZE = 24;
     private static final int POWER_CHARGE_ORBIT_RADIUS = 27;
 
-    private static final int SLOT_NUMBER_COLOR = 0xFFDADADA;
+    private static final int SLOT_NUMBER_COLOR = GeneratorFuelUiTheme.HIGHLIGHT;
 
     /** id під яким сервер шле спільний кулдаун пасток через той самий канал, що здібності (AbilityCooldownPacket). */
     private static final String TRAP_COOLDOWN_ID = "trap_cooldown";
@@ -114,6 +111,12 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
     private enum SlotKind { STRIKE, ABILITY, TRAP }
 
     private static final String[] SLOT_ABILITY_IDS = { null, null, null };
+
+    /** Кадровий dt останнього advanceAnimation — для спалахів готовності. */
+    private float frameDt = 0.016f;
+    /** Спалах готовності по індексах слотів (1 → 0), запускається, коли кулдаун закінчився. */
+    private final float[] readyFlash = new float[8];
+    private final boolean[] wasCooling = new boolean[8];
 
     private float animatedFrameIndex = 0f;
     private float animatedScale = 1f;
@@ -153,9 +156,10 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         int left = screenWidth - MARGIN_RIGHT - totalWidth;
         // Плавний в'їзд знизу: поки entrance росте 0→1, хотбар піднімається
         // на місце (ease-out, тож гальмує в кінці, а не лінійно).
-        int entranceOffset = Math.round((1f - com.log_to_kot.maniacmod.client.style.UiAnim.easeOutCubic(entrance))
-                * (SLOT_SIZE + MARGIN_BOTTOM));
-        int top = screenHeight - MARGIN_BOTTOM - SLOT_SIZE + entranceOffset;
+        int baseTop = screenHeight - MARGIN_BOTTOM - SLOT_SIZE;
+        // Каскад: кожен слот в'їжджає з невеликою затримкою відносно попереднього
+        // (easeOutBack — легкий «підскок» при осіданні).
+        int top = baseTop + slotEntranceOffset(selectedIndex);
 
         long currentTick = minecraft.level != null ? minecraft.level.getGameTime() : 0L;
 
@@ -167,14 +171,15 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         for (int index = 0; index < allowedSlots.size(); index++) {
             int inventorySlot = allowedSlots.get(index);
             int slotX = left + index * (SLOT_SIZE + SLOT_GAP);
+            int slotY = baseTop + slotEntranceOffset(index);
 
             if (maniac && index == 0) {
-                renderStrikeSlot(graphics, minecraft, slotX, top, inventorySlot, index + 1, currentTick);
+                renderStrikeSlot(graphics, minecraft, slotX, slotY, inventorySlot, index + 1, currentTick);
             } else if (maniac) {
                 SlotKind kind = classifyManiacSlot(index);
-                renderManiacSlot(graphics, minecraft, slotX, top, inventorySlot, index + 1, kind, currentTick);
+                renderManiacSlot(graphics, minecraft, slotX, slotY, inventorySlot, index + 1, kind, currentTick);
             } else {
-                renderPlayerSlot(graphics, minecraft, slotX, top, inventorySlot, index + 1);
+                renderPlayerSlot(graphics, minecraft, slotX, slotY, inventorySlot, index + 1);
             }
         }
 
@@ -183,13 +188,15 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         // кожен має власний акцент), звичайний виживий завжди білий.
         SlotKind selectedKind = maniac ? (selectedIndex == 0 ? SlotKind.STRIKE : classifyManiacSlot(selectedIndex))
                 : SlotKind.STRIKE; // STRIKE тут лише позначає "нейтральний білий колір", виживий не має типів
-        int selectionColor = !maniac ? PLAYER_SELECTED
-                : switch (selectedKind) {
-                    case TRAP -> TRAP_SELECTED;
-                    case ABILITY -> ABILITY_SELECTED;
-                    case STRIKE -> STRIKE_GLYPH_COLOR;
-                };
+        int selectionColor = SELECTION_COLOR;
         renderSelectionFrame(graphics, left, top, maniac && selectedIndex == 0, selectionColor);
+    }
+
+    /** Вертикальний зсув слота під час каскадної появи (0 — на місці). */
+    private int slotEntranceOffset(int index) {
+        float local = com.log_to_kot.maniacmod.client.style.UiAnim.clamp01(entrance * 1.35f - index * 0.10f);
+        float e = com.log_to_kot.maniacmod.client.style.UiAnim.easeOutBack(local, 0.8f);
+        return Math.round((1f - e) * (SLOT_SIZE + MARGIN_BOTTOM));
     }
 
     /** index 0 = удар (не входить сюди), 1..3 = здібності, 4..6 = пастки (див. клас-докстрінг). */
@@ -213,15 +220,32 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         int drawX = Math.round(slotCenterX - size / 2f);
         int drawY = Math.round(slotCenterY - size / 2f);
 
+        // М'яке «дихання» яскравості рамки вибору.
+        float breathe = 0.82f + 0.18f * (float) Math.sin(System.currentTimeMillis() / 300.0);
+        int frameColor = GeneratorFuelUiTheme.alpha(color, breathe);
         if (isStrikeSlot) {
-            strokeCircle(graphics, Math.round(slotCenterX), Math.round(slotCenterY), size / 2, color, 2);
+            strokeCircle(graphics, Math.round(slotCenterX), Math.round(slotCenterY), size / 2 + 2,
+                GeneratorFuelUiTheme.alpha(color, 0.22f), 1);
+            strokeCircle(graphics, Math.round(slotCenterX), Math.round(slotCenterY), size / 2, frameColor, 2);
         } else {
-            strokeSquare(graphics, drawX, drawY, size, SELECTION_THICKNESS, color);
+            com.log_to_kot.maniacmod.client.style.UiFx.glow(graphics, drawX, drawY, size, size, color,
+                0.30f + 0.35f * breathe + selectionPulse * 0.5f, 5);
+            strokeSquare(graphics, drawX - 2, drawY - 2, size + 4, 1, GeneratorFuelUiTheme.alpha(color, 0.22f));
+            strokeSquare(graphics, drawX, drawY, size, SELECTION_THICKNESS, frameColor);
+            com.log_to_kot.maniacmod.client.style.UiFx.brackets(graphics, drawX, drawY, size, size,
+                GeneratorFuelUiTheme.alpha(color, 0.95f), 7, 0.4f + 0.6f * selectionPulse, 5);
+            if (selectionPulse > 0.03f) {
+                GeneratorFuelUiTheme.pulseRing(graphics, drawX, drawY, size, size, color, 1f - selectionPulse, 10);
+            }
         }
     }
 
     private void advanceAnimation(int targetIndex) {
         float dt = com.log_to_kot.maniacmod.client.style.UiAnim.frameDt(lastFrameNanos);
+        frameDt = dt;
+        for (int i = 0; i < readyFlash.length; i++) {
+            readyFlash[i] = com.log_to_kot.maniacmod.client.style.UiAnim.approach(readyFlash[i], 0f, 4.5f, dt);
+        }
 
         animatedFrameIndex = com.log_to_kot.maniacmod.client.style.UiAnim
                 .approach(animatedFrameIndex, targetIndex, CATCH_UP_SPEED, dt);
@@ -247,8 +271,7 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
 
     private void renderPlayerSlot(GuiGraphics graphics, Minecraft minecraft, int x, int y,
                                    int inventorySlot, int displayNumber) {
-        graphics.fill(x, y, x + SLOT_SIZE, y + SLOT_SIZE, SLOT_FILL);
-        strokeSquare(graphics, x, y, SLOT_SIZE, BORDER_THICKNESS, PLAYER_BORDER);
+        GeneratorFuelUiTheme.drawSlot(graphics, x, y, SLOT_SIZE, SLOT_SIZE, SLOT_BORDER);
         drawSlotContents(graphics, minecraft, x, y, inventorySlot, displayNumber);
     }
 
@@ -256,19 +279,34 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
 
     private void renderManiacSlot(GuiGraphics graphics, Minecraft minecraft, int x, int y,
                                    int inventorySlot, int displayNumber, SlotKind kind, long currentTick) {
-        int border = kind == SlotKind.TRAP ? TRAP_BORDER : ABILITY_BORDER;
-        int progressColor = kind == SlotKind.TRAP ? TRAP_PROGRESS : ABILITY_PROGRESS;
+        int strip = kind == SlotKind.TRAP ? TRAP_STRIP : ABILITY_STRIP;
+        int flashIdx = Math.min(displayNumber, readyFlash.length - 1);
 
-        graphics.fill(x, y, x + SLOT_SIZE, y + SLOT_SIZE, SLOT_FILL);
-        strokeSquare(graphics, x, y, SLOT_SIZE, BORDER_THICKNESS, border);
+        GeneratorFuelUiTheme.drawSlot(graphics, x, y, SLOT_SIZE, SLOT_SIZE, SLOT_BORDER);
+        // Смужка типу слота зверху.
+        graphics.fill(x + 1, y + 1, x + SLOT_SIZE - 1, y + 3, GeneratorFuelUiTheme.alpha(strip, 0.85f));
 
         float cooldownFraction = readCooldownFraction(kind, displayNumber, currentTick);
-        float readyFraction = clamp01(1f - cooldownFraction);
-        if (readyFraction > 0f && readyFraction < 1f) {
-            strokeProgressSquare(graphics, x, y, SLOT_SIZE, progressColor, readyFraction);
-        }
+        boolean cooling = cooldownFraction > 0f;
+        if (wasCooling[flashIdx] && !cooling) readyFlash[flashIdx] = 1f;
+        wasCooling[flashIdx] = cooling;
 
         drawSlotContents(graphics, minecraft, x, y, inventorySlot, displayNumber);
+
+        if (cooling) {
+            // Штора кулдауну + нижній бар готовності в стилі генератора.
+            int curtain = Math.round((SLOT_SIZE - 2) * cooldownFraction);
+            graphics.fill(x + 1, y + 1, x + SLOT_SIZE - 1, y + 1 + curtain, 0xB0000000);
+            float ready = clamp01(1f - cooldownFraction);
+            GeneratorFuelUiTheme.drawBarFx(graphics, x + 5, y + SLOT_SIZE - 9, SLOT_SIZE - 10, 5,
+                ready, ready, strip, 0f);
+        }
+        if (readyFlash[flashIdx] > 0.02f) {
+            graphics.fill(x + 1, y + 1, x + SLOT_SIZE - 1, y + SLOT_SIZE - 1,
+                GeneratorFuelUiTheme.alpha(0xFFFFFFFF, readyFlash[flashIdx] * 0.5f));
+            GeneratorFuelUiTheme.pulseRing(graphics, x, y, SLOT_SIZE, SLOT_SIZE, strip,
+                1f - readyFlash[flashIdx], 9);
+        }
     }
 
     private float readCooldownFraction(SlotKind kind, int displayNumber, long currentTick) {
@@ -289,7 +327,8 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         int centerY = y + SLOT_SIZE / 2;
         int radius = SLOT_SIZE / 2;
 
-        fillCircle(graphics, centerX, centerY, radius, SLOT_FILL);
+        fillCircle(graphics, centerX, centerY, radius, GeneratorFuelUiTheme.PANEL_BG);
+        fillCircle(graphics, centerX, centerY, radius - 1, 0x66000000);
         strokeCircle(graphics, centerX, centerY, radius, STRIKE_BORDER, 1);
 
         // Кільце перезарядки удару: той самий канал (AbilityCooldownPacket
@@ -299,8 +338,16 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         float cooldownFraction = ClientMatchState.abilityCooldownFraction(
             com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket.ATTACK_ID, currentTick);
         float readyFraction = clamp01(1f - cooldownFraction);
+        boolean strikeCooling = cooldownFraction > 0f;
+        if (wasCooling[0] && !strikeCooling) readyFlash[0] = 1f;
+        wasCooling[0] = strikeCooling;
         if (readyFraction > 0f && readyFraction < 1f) {
             strokeProgressCircle(graphics, centerX, centerY, radius, STRIKE_GLYPH_COLOR, readyFraction, 2);
+        }
+        if (readyFlash[0] > 0.02f) {
+            fillCircle(graphics, centerX, centerY, radius - 1, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, readyFlash[0] * 0.45f));
+            strokeCircle(graphics, centerX, centerY, radius + Math.round((1f - readyFlash[0]) * 9f),
+                GeneratorFuelUiTheme.alpha(STRIKE_GLYPH_COLOR, readyFlash[0]), 1);
         }
 
         drawStrikeGlyph(graphics, centerX, centerY, STRIKE_ICON_SIZE, STRIKE_GLYPH_COLOR);
@@ -311,41 +358,22 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         renderPowerCharges(graphics, x + SLOT_SIZE / 2f, y + SLOT_SIZE / 2f, 1f);
     }
 
+    /** Іконка удару — три подряпини кігтів (32×32, біла: тонується кольором готовності). */
+    private static final ResourceLocation TEX_STRIKE_ICON =
+        new ResourceLocation("maniacmod", "textures/gui/hotbar_maniac/maniac_strike_icon.png");
+
     private static void drawStrikeGlyph(GuiGraphics g, int centerX, int centerY, int iconSize, int color) {
-        float half = iconSize / 2f;
-        double angle = Math.toRadians(45);
-        double perp = angle + Math.PI / 2;
-        float claw1 = 0.90f;
-        float[] offsets = { -claw1 * half * 0.33f, 0f, claw1 * half * 0.33f };
-
-        for (float offset : offsets) {
-            float baseCx = centerX + (float) (Math.cos(perp) * offset) - (float) (Math.cos(angle) * half * 0.85f);
-            float baseCy = centerY + (float) (Math.sin(perp) * offset) - (float) (Math.sin(angle) * half * 0.85f);
-            float tipX = centerX + (float) (Math.cos(perp) * offset) + (float) (Math.cos(angle) * half * 0.85f);
-            float tipY = centerY + (float) (Math.sin(perp) * offset) + (float) (Math.sin(angle) * half * 0.85f);
-            drawTaperedLine(g, baseCx, baseCy, tipX, tipY, half * 0.16f, color);
-        }
-    }
-
-    private static void drawTaperedLine(GuiGraphics g, float x0, float y0, float x1, float y1, float baseHalfWidth, int color) {
-        float dx = x1 - x0, dy = y1 - y0;
-        float len = (float) Math.sqrt(dx * dx + dy * dy);
-        if (len < 0.001f) return;
-        float ux = dx / len, uy = dy / len;
-        float px = -uy, py = ux;
-
-        int steps = Math.max(4, Math.round(len));
-        for (int i = 0; i < steps; i++) {
-            float t = i / (float) steps;
-            float tNext = (i + 1) / (float) steps;
-            float halfW = baseHalfWidth * (1f - t) + 0.4f;
-            float cx = x0 + dx * (t + tNext) / 2f;
-            float cy = y0 + dy * (t + tNext) / 2f;
-            int x = Math.round(cx - px * halfW);
-            int y = Math.round(cy - py * halfW);
-            int w = Math.max(1, Math.round(halfW * 2));
-            g.fill(x, y, x + Math.max(1, Math.round(ux * (len / steps)) + 1), y + w, color);
-        }
+        float r = ((color >> 16) & 0xFF) / 255f;
+        float gr = ((color >> 8) & 0xFF) / 255f;
+        float b = (color & 0xFF) / 255f;
+        int x = centerX - iconSize / 2;
+        int y = centerY - iconSize / 2;
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderColor(r, gr, b, 1.0f);
+        g.blit(TEX_STRIKE_ICON, x, y, iconSize, iconSize, 0f, 0f, 32, 32, 32, 32);
+        // Множник ОБОВ'ЯЗКОВО назад до білого, інакше решта GUI лишиться тонованою.
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+        RenderSystem.disableBlend();
     }
 
     private void renderPowerCharges(GuiGraphics graphics, float centerX, float centerY, float scale) {
@@ -359,7 +387,7 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
 
             boolean lit = i < powerCharges;
             fillCircle(graphics, chargeCenterX, chargeCenterY, chargeRadius, lit ? POWER_CHARGE_LIT : POWER_CHARGE_UNLIT);
-            strokeCircle(graphics, chargeCenterX, chargeCenterY, chargeRadius, STRIKE_BORDER, 1);
+            strokeCircle(graphics, chargeCenterX, chargeCenterY, chargeRadius, GeneratorFuelUiTheme.PANEL_BORDER, 1);
         }
     }
 

@@ -38,25 +38,25 @@ public final class ManiacUiTheme {
     // cfb471 / 0f1315 / 292d2e / 433e30.
     public static final int MENU_BG = 0xFF0A0C0B;
     public static final int SLOT_FILL = 0xFF0B0B0B;
-    public static final int MENU_ACCENT_GOLD = 0xFFCFB471;
+    public static final int MENU_ACCENT_GOLD = 0xFFC2C9D6; // було золото; тепер срібло генераторного стилю
     public static final int MENU_PANEL_DARK = 0xFF0F1315;
     public static final int MENU_BORDER_MUTED = 0xFF292D2E;
-    public static final int MENU_ACCENT_BROWN = 0xFF433E30;
+    public static final int MENU_ACCENT_BROWN = 0xFF2A3038;
 
     public static final int PANEL_BG = 0xE60A0C0B;
     public static final int PANEL_BG_SOLID = MENU_BG;
     public static final int BORDER = MENU_BORDER_MUTED;
-    public static final int BORDER_BRIGHT = 0xFFB9B9B9;
+    public static final int BORDER_BRIGHT = 0xFF8E97A5;
     public static final int CORNER_ACCENT = MENU_ACCENT_GOLD; // золотистий кутовий акцент (як image 4 — лівий верхній кут)
     public static final int DIVIDER = MENU_BORDER_MUTED;
     public static final int TEXT_TITLE = 0xFFF2F2F2;
     public static final int TEXT_BODY = 0xFFB9B9B9;
     public static final int TEXT_DIM = 0xFF7A7A7A;
-    public static final int TEXT_ACCENT = MENU_ACCENT_GOLD;
+    public static final int TEXT_ACCENT = 0xFFF2F4F8;
 
     public static final int BAR_FRAME = 0xFFB9B9B9;
-    public static final int BAR_BG = MENU_PANEL_DARK;
-    public static final int BAR_FILL_NEUTRAL = 0xFFC7CCD1;
+    public static final int BAR_BG = 0xFF05070A;
+    public static final int BAR_FILL_NEUTRAL = 0xFFC2C9D6;
     public static final int BAR_FILL_WARN = 0xFFE0A030;
     public static final int BAR_FILL_DANGER = 0xFFB0242F;
 
@@ -76,12 +76,23 @@ public final class ManiacUiTheme {
     }
 
     public static void drawPanel(GuiGraphics g, int x, int y, int w, int h, boolean accentTopLeft) {
+        // Стиль панелей генератора: темна панель, тонка рамка, ковзний блиск
+        // по верхній грані. Кутові дужки прибрано; «акцентний» кут тепер —
+        // коротка світла смужка зверху зліва.
         g.fill(x, y, x + w, y + h, PANEL_BG);
         border1px(g, x, y, w, h, BORDER);
-        drawCorner(g, x, y, 1, 1, accentTopLeft ? CORNER_ACCENT : BORDER_BRIGHT);
-        drawCorner(g, x + w, y, -1, 1, BORDER_BRIGHT);
-        drawCorner(g, x, y + h, 1, -1, BORDER_BRIGHT);
-        drawCorner(g, x + w, y + h, -1, -1, BORDER_BRIGHT);
+        GeneratorFuelUiTheme.topSheen(g, x, y, w, 0f);
+        if (accentTopLeft) {
+            g.fill(x, y, x + 24, y + 2, GeneratorFuelUiTheme.HIGHLIGHT);
+            // «Головна» панель меню: м'яке срібне світіння, скоби, що ДИХАЮТЬ
+            // (розходяться/сходяться), і рідкісний блик-промінь по всій панелі.
+            long now = System.currentTimeMillis();
+            float breathe = 0.5f + 0.5f * (float) Math.sin(now / 700.0);
+            UiFx.glow(g, x, y, w, h, 0xC2C9D6, 0.16f + 0.10f * breathe, 4);
+            UiFx.brackets(g, x, y, w, h, GeneratorFuelUiTheme.alpha(0xFFF2F4F8, 0.9f), CORNER_SIZE, breathe, 3);
+            float t = ((now % 7000L) / 7000f) * 1.3f;
+            if (t < 1f) UiFx.scanBeam(g, x + 1, y + 1, w - 2, h - 2, t, 18, 0xFFFFFF, 14);
+        }
     }
 
     /** Один кутовий акцент — L-подібний штрих, що росте від кута (x,y) у напрямку (dx,dy) = ±1. */
@@ -161,8 +172,7 @@ public final class ManiacUiTheme {
      * тексту по центру.
      */
     public static void drawHintBar(GuiGraphics g, Font font, String text, int x, int y, int w, int h) {
-        g.fill(x, y, x + w, y + h, PANEL_BG);
-        border1px(g, x, y, w, h, BORDER);
+        GeneratorFuelUiTheme.drawPanel(g, x, y, w, h);
         g.drawCenteredString(font, text, x + w / 2, y + (h - font.lineHeight) / 2, TEXT_BODY);
     }
 
@@ -178,16 +188,7 @@ public final class ManiacUiTheme {
     private static final int BAR_FRAME_THICKNESS = 2;
 
     public static void drawProgressBar(GuiGraphics g, int x, int y, int w, int h, float fraction, int fillColor) {
-        g.fill(x, y, x + w, y + h, BAR_FRAME);
-        int ix = x + BAR_FRAME_THICKNESS, iy = y + BAR_FRAME_THICKNESS;
-        int iw = w - BAR_FRAME_THICKNESS * 2, ih = h - BAR_FRAME_THICKNESS * 2;
-        g.fill(ix, iy, ix + iw, iy + ih, BAR_BG);
-
-        float f = Math.max(0f, Math.min(1f, fraction));
-        int filled = Math.round(iw * f);
-        if (filled > 0) {
-            g.fill(ix, iy, ix + filled, iy + ih, fillColor);
-        }
+        GeneratorFuelUiTheme.drawBarFx(g, x, y, w, h, fraction, fraction, fillColor, 0f);
     }
 
     /** Той самий бар, але з вертикальною позначкою "цілі" на певній частці ширини (target-мінігра). */

@@ -17,6 +17,7 @@ failFlashTicks: 100
 fuelRequiredPercent: 200
 fuelPercentPerSecond: 4
 highlightDurationTicks: 100
-screwdriverSpeedBonus: 0.25
+screwdriverSpeedBonus: 1.0
 screwdriverMinigameReduction: 0.25
-stageOrder: REPAIR_THEN_FUEL
+stageOrder: FUEL_THEN_REPAIR
+screwdriverWearPercentPerSecond: 5

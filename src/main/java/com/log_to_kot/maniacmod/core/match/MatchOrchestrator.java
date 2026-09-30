@@ -136,6 +136,8 @@ public final class MatchOrchestrator {
      */
     private final InventoryAllocationModule inventoryAllocation = new InventoryAllocationModule(() -> this);
     private final WorldEnvironmentModule worldEnvironment = new WorldEnvironmentModule(() -> this);
+    private final com.log_to_kot.maniacmod.intro.IntroModule intro =
+        new com.log_to_kot.maniacmod.intro.IntroModule(() -> this);
 
     public MatchOrchestrator() {
         Phases.bind(phases);
@@ -145,6 +147,8 @@ public final class MatchOrchestrator {
         // почнуть слати свої пакети для цієї фази.
         phases.register(new PhaseNetworkSync());
         phases.register(new MatchStartCoordinator());
+        // Кіно-вступ: після координатора (той готує план у CINEMATIC), до решти модулів.
+        phases.register(intro);
         phases.register(inventoryAllocation);
         phases.register(generators);
         phases.register(combat);
@@ -153,6 +157,11 @@ public final class MatchOrchestrator {
         phases.register(maniacSpeed);
         phases.register(survivors);
         phases.register(worldEnvironment);
+    }
+
+    /** Кіно-вступ — для команди прев'ю Replay. */
+    public com.log_to_kot.maniacmod.intro.IntroModule intro() {
+        return intro;
     }
 
     /** Модуль генераторів — для GeneratorEntity і ServerPacketHandler. */
@@ -988,10 +997,9 @@ public final class MatchOrchestrator {
      */
     private void checkPhaseExitConditions(List<ServerPlayer> players) {
         if (phases.is(GamePhase.CINEMATIC)) {
-            // Кінематики ще немає — фаза ПРОПУСКАЄТЬСЯ в коді: тут лишається
-            // тільки підготовка плану розкидання, і зразу SCATTER. Коли
-            // кінематика з'явиться, тут буде `ticksInPhase() >= <тривалість>`,
-            // а тривалість повернеться до ConfigSchema (див. коментар там).
+            // Кіно-вступ (IntroModule) триває IntroTimeline.cinematicTicks();
+            // 0 — вступ вимкнено (game.introEnabled), і фаза, як раніше, живе
+            // один тік, за який готується план розкидання.
             if (!plannerReady) {
                 try {
                     prepareSpawnPlan(players);
@@ -1000,7 +1008,7 @@ public final class MatchOrchestrator {
                     return;
                 }
             }
-            if (plannerReady) {
+            if (plannerReady && phases.ticksInPhase() >= com.log_to_kot.maniacmod.intro.IntroTimeline.cinematicTicks()) {
                 advanceTo(GamePhase.SCATTER, players);
             }
             return;
@@ -1017,7 +1025,12 @@ public final class MatchOrchestrator {
                 }
                 return;
             }
-            if (scatterApplied) advanceTo(GamePhase.ROLE_REVEAL, players);
+            // Після телепорту екран ще чорний: тримаємо SCATTER, поки клієнти
+            // догружають чанки, а IntroModule не поверне контроль (див. IntroTimeline).
+            if (scatterApplied && phases.ticksInPhase()
+                >= com.log_to_kot.maniacmod.intro.IntroTimeline.scatterHoldTicks()) {
+                advanceTo(GamePhase.ROLE_REVEAL, players);
+            }
             return;
         }
 
@@ -1086,7 +1099,9 @@ public final class MatchOrchestrator {
      * {@code cinematicSeconds} у maniac.yml, код міняти не треба.
      */
     private int roleRevealTicks() {
-        return ManiacConfigs.get(ConfigSchema.ROLE_REVEAL_SECONDS) * 20;
+        // + повільне розтемнення після вступу: пробудження й роль не мають обрізатись.
+        return ManiacConfigs.get(ConfigSchema.ROLE_REVEAL_SECONDS) * 20
+            + com.log_to_kot.maniacmod.intro.IntroTimeline.roleRevealExtraTicks();
     }
 
     private int endingTicks() {

@@ -1,14 +1,19 @@
 package com.log_to_kot.maniacmod.client.overlay.vitals;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.HeartbeatClock;
+import com.log_to_kot.maniacmod.client.ManiacKeybinds;
 import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
-import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import com.log_to_kot.maniacmod.client.style.UiAnim;
+import com.log_to_kot.maniacmod.client.style.UiFx;
+import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.core.phase.GamePhase;
+import com.log_to_kot.maniacmod.core.phase.PhaseRule;
+import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.log_to_kot.maniacmod.client.ManiacKeybinds;
-import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -16,472 +21,550 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
 /**
- * Постійний HUD зліва внизу за референсом: круглий медальйон із серцем,
- * справа від нього — дві шкали (хп зверху червоним, стаміна знизу
- * синім), НАД усім цим (над панеллю, над HP) — іконки стану (поламана
- * нога, повзання, непритомність): раніше стояли під стаміною, знизу,
- * де їх легко пропустити; тепер — над HP, де гравець побачить їх
- * першими.
+ * HUD виживого — у стилі панелей генератора ({@link GeneratorFuelUiTheme}),
+ * але панель і шкали — ТЕКСТУРИ:
+ * <ul>
+ *   <li>{@code vitals_panel_bg.png} — фон панелі (метал, фаска, слот-медальйон, роздільники);</li>
+ *   <li>{@code vitals_panel_overlay.png} — шар ПОВЕРХ вмісту (кромка-блиск, кутові скоби);</li>
+ *   <li>{@code hp_bar_empty/full.png}, {@code stamina_bar_empty/full.png} — трек і заливка
+ *       шкал 146×10. Заливка — нейтральний срібний метал, тому змінює колір
+ *       множником (червоний при малому хп, бурштин при втомі).</li>
+ * </ul>
+ * Динаміка (блик, «привид», спалахи, іскри, ЕКГ) малюється поверх текстур.
  *
- * ── PNG-шари замість примітивів ───────────────────────────────────────
- * Уся панель — один спільний канвас {@link #PANEL_W}×{@link #PANEL_H},
- * кожен шар (фон, серце, кожна шкала, декоративний оверлей) — окрема
- * текстура ТОГО САМОГО розміру канвасу, що malюється в ту саму позицію
- * (0,0) відносно лівого верхнього кута панелі — вирівнювання дає сам
- * однаковий розмір текстур, без ручного підбору зсувів під кожен шар.
- *
- * Порядок шарів (знизу вгору): фон → серце → HP-шкала → стамінa-шкала
- * → ДЕКОРАТИВНИЙ ОВЕРЛЕЙ (рамка/скло, {@link #TEX_PANEL_OVERLAY}).
- * Оверлей малюється ОСТАННІМ і лягає поверх усього — це "скло" чи
- * рамка, що закриває решту шарів (наприклад, медальйон серця виглядає,
- * ніби він під випуклим склом), а не декор поруч із ними.
- *
- * Іконка стану (поламана нога/повзання/непритомність) — НАД усією
- * панеллю (над HP), а не під стаміною: це те, що гравець має помітити
- * першим.
- *
- * Виняток — серце: воно пульсує (росте/зменшується), тому для нього
- * рівний розмір канвасу зламав би пульсацію (довелось би або тягнути
- * піксель-арт, або губити чіткість). Тому heart_icon.png має власний
- * менший канвас {@link #HEART_ICON_SIZE}×{@link #HEART_ICON_SIZE} і
- * позиціюється/масштабується окремо навколо центру медальйона.
- *
- * Шкали — суцільна текстура-смужка (НЕ per-segment blit): втрата
- * хп/стаміни показується одним crop зліва-направо по ширині
- * {@code graphics.blit} з обмеженим regionWidth замість повної ширини
- * джерела. Під "порожньою" відрізаною частиною лежить bar_empty
- * (тьмяна версія тієї ж смужки) — тому відсутність hp виглядає як
- * тьмяні сегменти, а не голий фон панелі.
- *
- * ── Текстури-заповнювачі ────────────────────────────────────────────
- * Усі файли нижче — плейсхолдери (розміри зафіксовані остаточно, вміст
- * замінити 1:1 на фінальний арт того самого розміру):
- *   vitals_panel_bg.png       {@link #PANEL_W}×{@link #PANEL_H}
- *   vitals_panel_overlay.png  {@link #PANEL_W}×{@link #PANEL_H} (декоративний шар — рамка/скло, малюється останнім)
- *   heart_icon.png            {@link #HEART_ICON_SIZE}×{@link #HEART_ICON_SIZE}
- *   hp_bar_full.png / _empty.png         {@link #BAR_INNER_W}×{@link #BAR_INNER_H}
- *   stamina_bar_full.png / _empty.png    {@link #BAR_INNER_W}×{@link #BAR_INNER_H}
- *   status_icon_broken_leg/crawling/unconscious.png   {@link #ICON_SIZE}×{@link #ICON_SIZE} (ще не намальовані — плейсхолдер-рамка лишається для них)
+ * ── Що анімується ────────────────────────────────────────────────────
+ *  • поява: панель в'їжджає зліва з пружним overshoot, шкали ЗАПОВНЮЮТЬСЯ по черзі;
+ *  • втрата хп: «привид», білий спалах, тряска, RGB-глітч панелі, червоні уламки;
+ *  • лікування: спалах і срібні іскри, що здіймаються від краю шкали;
+ *  • мало хп: червоне світіння панелі й ЕКГ в такт, шкала пульсує червоним;
+ *  • серце: пульс у такт близькості маньяка + кільце + ЕКГ у медальйоні;
+ *  • стаміна: бурштин при виснаженні, при поламаній нозі блокується;
+ *  • слот підсвітки: спалах готовності, штора кулдауну, скоби;
+ *  • шкала вставання: пружний «поштовх» і іскри на кожне натискання пробілу.
  */
 @OnlyIn(Dist.CLIENT)
 public final class SurvivorVitalsOverlay {
 
     private SurvivorVitalsOverlay() {}
 
-    // ── Спільний канвас панелі (медальйон + обидві шкали одним шаром) ────
-    private static final int PANEL_W = 220;
-    private static final int PANEL_H = 48;
+    // ── Геометрія ────────────────────────────────────────────────────────
+    private static final int PANEL_W = 214;
+    private static final int PANEL_H = 64;
+    private static final int MARGIN = 12;
+    private static final int PAD = 8;
+    private static final int MEDALLION = 44;
 
+    // Текстури панелі та шкал (розміри = розміри PNG, 1 texel = 1 GUI px).
     private static final ResourceLocation TEX_PANEL_BG =
         new ResourceLocation("maniacmod", "textures/gui/vitals/vitals_panel_bg.png");
-
-    // ── Серце: власний менший канвас, бо пульсує (росте/зменшується) ─────
-    private static final int HEART_ICON_SIZE = 32;
-    private static final ResourceLocation TEX_HEART =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/heart_icon.png");
-
-    // Геометрія медальйона всередині PANEL-канвасу (мусить збігатись із
-    // тим, як намальований vitals_panel_bg.png — коло центроване тут).
-    private static final int MEDALLION_CX = 23;
-    private static final int MEDALLION_CY = 24;
-    private static final int HEART_BASE_DRAW_SIZE = 26; // видимий розмір серця в спокої (менше за HEART_ICON_SIZE-канвас, щоб пульсація мала запас рости всередину канвасу)
-
-    // ── Шкали: суцільна текстура-смужка, обрізається зліва-направо ───────
-    private static final int BAR_LEFT = 54;   // зсув вікна шкали від лівого краю панелі
-    private static final int BAR_FRAME_W = 150;
-    private static final int BAR_FRAME_H = 16;
-    private static final int BAR_FRAME_THICKNESS = 2;
-    private static final int BAR_INNER_W = BAR_FRAME_W - BAR_FRAME_THICKNESS * 2; // 146 — точний розмір hp_bar_full.png/stamina_bar_full.png
-    private static final int BAR_INNER_H = BAR_FRAME_H - BAR_FRAME_THICKNESS * 2; // 12
-    private static final int HP_TOP = 2;
-    private static final int STA_TOP = 24;
-
-    private static final ResourceLocation TEX_HP_FULL =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/hp_bar_full.png");
-    private static final ResourceLocation TEX_HP_EMPTY =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/hp_bar_empty.png");
-    private static final ResourceLocation TEX_STAMINA_FULL =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/stamina_bar_full.png");
-    private static final ResourceLocation TEX_STAMINA_EMPTY =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/stamina_bar_empty.png");
-
-    // ── Іконки стану (ще плейсхолдер-рамка — PNG для них поки не намальовані) ──
-    private static final int ICON_SIZE = 16;
-    private static final int ICONS_GAP = 4;
-
-    private static final ResourceLocation ICON_BROKEN_LEG =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/status_icon_broken_leg.png");
-    private static final ResourceLocation ICON_CRAWLING =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/status_icon_crawling.png");
-    private static final ResourceLocation ICON_UNCONSCIOUS =
-        new ResourceLocation("maniacmod", "textures/gui/vitals/status_icon_unconscious.png");
-
-    // ── Декоративний шар поверх усього (рамка/скло) ───────────────────────
-    // Малюється ОСТАННІМ, поверх фону, серця й обох шкал — той самий
-    // канвас PANEL_W×PANEL_H, та сама позиція (panelLeft, panelTop), що
-    // й фон: візуальне "скло", що ЗАКРИВАЄ решту шарів (наприклад,
-    // серце під випуклим склом медальйона), а не декор поруч із ними.
-    // Прозорі пікселі текстури лишають нижні шари видимими як завжди;
-    // рудиментарний плейсхолдер тут, як і в status_icon_*, — суцільно
-    // прозорий PNG, поки немає фінального арту.
     private static final ResourceLocation TEX_PANEL_OVERLAY =
         new ResourceLocation("maniacmod", "textures/gui/vitals/vitals_panel_overlay.png");
+    private static final ResourceLocation TEX_HP_EMPTY =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/hp_bar_empty.png");
+    private static final ResourceLocation TEX_HP_FULL =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/hp_bar_full.png");
+    private static final ResourceLocation TEX_STA_EMPTY =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/stamina_bar_empty.png");
+    private static final ResourceLocation TEX_STA_FULL =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/stamina_bar_full.png");
 
-    // ── Анімаційний стан (статичний — клас без інстансу, як і решта простих оверлеїв) ──
-    // entrance   : 0 → 1 поява всієї панелі (підйом + масштаб).
-    // displayedHp/displayedStamina : плавно догнане значення шкал, щоб
-    //                                  втрата/лікування не «стрибали» в один кадр.
+    private static final int BAR_TEX_W = 146;
+    private static final int BAR_TEX_H = 10;
+    /** Позиції в координатах панелі (збігаються з тим, що «запечено» у vitals_panel_bg.png). */
+    private static final int BAR_X = 60;
+    private static final int HP_BAR_Y = 17;
+    private static final int STA_BAR_Y = 46;
+    private static final int HP_LABEL_Y = 6;
+    private static final int STA_LABEL_Y = 35;
+    private static final int MED_X = 8;
+    private static final int MED_Y = 10;
+
+    private static final int BAR_TINT_NEUTRAL = 0xFFFFFF;
+
+    private static final int HEART_ICON_SIZE = 42;
+    private static final int HEART_BASE_DRAW_SIZE = 26;
+    private static final ResourceLocation TEX_HEART =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/heart_icon.png");
+    /** Червоне гало силуету — малюється ПІД серцем, пульсує в такт ударам. */
+    private static final ResourceLocation TEX_HEART_GLOW =
+        new ResourceLocation("maniacmod", "textures/gui/vitals/heart_glow.png");
+
+    // ── Стан анімацій ───────────────────────────────────────────────────
     private static final long[] lastFrameNanos = new long[1];
     private static float entrance = 0f;
-    private static float displayedHp = -1f;
-    private static float displayedStamina = -1f;
-    private static SurvivorState lastState = null;
-    private static boolean highlightWasReady = true;
+    private static float shownHp = -1f;
+    private static float ghostHp = -1f;
+    private static float shownStamina = -1f;
+    private static float lastHpTarget = -1f;
+    private static float hitFlash = 0f;
+    private static float healFlash = 0f;
+    private static float shake = 0f;
+    private static boolean wasReady = true;
+    private static float readyFlash = 0f;
+    private static int lastPresses = -1;
+    private static float standUpPulse = 0f;
+    private static float standUpShown = 0f;
+    private static float standUpGhost = 0f;
+    private static float introTime = 0f;
+    private static float ecgPhase = 0f;
+    private static float glitch = 0f;
+    private static final UiFx.Sparks SPARKS = new UiFx.Sparks(64);
+    private static final UiFx.Sparks STAND_SPARKS = new UiFx.Sparks(48);
 
-    /** Скидає анімаційний стан, коли оверлей невидимий — наступна поява знову плавна. */
     private static void resetAnims() {
         lastFrameNanos[0] = 0L;
         entrance = 0f;
-        displayedHp = -1f;
-        displayedStamina = -1f;
-        lastState = null;
-        highlightWasReady = true;
+        shownHp = -1f;
+        ghostHp = -1f;
+        shownStamina = -1f;
+        lastHpTarget = -1f;
+        hitFlash = 0f;
+        healFlash = 0f;
+        shake = 0f;
+        wasReady = true;
+        readyFlash = 0f;
+        lastPresses = -1;
+        standUpPulse = 0f;
+        standUpShown = 0f;
+        standUpGhost = 0f;
+        introTime = 0f;
+        ecgPhase = 0f;
+        glitch = 0f;
+        SPARKS.clear();
+        STAND_SPARKS.clear();
     }
 
     public static void render(GuiGraphics graphics) {
         if (!ClientMatchState.isSurvivor()) { resetAnims(); return; }
-        // Видимість — за дозволом фази HUD, а не за "чи фаза ігрова":
-        // ROLE_REVEAL технічна, але сервер уже надіслав ролі й перший
-        // знімок vitals (SurvivorModule.onPhaseEnter), і гравець має
-        // бачити свої показники з першого кадру гри, а не з моменту,
-        // коли роль-екран згасне.
-        //
-        // LOBBY — виняток: /maniac morph survivor навмисно призначає
-        // роль виживого посеред лобі саме для дебаг-тестування цього
-        // HUD (у LOBBY немає PhaseRule.HUD).
-        boolean hudPhase = ClientMatchState.allows(com.log_to_kot.maniacmod.core.phase.PhaseRule.HUD)
-            || ClientMatchState.phase() == com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY;
+        // LOBBY — виняток: /maniac morph survivor призначає роль у лобі для дебагу HUD.
+        boolean hudPhase = ClientMatchState.allows(PhaseRule.HUD)
+            || ClientMatchState.phase() == GamePhase.LOBBY;
         if (!hudPhase) { resetAnims(); return; }
-
-        Minecraft mc = Minecraft.getInstance();
-        int screenHeight = mc.getWindow().getGuiScaledHeight();
 
         int hp = ClientMatchState.hp();
         int maxHp = ClientMatchState.maxHp();
-        if (maxHp <= 0) { resetAnims(); return; } // vitals ще не прийшли жодного разу цього матчу
+        if (maxHp <= 0) { resetAnims(); return; } // vitals ще не приходили
 
+        Minecraft mc = Minecraft.getInstance();
+        Font font = mc.font;
+        int screenH = mc.getWindow().getGuiScaledHeight();
         SurvivorState state = ClientMatchState.survivorState();
-        boolean hasIcons = state != SurvivorState.HEALTHY;
 
-        int panelLeft = 10;
-        int panelTop = screenHeight - 10 - PANEL_H;
-
-        // Поява панелі + плавні шкали. dt кадро-незалежний, тож анімація
-        // однакова і на 30, і на 240 FPS.
         float dt = UiAnim.frameDt(lastFrameNanos);
-        entrance = UiAnim.approach(entrance, 1f, 8f, dt);
+        introTime += dt;
+        // Пружний в'їзд зліва: overshoot дає «вискок і осідання».
+        entrance = UiAnim.approach(entrance, 1f, 6f, dt);
         float appear = UiAnim.easeOutCubic(UiAnim.clamp01(entrance));
+        float slideT = UiAnim.easeOutBack(UiAnim.clamp01(introTime / 0.55f), 0.9f);
 
-        lastState = state;
-
-        graphics.pose().pushPose();
-        float panelCx = panelLeft + PANEL_W / 2f;
-        float panelCy = panelTop + PANEL_H / 2f;
-        graphics.pose().translate(panelCx, panelCy + (1f - appear) * 12f, 0f);
-        float appearScale = 0.94f + 0.06f * appear;
-        graphics.pose().scale(appearScale, appearScale, 1f);
-        graphics.pose().translate(-panelCx, -panelCy, 0f);
-
-        // 1) Фон панелі — один шар на весь канвас.
-        blitFull(graphics, TEX_PANEL_BG, panelLeft, panelTop, PANEL_W, PANEL_H, PANEL_W, PANEL_H);
-
-        // 2) Серце — окремий менший канвас, центрований на медальйоні, пульсує.
-        renderHeart(graphics, panelLeft + MEDALLION_CX, panelTop + MEDALLION_CY, ClientMatchState.heartbeat());
-
-        // 3) Шкали HP і стаміни — суцільна смужка, crop зліва-направо.
-        // Малюємо не «сире» значення, а плавно догнане (displayedHp) —
-        // різка втрата хп читається як швидкий спад, а не телепорт.
-        float hpTarget = maxHp <= 0 ? 0f : clamp01((float) hp / maxHp);
-        float staminaTarget = clamp01(ClientMatchState.stamina());
-        displayedHp = displayedHp < 0f ? hpTarget : UiAnim.approach(displayedHp, hpTarget, 9f, dt);
-        displayedStamina = displayedStamina < 0f ? staminaTarget : UiAnim.approach(displayedStamina, staminaTarget, 9f, dt);
-
-        renderCroppedBar(graphics, panelLeft + BAR_LEFT + BAR_FRAME_THICKNESS, panelTop + HP_TOP + BAR_FRAME_THICKNESS,
-            TEX_HP_FULL, TEX_HP_EMPTY, displayedHp);
-
-        // Поламана нога = стаміна 0 до лікування. Сервер уже шле 0 у
-        // цьому стані (SurvivorModule.sendVitals), але клієнт не
-        // покладається на це сліпо: правило дизайну має діяти навіть
-        // якщо між двома пакетами шкала встигла б показати старе
-        // значення.
+        // ── цілі та згладжування ───────────────────────────────────────
+        float hpTarget = UiAnim.clamp01((float) hp / maxHp);
         boolean staminaLocked = state == SurvivorState.BROKEN_LEG;
-        renderCroppedBar(graphics, panelLeft + BAR_LEFT + BAR_FRAME_THICKNESS, panelTop + STA_TOP + BAR_FRAME_THICKNESS,
-            TEX_STAMINA_FULL, TEX_STAMINA_EMPTY, staminaLocked ? 0f : displayedStamina);
+        float staminaTarget = staminaLocked ? 0f : UiAnim.clamp01(ClientMatchState.stamina());
 
-        // 4) Декоративний шар поверх усього (рамка/скло) — той самий
-        // розмір і позиція, що фон (п. 1), малюється ОСТАННІМ із усіх
-        // шарів усередині канвасу панелі, щоб лягти поверх серця й
-        // обох шкал (не лише фону).
-        blitFull(graphics, TEX_PANEL_OVERLAY, panelLeft, panelTop, PANEL_W, PANEL_H, PANEL_W, PANEL_H);
+        // Вступне наповнення: шкали стартують з нуля й по черзі «заливаються».
+        boolean hpIntro = introTime < 0.30f;
+        boolean staIntro = introTime < 0.50f;
+        if (shownHp < 0f) { shownHp = 0f; ghostHp = 0f; lastHpTarget = hpTarget; }
+        if (shownStamina < 0f) shownStamina = 0f;
+        float hpGoal = hpIntro ? 0f : hpTarget;
+        float staGoal = staIntro ? 0f : staminaTarget;
 
-        if (hasIcons) {
-            // Над HP (над усією панеллю), а не під стаміною: іконка стану —
-            // те, що гравець має помітити першим, тому вона йде НАД
-            // медальйоном/шкалами, а не похована знизу під ними.
-            int iconsTop = panelTop - ICONS_GAP - ICON_SIZE;
-            int iconsLeft = panelLeft + BAR_LEFT;
-            renderStatusIcon(graphics, mc, iconsLeft, iconsTop, state);
+        if (!hpIntro) {
+            if (hpTarget < lastHpTarget - 0.001f) {
+                hitFlash = 1f; shake = 1f; glitch = 1f;
+                SPARKS.burst(BAR_X + Math.max(2f, BAR_TEX_W * shownHp), HP_BAR_Y + 5f, 14, 70f, -0.6f, 0.5f, 0.6f, 0xFF3A44);
+            } else if (hpTarget > lastHpTarget + 0.001f) {
+                healFlash = 1f;
+                SPARKS.burst(BAR_X + Math.max(2f, BAR_TEX_W * shownHp), HP_BAR_Y + 5f, 12, 46f, 0.1f, -1f, 0.8f, 0xE4EAF6);
+            }
+            lastHpTarget = hpTarget;
         }
 
-        renderHighlightSlot(graphics, mc, panelLeft, panelTop);
+        shownHp = UiAnim.approach(shownHp, hpGoal, hpIntro ? 6f : 12f, dt);
+        // Слід: тьмяний «привид» доганяє повільно при втраті, ніколи не менший за заливку.
+        ghostHp = Math.max(shownHp, UiAnim.approach(ghostHp, hpGoal, 1.6f, dt));
+        shownStamina = UiAnim.approach(shownStamina, staGoal, staIntro ? 6f : 12f, dt);
+        hitFlash = UiAnim.approach(hitFlash, 0f, 7f, dt);
+        healFlash = UiAnim.approach(healFlash, 0f, 5f, dt);
+        shake = UiAnim.approach(shake, 0f, 8f, dt);
+        glitch = UiAnim.approach(glitch, 0f, 6.5f, dt);
 
+        long now = System.currentTimeMillis();
+        boolean low = hpTarget < 0.30f;
+        float lowIntensity = low ? 1f - hpTarget / 0.30f : 0f;
+        float lowPulse = low
+            ? 0.5f + 0.5f * (float) Math.sin(now / (260.0 - 150.0 * lowIntensity))
+            : 0f;
+
+        int panelLeft = MARGIN;
+        int panelTop = screenH - MARGIN - PANEL_H;
+        int shakeX = shake > 0.02f ? Math.round((float) Math.sin(now / 22.0) * 3f * shake) : 0;
+        // Зсув в'їзду: панель приїжджає зліва (overshoot через easeOutBack).
+        float slideX = (1f - slideT) * -(PANEL_W + MARGIN);
+
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderColor(1f, 1f, 1f, appear);
+        GeneratorFuelUiTheme.beginAppear(graphics, panelLeft + PANEL_W / 2f, panelTop + PANEL_H / 2f, appear, 8f);
+        graphics.pose().translate(shakeX + slideX, 0f, 0f);
+
+        // Світіння ЗОВНІ панелі: тривожне червоне при малому хп, срібне «дихання» в нормі.
+        if (low) {
+            UiFx.glow(graphics, panelLeft, panelTop, PANEL_W, PANEL_H, 0xE0303A, 0.35f + 0.65f * lowPulse, 5);
+        } else {
+            UiFx.glow(graphics, panelLeft, panelTop, PANEL_W, PANEL_H, 0xC2C9D6,
+                0.10f + 0.06f * (float) Math.sin(now / 900.0), 3);
+        }
+
+        // ── фон-ТЕКСТУРА (+ RGB-глітч при ударі: червоний/блакитний двійники) ─
+        if (glitch > 0.05f) {
+            int gx = Math.round(glitch * 4f);
+            UiFx.blitTinted(graphics, TEX_PANEL_BG, panelLeft - gx, panelTop, 0f, 0f, PANEL_W, PANEL_H, PANEL_W, PANEL_H,
+                0xFF2A36, glitch * 0.55f);
+            UiFx.blitTinted(graphics, TEX_PANEL_BG, panelLeft + gx, panelTop, 0f, 0f, PANEL_W, PANEL_H, PANEL_W, PANEL_H,
+                0x30D8FF, glitch * 0.40f);
+        }
+        UiFx.blitTinted(graphics, TEX_PANEL_BG, panelLeft, panelTop, 0f, 0f, PANEL_W, PANEL_H, PANEL_W, PANEL_H,
+            0xFFFFFF, 1f);
+        if (low) {
+            int c = GeneratorFuelUiTheme.alpha(GeneratorFuelUiTheme.FILL_DANGER, 0.35f + 0.65f * lowPulse);
+            ManiacUiTheme.border1px(graphics, panelLeft, panelTop, PANEL_W, PANEL_H, c);
+        }
+        if (hitFlash > 0.02f) {
+            graphics.fill(panelLeft + 1, panelTop + 1, panelLeft + PANEL_W - 1, panelTop + PANEL_H - 1,
+                GeneratorFuelUiTheme.alpha(GeneratorFuelUiTheme.FILL_DANGER, hitFlash * 0.30f));
+        }
+        if (healFlash > 0.02f) {
+            UiFx.innerGlow(graphics, panelLeft, panelTop, PANEL_W, PANEL_H, 0xE4EAF6, healFlash, 6);
+        }
+
+        // ── медальйон: ЕКГ + серце ─────────────────────────────────────
+        int medX = panelLeft + MED_X;
+        int medY = panelTop + MED_Y;
+        // Ритм веде ЄДИНИЙ годинник (HeartbeatClock) — той самий, що озвучує серце:
+        // фаза інтегрується покадрово (без «перескоку» при зміні періоду), а форма
+        // пульсу — два удари «тук-ТУК» з м'яким підйомом і спадом.
+        float heartbeat = HeartbeatClock.level();
+        float phase = HeartbeatClock.phase();
+        float pulse = HeartbeatClock.pulse();
+
+        // ЕКГ біжить у такт серцебиттю; червоніє з тривогою. Зсув 0.525 —
+        // щоб QRS-зубець доходив до яскравого правого краю рівно на першому ударі.
+        ecgPhase = (phase + 0.525f) % 1f;
+        int ecgRgb = GeneratorFuelUiTheme.mix(0x8E97A5, 0xE0303A,
+            Math.min(1f, heartbeat * 0.8f + lowIntensity)) & 0xFFFFFF;
+        UiFx.ecg(graphics, medX + 3, medY + 3, MEDALLION - 6, MEDALLION - 6, ecgPhase, ecgRgb,
+            0.55f + 0.45f * Math.max(heartbeat, lowIntensity), 0.55f);
+
+        int medBorder = GeneratorFuelUiTheme.mix(GeneratorFuelUiTheme.PANEL_BORDER,
+            GeneratorFuelUiTheme.FILL_DANGER, Math.min(1f, pulse * (0.35f + heartbeat) + lowPulse * 0.5f));
+        ManiacUiTheme.border1px(graphics, medX, medY, MEDALLION, MEDALLION, medBorder);
+        renderHeart(graphics, medX + MEDALLION / 2, medY + MEDALLION / 2, pulse, heartbeat);
+        // Кільце розходиться від слота на кожен ПЕРШИЙ удар серця (чим ближче маньяк — тим помітніше).
+        float ringT = HeartbeatClock.msSinceLub() / 380f;
+        if (ringT < 1f && heartbeat > 0.05f) {
+            GeneratorFuelUiTheme.pulseRing(graphics, medX, medY, MEDALLION, MEDALLION,
+                GeneratorFuelUiTheme.FILL_DANGER, ringT, 9);
+        }
+
+        // ── підписи + текстурні шкали ───────────────────────────────────
+        String hpLabel = Component.translatable("maniacmod.hud.vitals.hp").getString()
+            .toUpperCase(java.util.Locale.ROOT);
+        String hpValue = hp + "/" + maxHp;
+        int colX = panelLeft + BAR_X;
+        int colW = BAR_TEX_W;
+        int hpValueColor = GeneratorFuelUiTheme.mix(GeneratorFuelUiTheme.TEXT, GeneratorFuelUiTheme.FILL_DANGER,
+            Math.max(hitFlash, lowIntensity * lowPulse));
+        graphics.drawString(font, hpLabel, colX, panelTop + HP_LABEL_Y, ManiacUiTheme.TEXT_BODY, false);
+        graphics.drawString(font, hpValue, colX + colW - font.width(hpValue), panelTop + HP_LABEL_Y, hpValueColor, false);
+
+        int hpColor = GeneratorFuelUiTheme.mix(BAR_TINT_NEUTRAL, 0xFF3540,
+            Math.min(1f, lowIntensity * (0.55f + 0.45f * lowPulse))) & 0xFFFFFF;
+        float hpFlash = Math.max(hitFlash, healFlash * 0.6f);
+        drawTexBar(graphics, TEX_HP_EMPTY, TEX_HP_FULL, colX, panelTop + HP_BAR_Y,
+            shownHp, ghostHp, hpColor, hpFlash, 0f);
+
+        String staLabel = Component.translatable("maniacmod.hud.vitals.stamina").getString()
+            .toUpperCase(java.util.Locale.ROOT);
+        String staValue = staminaLocked ? "0%" : Math.round(shownStamina * 100f) + "%";
+        boolean tired = !staminaLocked && shownStamina < 0.20f;
+        float tiredBlink = tired ? 0.55f + 0.45f * (float) Math.sin(now / 150.0) : 0f;
+        int staValueColor = staminaLocked ? GeneratorFuelUiTheme.GHOST
+            : tired ? GeneratorFuelUiTheme.mix(GeneratorFuelUiTheme.TEXT, GeneratorFuelUiTheme.FILL_WARN, tiredBlink)
+            : GeneratorFuelUiTheme.TEXT;
+        graphics.drawString(font, staLabel, colX, panelTop + STA_LABEL_Y, ManiacUiTheme.TEXT_BODY, false);
+        graphics.drawString(font, staValue, colX + colW - font.width(staValue), panelTop + STA_LABEL_Y, staValueColor, false);
+
+        int staColor = staminaLocked ? 0x56606E
+            : tired ? (GeneratorFuelUiTheme.mix(BAR_TINT_NEUTRAL, 0xFFB030, 0.6f + 0.4f * tiredBlink) & 0xFFFFFF)
+            : BAR_TINT_NEUTRAL;
+        drawTexBar(graphics, TEX_STA_EMPTY, TEX_STA_FULL, colX, panelTop + STA_BAR_Y,
+            shownStamina, shownStamina, staColor, 0f, 0.35f);
+
+        // ── шар-overlay (кромка, скоби) + ковзний блиск по верхній грані ───
+        UiFx.blitTinted(graphics, TEX_PANEL_OVERLAY, panelLeft, panelTop, 0f, 0f, PANEL_W, PANEL_H, PANEL_W, PANEL_H,
+            0xFFFFFF, 1f);
+        GeneratorFuelUiTheme.topSheen(graphics, panelLeft, panelTop, PANEL_W, 0f);
+        // Промінь-скан раз на кілька секунд — «живий» HUD.
+        float scanT = ((now % 6500L) / 6500f) * 1.35f;
+        if (scanT < 1f) {
+            UiFx.scanBeam(graphics, panelLeft + 1, panelTop + 1, PANEL_W - 2, PANEL_H - 2, scanT, 14, 0xFFFFFF, 20);
+        }
+
+        // ── іскри (у локальних координатах панелі) ─────────────────────────
+        graphics.pose().pushPose();
+        graphics.pose().translate(panelLeft, panelTop, 0f);
+        SPARKS.tickAndRender(graphics, dt, 90f);
         graphics.pose().popPose();
 
+        // ── ряд над панеллю: слот сили + чіпи станів ─────────────────────
+        int rowY = panelTop - 5 - HL_SLOT;
+        renderHighlightSlot(graphics, mc, panelLeft, rowY, dt);
+        if (state != SurvivorState.HEALTHY) {
+            renderStatusChip(graphics, font, panelLeft + HL_SLOT + 6, rowY + (HL_SLOT - CHIP_H) / 2, state, now);
+        }
+
+        GeneratorFuelUiTheme.endAppear(graphics);
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+
         if (state == SurvivorState.CRAWLING) {
-            renderStandUpBar(graphics, mc);
+            renderStandUpBar(graphics, mc, dt);
+        } else {
+            lastPresses = -1;
+            standUpShown = 0f;
+            standUpGhost = 0f;
+            standUpPulse = 0f;
+            STAND_SPARKS.clear();
         }
     }
 
-    // ── Сила підсвітки генераторів (клавіша 5) ───────────────────────────
+    /**
+     * Текстурна шкала: {@code *_empty.png} (трек) → «привид» (заливка, тонована
+     * у сірий) → {@code *_full.png} (заливка, тонована {@code rgb}) → блик,
+     * голівка, спалах. Заливка обрізається по ширині ЧЕРЕЗ uWidth blit-а
+     * (без scissor), внутрішня зона треку — x 1..145, y 1..9.
+     */
+    private static void drawTexBar(GuiGraphics g, ResourceLocation empty, ResourceLocation full,
+                                   int x, int y, float fraction, float ghost, int rgb, float flash, float glintOffset) {
+        int inner = BAR_TEX_W - 2;
+        int filled = Math.round(inner * UiAnim.clamp01(fraction));
+        int ghostW = Math.round(inner * UiAnim.clamp01(ghost));
+
+        UiFx.blitTinted(g, empty, x, y, 0f, 0f, BAR_TEX_W, BAR_TEX_H, BAR_TEX_W, BAR_TEX_H, 0xFFFFFF, 1f);
+
+        int x0 = x + 1, y0 = y + 1, innerH = BAR_TEX_H - 2;
+        if (ghostW > filled) {
+            UiFx.blitTinted(g, full, x0 + filled, y0, 1f + filled, 1f, ghostW - filled, innerH,
+                BAR_TEX_W, BAR_TEX_H, 0x56606E, 0.85f);
+        }
+        if (filled <= 0) return;
+
+        UiFx.blitTinted(g, full, x0, y0, 1f, 1f, filled, innerH, BAR_TEX_W, BAR_TEX_H, rgb, 1f);
+        UiFx.barGlint(g, x0, y0, filled, innerH, 1800L, glintOffset);
+        UiFx.barHead(g, x0, y0, filled, innerH, rgb, 0.6f + 0.4f * flash);
+        if (flash > 0.01f) {
+            g.fill(x0, y0, x0 + filled, y0 + innerH, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, flash * 0.75f));
+        }
+    }
+
+    // ── Серце ────────────────────────────────────────────────────────────
+
+    /**
+     * Серце по ЦЕНТРУ медальйона. Раніше тут був зсув {@code -3} по Y, а розмір
+     * округлявся до цілого і ділився навпіл — на непарних розмірах серце
+     * «стрибало» на піксель під час пульсації й стояло вище рамки. Тепер:
+     * без ручного зсуву, а масштаб іде через матрицю (дробовий), з якорем у
+     * центрі непрозорої частини текстури — серце не пливе при пульсації.
+     */
+    private static void renderHeart(GuiGraphics graphics, int cx, int cy, float pulse, float heartbeat) {
+        float amplitude = 0.08f + 0.20f * heartbeat;
+        float size = HEART_BASE_DRAW_SIZE * (1f + pulse * amplitude);
+        // Гало більше за серце вдвічі-півтора й яскравішає на піку удару.
+        float glowSize = size * (1.55f + 0.25f * pulse);
+        float glowA = 0.30f + 0.70f * pulse * (0.5f + 0.5f * heartbeat);
+        drawCentered(graphics, TEX_HEART_GLOW, cx, cy, glowSize, HEART_GLOW_ANCHOR_X, HEART_GLOW_ANCHOR_Y,
+            0xFFFFFF, glowA);
+        // Легке «вибухання» до білого на піку — серце спалахує при ударі.
+        drawCentered(graphics, TEX_HEART, cx, cy, size, HEART_ANCHOR_X, HEART_ANCHOR_Y,
+            GeneratorFuelUiTheme.mix(0xFFFFFF, 0xFFD0D0, 1f - pulse) & 0xFFFFFF, 1f);
+    }
+
+    /** Центр непрозорої частини heart_icon.png (42x42, анатомічне серце): bbox 7..37 x 2..37. */
+    private static final float HEART_ANCHOR_X = 22f;
+    private static final float HEART_ANCHOR_Y = 19.5f;
+    /** Те саме для heart_glow.png: розмитий силует того ж серця, bbox 8..35 x 3..36. */
+    private static final float HEART_GLOW_ANCHOR_X = 21.5f;
+    private static final float HEART_GLOW_ANCHOR_Y = 19.5f;
+
+    /**
+     * Малює квадратну текстуру {@link #HEART_ICON_SIZE} так, щоб точка-якір
+     * (в пікселях текстури) опинилась рівно в ({@code cx}, {@code cy}), а сторона
+     * стала {@code size} пікселів (дробове).
+     */
+    private static void drawCentered(GuiGraphics graphics, ResourceLocation tex, int cx, int cy, float size,
+                                     float anchorX, float anchorY, int rgb, float alpha) {
+        float scale = size / HEART_ICON_SIZE;
+        graphics.pose().pushPose();
+        graphics.pose().translate(cx, cy, 0f);
+        graphics.pose().scale(scale, scale, 1f);
+        graphics.pose().translate(-anchorX, -anchorY, 0f);
+        UiFx.blitTinted(graphics, tex, 0, 0, 0f, 0f, HEART_ICON_SIZE, HEART_ICON_SIZE,
+            HEART_ICON_SIZE, HEART_ICON_SIZE, rgb, alpha);
+        graphics.pose().popPose();
+    }
+
+    // ── Чіп стану (нога / повзання / непритомність) ───────────────────────
+
+    private static final int CHIP_H = 18;
+
+    private static void renderStatusChip(GuiGraphics graphics, Font font, int x, int y,
+                                          SurvivorState state, long now) {
+        String key = switch (state) {
+            case BROKEN_LEG -> "maniacmod.hud.status.broken_leg";
+            case CRAWLING -> "maniacmod.hud.status.crawling";
+            case UNCONSCIOUS -> "maniacmod.hud.status.unconscious";
+            default -> null;
+        };
+        if (key == null) return;
+        String text = Component.translatable(key).getString();
+        int w = font.width(text) + 16;
+        float blink = 0.5f + 0.5f * (float) Math.sin(now / 240.0);
+        int border = GeneratorFuelUiTheme.mix(GeneratorFuelUiTheme.PANEL_BORDER,
+            state == SurvivorState.BROKEN_LEG ? GeneratorFuelUiTheme.FILL_WARN : GeneratorFuelUiTheme.FILL_DANGER,
+            0.35f + 0.65f * blink);
+        UiFx.glow(graphics, x, y, w, CHIP_H, border & 0xFFFFFF, 0.25f + 0.45f * blink, 3);
+        GeneratorFuelUiTheme.drawSlot(graphics, x, y, w, CHIP_H, border);
+        // Маркер-квадрат зліва блимає в такт рамці.
+        graphics.fill(x + 5, y + CHIP_H / 2 - 2, x + 9, y + CHIP_H / 2 + 2,
+            GeneratorFuelUiTheme.alpha(border, 0.6f + 0.4f * blink) | 0xFF000000);
+        graphics.drawString(font, text, x + 13, y + (CHIP_H - font.lineHeight) / 2 + 1,
+            GeneratorFuelUiTheme.TEXT, false);
+    }
+
+    // ── Сила підсвітки генераторів (клавіша 5) ────────────────────────────
 
     private static final int HL_SLOT = 36;
     private static final int HL_ICON = 24;
-    private static final int HL_GAP = 4;
     private static final ResourceLocation TEX_HIGHLIGHT_ICON =
         new ResourceLocation("maniacmod", "textures/gui/vitals/highlight_icon.png");
 
-    /**
-     * Слот сили над панеллю показників — у стилі слотів маньяка
-     * ({@code ManiacHotbarOverlay}): темний фон, рамка, іконка по центру.
-     *
-     *   • зверху зліва — клавіша активації (за замовчуванням «5»; беремо
-     *     справжню назву прив'язки, тож перепризначення видно одразу);
-     *   • готова — золота рамка й яскрава іконка;
-     *   • перезаряджається — іконка тьмяніє, темна завіса опускається зверху
-     *     вниз і скорочується разом із часом, по центру — залишок у секундах.
-     *
-     * Дані ті самі, що й у кулдаунів маньяка ({@code abilityCooldownFraction}):
-     * сервер шле тривалість один раз, клієнт відраховує сам.
-     */
-    private static void renderHighlightSlot(GuiGraphics graphics, Minecraft mc, int panelLeft, int panelTop) {
+    private static void renderHighlightSlot(GuiGraphics graphics, Minecraft mc, int x, int y, float dt) {
         long tick = mc.level != null ? mc.level.getGameTime() : 0L;
-        // Частка, що ЛИШИЛАСЬ: 1 — щойно використали, 0 — готово.
         float remaining = ClientMatchState.abilityCooldownFraction(AbilityCooldownPacket.HIGHLIGHT_ID, tick);
         boolean ready = remaining <= 0f;
 
-        int x = panelLeft;
-        int y = panelTop - HL_GAP - HL_SLOT;
+        if (ready && !wasReady) readyFlash = 1f;
+        wasReady = ready;
+        readyFlash = UiAnim.approach(readyFlash, 0f, 4f, dt);
 
-        graphics.fill(x, y, x + HL_SLOT, y + HL_SLOT, ManiacUiTheme.SLOT_FILL);
-        ManiacUiTheme.border1px(graphics, x, y, HL_SLOT, HL_SLOT,
-            ready ? ManiacUiTheme.MENU_ACCENT_GOLD : ManiacUiTheme.BORDER);
+        long now = System.currentTimeMillis();
+        int border = ready
+            ? GeneratorFuelUiTheme.mix(GeneratorFuelUiTheme.PANEL_BORDER, GeneratorFuelUiTheme.HIGHLIGHT,
+                0.75f + 0.25f * (float) Math.sin(now / 420.0))
+            : GeneratorFuelUiTheme.PANEL_BORDER;
+        if (ready) {
+            UiFx.brackets(graphics, x, y, HL_SLOT, HL_SLOT,
+                GeneratorFuelUiTheme.alpha(GeneratorFuelUiTheme.HIGHLIGHT, 0.8f), 4,
+                0.5f + 0.5f * (float) Math.sin(now / 380.0), 3);
+        }
+        GeneratorFuelUiTheme.drawSlot(graphics, x, y, HL_SLOT, HL_SLOT, border);
 
         int iconX = x + (HL_SLOT - HL_ICON) / 2;
-        int iconY = y + (HL_SLOT - HL_ICON) / 2 + 2; // трохи нижче центру: угорі місце під клавішу
+        int iconY = y + (HL_SLOT - HL_ICON) / 2 + 2;
         float tint = ready ? 1.0f : 0.40f;
         RenderSystem.enableBlend();
-        RenderSystem.setShaderColor(tint, tint, tint, 1.0f);
+        float a = RenderSystem.getShaderColor()[3];
+        RenderSystem.setShaderColor(tint, tint, tint, a);
         graphics.blit(TEX_HIGHLIGHT_ICON, iconX, iconY, HL_ICON, HL_ICON, 0f, 0f, 32, 32, 32, 32);
-        // Множник ОБОВ'ЯЗКОВО назад до білого: інакше решта GUI лишилась би тонованою.
-        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
-        RenderSystem.disableBlend();
+        RenderSystem.setShaderColor(1f, 1f, 1f, a);
 
         if (!ready) {
             int curtain = Math.round((HL_SLOT - 2) * remaining);
             graphics.fill(x + 1, y + 1, x + HL_SLOT - 1, y + 1 + curtain, 0xB0000000);
-
-            // Округлення вгору: «0с» ніколи не показується, поки сила не готова.
+            // Тонкий бар готовності знизу слота.
+            GeneratorFuelUiTheme.drawBarFx(graphics, x + 3, y + HL_SLOT - 6, HL_SLOT - 6, 4,
+                1f - remaining, 1f - remaining, GeneratorFuelUiTheme.FILL, 0f);
             int seconds = (int) Math.ceil(
                 ClientMatchState.abilityCooldownTicksLeft(AbilityCooldownPacket.HIGHLIGHT_ID, tick) / 20.0);
             String text = String.valueOf(seconds);
-            graphics.drawString(mc.font, text,
-                x + (HL_SLOT - mc.font.width(text)) / 2,
-                y + (HL_SLOT - mc.font.lineHeight) / 2 + 2,
-                ManiacUiTheme.TEXT_TITLE, true);
+            graphics.drawString(mc.font, text, x + (HL_SLOT - mc.font.width(text)) / 2,
+                y + (HL_SLOT - mc.font.lineHeight) / 2 - 1, GeneratorFuelUiTheme.TEXT, true);
+        }
+        if (readyFlash > 0.02f) {
+            graphics.fill(x + 1, y + 1, x + HL_SLOT - 1, y + HL_SLOT - 1,
+                GeneratorFuelUiTheme.alpha(0xFFFFFFFF, readyFlash * 0.55f));
+            GeneratorFuelUiTheme.pulseRing(graphics, x, y, HL_SLOT, HL_SLOT, GeneratorFuelUiTheme.HIGHLIGHT,
+                1f - readyFlash, 8);
         }
 
         String key = ManiacKeybinds.HIGHLIGHT.getTranslatedKeyMessage().getString();
         graphics.drawString(mc.font, key, x + 4, y + 3,
-            ready ? ManiacUiTheme.TEXT_ACCENT : ManiacUiTheme.TEXT_BODY, true);
-
-        highlightWasReady = ready;
+            ready ? GeneratorFuelUiTheme.HIGHLIGHT : GeneratorFuelUiTheme.HIT_ZONE, true);
     }
 
-    private static float clamp01(float v) {
-        return Math.max(0f, Math.min(1f, v));
-    }
+    // ── Шкала вставання (CRAWLING) — вертикальна, знизу вгору ─────────────
 
-    // ── Серце: пульсуюча текстура на власному канвасі, центрована на медальйоні ──
-
-    /**
-     * "Стукає" через короткий масштабний імпульс, що повторюється
-     * швидше при вищому heartbeat (0 = спокійне, 1 = впритул до
-     * маньяка). Період удару: 900 мс на далекій межі до 260 мс впритул.
-     * Замість перефарбовування текстури (немає per-pixel tint у
-     * простому blit без шейдера) — пульсація реалізована лише зміною
-     * РОЗМІРУ відмальовки (сама текстура вже намальована "гарячим"
-     * кольором, тьмяного стану серця без heartbeat тут немає — коли
-     * з'явиться повний арт, можна додати heart_icon_calm.png і
-     * перемикати текстуру за heartbeat > 0, а не лише розмір).
-     */
-    private static void renderHeart(GuiGraphics graphics, int centerX, int centerY, float heartbeat) {
-        // Серце «стукає» ЗАВЖДИ — навіть коли маньяка поруч немає, це тихий
-        // базовий пульс (амплітуда 0.10). Близькість маньяка не вмикає
-        // пульсацію, а лише підсилює її (до 0.32 впритул) і прискорює
-        // період — той самий принцип, що й у звуку серцебиття
-        // ({@code HeartbeatSoundHandler}), з яким візуал б'ється в такт.
-        long periodMs = Math.round(900 - 640 * heartbeat);
-        long now = System.currentTimeMillis();
-        float phase = (now % periodMs) / (float) periodMs;
-        float pulse = phase < 0.18f
-            ? phase / 0.18f
-            : Math.max(0f, 1f - (phase - 0.18f) / 0.82f);
-
-        float amplitude = 0.10f + 0.22f * heartbeat;
-        int size = Math.round(HEART_BASE_DRAW_SIZE + pulse * HEART_BASE_DRAW_SIZE * amplitude);
-
-        int drawX = centerX - size / 2;
-        int drawY = centerY - size / 2;
-        // Тут НЕ 1:1 — draw-розмір (size) пульсує, а джерело завжди
-        // читається повністю (HEART_ICON_SIZE×HEART_ICON_SIZE) —
-        // справжнє масштабування, тому виклик напряму, не через blitFull.
-        graphics.blit(TEX_HEART, drawX, drawY, size, size, 0f, 0f,
-            HEART_ICON_SIZE, HEART_ICON_SIZE, HEART_ICON_SIZE, HEART_ICON_SIZE);
-    }
-
-    // ── Шкали: суцільна смужка, обрізана зліва-направо ────────────────────
-
-    /**
-     * Малює "порожню" версію смужки на всю ширину (тьмяний фон
-     * сегментів), а поверх неї — "повну" версію, ОБРІЗАНУ по ширині
-     * visibleWidth = ширина * fraction: показана частка лишається
-     * ПРИТУЛЕНОЮ ДО ЛІВОГО краю смуги (джерело читається з (0,0),
-     * draw-позиція теж від лівого краю (x,y)), решта справа — тьмяний
-     * empty-шар знизу. Тому втрата "з'їдає" смугу справа, а не зліва —
-     * це і є "прогрес зменшується зліва направо", як у ванільного хп.
-     */
-    private static void renderCroppedBar(GuiGraphics graphics, int x, int y,
-                                          ResourceLocation full, ResourceLocation empty, float fraction) {
-        blitFull(graphics, empty, x, y, BAR_INNER_W, BAR_INNER_H, BAR_INNER_W, BAR_INNER_H);
-
-        int visibleWidth = Math.round(BAR_INNER_W * fraction);
-        if (visibleWidth <= 0) return;
-        // Обрізаний blit: малюємо лише ЛІВУ частку джерела шириною
-        // visibleWidth — і джерело (u=0), і draw-позиція (x) лишаються
-        // від лівого краю, тому права (обрізана) частина не читається
-        // і не малюється, а видима частка лишається впритул до
-        // лівого краю смуги.
-        graphics.blit(full, x, y, visibleWidth, BAR_INNER_H,
-            0f, 0f, visibleWidth, BAR_INNER_H, BAR_INNER_W, BAR_INNER_H);
-    }
-
-    /** Blit 1:1 (draw size == source region size) через 9-арг. overload з явним розміром текстури. */
-    private static void blitFull(GuiGraphics graphics, ResourceLocation tex, int x, int y,
-                                  int drawWidth, int drawHeight, int textureWidth, int textureHeight) {
-        graphics.blit(tex, x, y, drawWidth, drawHeight, 0f, 0f, drawWidth, drawHeight, textureWidth, textureHeight);
-    }
-
-    // ── Іконка стану (плейсхолдер — файли ICON_* ще не намальовані) ──────
-
-    private static void renderStatusIcon(GuiGraphics graphics, Minecraft mc, int x, int y, SurvivorState state) {
-        ResourceLocation icon = switch (state) {
-            case BROKEN_LEG -> ICON_BROKEN_LEG;
-            case CRAWLING -> ICON_CRAWLING;
-            case UNCONSCIOUS -> ICON_UNCONSCIOUS;
-            case HEALTHY, ELIMINATED, ESCAPED -> null; // гілки не досягаються (guard у render()), але switch має бути вичерпним
-        };
-        if (icon == null) return;
-        blitFull(graphics, icon, x, y, ICON_SIZE, ICON_SIZE, ICON_SIZE, ICON_SIZE);
-    }
-
-    // ── Шкала вставання (CRAWLING) — ВЕРТИКАЛЬНА ──────────────────────────
-
-    // ── Чому вертикальна, а не як у генератора ───────────────────────────
-    // За вимогою дизайну: підняття на ноги — це стан САМОГО ГРАВЦЯ, і
-    // шкала стоїть ПРАВОРУЧ від приціла, як «смуга навантаження» біля
-    // персонажа, а не як панель роботи з об'єктом у світі (генератор,
-    // підняття тіла). Горизонтальна панель на всю ширину екрана тут ще й
-    // фізично заважала б: вона лягає рівно туди, куди дивиться лежачий
-    // гравець.
-    //
-    // Палітра й фактура лишаються генераторні — {@link GeneratorFuelUiTheme}:
-    // той самий фон панелі, рамка, заглиблений трек із фаскою й те саме
-    // сріблясте заповнення. Вертикальним є СКЛАД, не стиль.
     private static final int STAND_UP_BAR_WIDTH = 12;
     private static final int STAND_UP_BAR_HEIGHT = 90;
     private static final int STAND_UP_PANEL_PADDING = 6;
-    /** Відступ шкали від центру екрана ВПРАВО — щоб не закривати приціл. */
     private static final int STAND_UP_OFFSET_FROM_CENTER = 26;
-    /** Проміжок між шкалою та її підписами (відсоток зверху, підказка знизу). */
     private static final int STAND_UP_TEXT_GAP = 4;
 
-    /**
-     * Шкала вставання — вертикальна, заповнюється ЗНИЗУ ВГОРУ.
-     *
-     * ── Знизу вгору, а не зверху вниз ────────────────────────────────
-     * Заповнення росте до гори: це «піднятися», тобто рух угору, і
-     * останній відсоток шкали збігається з моментом, коли гравець уже
-     * встає. Горизонтальна шкала ремонту читалась «зліва направо», тут
-     * такої осі немає.
-     *
-     * Дані лише з {@code ClientMatchState} (StandUpProgressPacket): сервер
-     * тримає джерело правди (у нього прогрес щотіка згасає, тож встати
-     * одним натисканням не можна — треба спамити пробіл), а клієнт лише
-     * малює те, що прийшло.
-     */
-    private static void renderStandUpBar(GuiGraphics graphics, Minecraft mc) {
+    private static void renderStandUpBar(GuiGraphics graphics, Minecraft mc, float dt) {
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
 
         int presses = ClientMatchState.standUpPresses();
         int required = ClientMatchState.standUpRequired();
-        // required == 0 — пакет прогресу ще не дійшов (перший кадр після
-        // падіння): малюємо порожню шкалу, а не ділимо на нуль.
-        float fraction = required > 0 ? clamp01((float) presses / required) : 0f;
-        int percent = Math.round(fraction * 100f);
+        float target = required > 0 ? UiAnim.clamp01((float) presses / required) : 0f;
+
+        // Кожне натискання (прогрес виріс) — пружний поштовх панелі й спалах.
+        if (lastPresses >= 0 && presses > lastPresses) {
+            standUpPulse = 1f;
+            // Іскри від голівки шкали на кожне натискання.
+            int pw = STAND_UP_BAR_WIDTH + STAND_UP_PANEL_PADDING * 2;
+            int ph = STAND_UP_BAR_HEIGHT + STAND_UP_PANEL_PADDING * 2;
+            float headY = (screenH / 2f + ph / 2f) - STAND_UP_PANEL_PADDING - STAND_UP_BAR_HEIGHT * standUpShown;
+            STAND_SPARKS.burst(screenW / 2f + STAND_UP_OFFSET_FROM_CENTER + pw / 2f, headY, 8, 60f, 1f, -0.4f, 0.5f, 0xE4EAF6);
+        }
+        lastPresses = presses;
+        standUpPulse = UiAnim.approach(standUpPulse, 0f, 9f, dt);
+        standUpShown = UiAnim.approach(standUpShown, target, 16f, dt);
+        standUpGhost = target > standUpGhost ? target : UiAnim.approach(standUpGhost, target, 2.2f, dt);
 
         int panelW = STAND_UP_BAR_WIDTH + STAND_UP_PANEL_PADDING * 2;
         int panelH = STAND_UP_BAR_HEIGHT + STAND_UP_PANEL_PADDING * 2;
         int panelX = screenW / 2 + STAND_UP_OFFSET_FROM_CENTER;
         int panelY = screenH / 2 - panelH / 2;
 
+        float cx = panelX + panelW / 2f;
+        float cy = panelY + panelH / 2f;
+        graphics.pose().pushPose();
+        graphics.pose().translate(cx, cy, 0f);
+        float sc = 1f + 0.08f * standUpPulse;
+        graphics.pose().scale(sc, sc, 1f);
+        graphics.pose().translate(-cx, -cy, 0f);
+
+        UiFx.glow(graphics, panelX, panelY, panelW, panelH, 0xC2C9D6, 0.25f + 0.55f * standUpPulse, 4);
         GeneratorFuelUiTheme.drawPanel(graphics, panelX, panelY, panelW, panelH);
+        UiFx.brackets(graphics, panelX, panelY, panelW, panelH, GeneratorFuelUiTheme.alpha(0xFFF2F4F8, 0.85f),
+            5, 0.5f + 0.5f * (float) Math.sin(System.currentTimeMillis() / 260.0), 3);
+        GeneratorFuelUiTheme.drawBarVFx(graphics, panelX + STAND_UP_PANEL_PADDING, panelY + STAND_UP_PANEL_PADDING,
+            STAND_UP_BAR_WIDTH, STAND_UP_BAR_HEIGHT, standUpShown, standUpGhost,
+            GeneratorFuelUiTheme.FILL, standUpPulse);
+        graphics.pose().popPose();
+        STAND_SPARKS.tickAndRender(graphics, dt, 70f);
 
-        int barX = panelX + STAND_UP_PANEL_PADDING;
-        int barY = panelY + STAND_UP_PANEL_PADDING;
-        drawStandUpBarVertical(graphics, barX, barY, STAND_UP_BAR_WIDTH, STAND_UP_BAR_HEIGHT, fraction);
-
-        String percentText = percent + "%";
+        String percentText = Math.round(standUpShown * 100f) + "%";
         String prompt = Component.translatable("maniacmod.hud.stand_up_prompt").getString();
         int centerX = panelX + panelW / 2;
-
-        // Відсоток — НАД шкалою, підказка — ПІД нею. Обидва підписи
-        // центруються по шкалі, бо вона тепер сама собі окремий елемент, а
-        // не рядок у панелі з заголовком.
-        graphics.drawString(mc.font, percentText,
-            centerX - mc.font.width(percentText) / 2, panelY - 10, GeneratorFuelUiTheme.TEXT, true);
-        graphics.drawString(mc.font, prompt,
-            centerX - mc.font.width(prompt) / 2, panelY + panelH + STAND_UP_TEXT_GAP,
+        graphics.drawString(mc.font, percentText, centerX - mc.font.width(percentText) / 2, panelY - 10,
             GeneratorFuelUiTheme.TEXT, true);
-    }
 
-    /**
-     * Трек вертикальної шкали: заглиблення + заповнення ЗНИЗУ ВГОРУ.
-     *
-     * Дзеркальний до {@link GeneratorFuelUiTheme#drawBar} набір операцій із
-     * тими самими кольорами: ванільний {@code fill(x1, y1, x2, y2)} бере
-     * прямокутник за двома кутами, тож «висота» заливки тут рахується від
-     * НИЖНЬОГО краю вгору (у горизонтальному барі — від лівого праворуч).
-     */
-    private static void drawStandUpBarVertical(GuiGraphics graphics, int x, int y,
-                                                 int w, int h, float fraction) {
-        graphics.fill(x, y, x + w, y + h, GeneratorFuelUiTheme.INSET_BG);
-        GeneratorFuelUiTheme.bevelBorderInset(graphics, x, y, w, h);
-
-        int filled = Math.round((h - 2) * clamp01(fraction));
-        if (filled > 0) {
-            graphics.fill(x + 1, y + h - 1 - filled, x + w - 1, y + h - 1,
-                GeneratorFuelUiTheme.FILL);
-        }
+        // Підказка «дихає» — заохочує спамити пробіл.
+        float breathe = 0.65f + 0.35f * (float) Math.sin(System.currentTimeMillis() / 180.0);
+        graphics.drawString(mc.font, prompt, centerX - mc.font.width(prompt) / 2,
+            panelY + panelH + STAND_UP_TEXT_GAP,
+            GeneratorFuelUiTheme.alpha(GeneratorFuelUiTheme.TEXT, breathe), true);
     }
 }

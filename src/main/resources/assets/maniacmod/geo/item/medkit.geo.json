@@ -1,0 +1,92 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.medkit",
+        "texture_width": 32,
+        "texture_height": 32,
+        "visible_bounds_width": 2,
+        "visible_bounds_height": 2,
+        "visible_bounds_offset": [
+          0,
+          0.5,
+          0
+        ]
+      },
+      "bones": [
+        {
+          "name": "root",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "comment": "Корпус аптечки — ЗАГЛУШКА. Художник замінює своєю геометрією; кістки 'root' і 'lid' та ім'я анімацій idle/use лишити.",
+              "origin": [
+                -4,
+                0,
+                -2
+              ],
+              "size": [
+                8,
+                5,
+                4
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            },
+            {
+              "origin": [
+                -1,
+                4,
+                -2.5
+              ],
+              "size": [
+                2,
+                2,
+                1
+              ],
+              "uv": [
+                0,
+                17
+              ]
+            }
+          ]
+        },
+        {
+          "name": "lid",
+          "parent": "root",
+          "pivot": [
+            0,
+            5,
+            2
+          ],
+          "cubes": [
+            {
+              "comment": "Кришка: use-анімація відкидає її назад навколо шарніра (pivot ззаду).",
+              "origin": [
+                -4,
+                5,
+                -2
+              ],
+              "size": [
+                8,
+                2,
+                4
+              ],
+              "uv": [
+                0,
+                9
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

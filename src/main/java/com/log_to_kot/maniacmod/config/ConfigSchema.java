@@ -84,6 +84,20 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> ROLE_REVEAL_SECONDS =
         ConfigKey.integer("game", "roleRevealSeconds", 5, 1, 60);
 
+    // ── Кіно-вступ (CINEMATIC): Replay-камера + loader з порадами ─────────
+
+    /** Вимкнути — CINEMATIC знову живе один тік, матч стартує миттєво (як до вступу). */
+    public static final ConfigKey<Boolean> INTRO_ENABLED =
+        ConfigKey.bool("game", "introEnabled", true);
+
+    /** Вікно Replay: рівно стільки секунд камера летить і йде loader; далі Replay обривається. */
+    public static final ConfigKey<Integer> INTRO_REPLAY_SECONDS =
+        ConfigKey.integer("game", "introReplaySeconds", 10, 3, 60);
+
+    /** Як часто на loader-екрані змінюється порада. */
+    public static final ConfigKey<Integer> INTRO_TIP_SECONDS =
+        ConfigKey.integer("game", "introTipSeconds", 5, 2, 30);
+
     public static final ConfigKey<Integer> ENDING_SECONDS =
         ConfigKey.integer("game", "endingSeconds", 10, 1, 120);
 
@@ -360,14 +374,31 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> FUEL_PERCENT_PER_SECOND =
         ConfigKey.integer("generators", "fuelPercentPerSecond", 4, 1, 200);
 
+    /**
+     * Бонус швидкості ремонту генератора, поки виживий тримає викрутку в
+     * головній руці: множник = 1 + бонус. Дефолт 1.0 → ремонт вдвічі
+     * швидший (2 тіки прогресу за тік). Діє лише на стадії REPAIR.
+     */
     public static final ConfigKey<Double> SCREWDRIVER_SPEED_BONUS =
-        ConfigKey.decimal("generators", "screwdriverSpeedBonus", 0.25, 0.0, 5.0);
+        ConfigKey.decimal("generators", "screwdriverSpeedBonus", 1.0, 0.0, 5.0);
+
+    /**
+     * Скільки відсотків міцності викрутка втрачає за кожну секунду, поки
+     * нею реально лагодять генератор (5 → повна викрутка служить 20 с).
+     */
+    public static final ConfigKey<Integer> SCREWDRIVER_WEAR_PERCENT_PER_SECOND =
+        ConfigKey.integer("generators", "screwdriverWearPercentPerSecond", 5, 0, 100);
 
     public static final ConfigKey<Double> SCREWDRIVER_MINIGAME_REDUCTION =
         ConfigKey.decimal("generators", "screwdriverMinigameReduction", 0.25, 0.0, 1.0);
 
+    /**
+     * Порядок стадій генератора. Типово спершу заливається бензин, і лише
+     * потім генератор лагодиться (з міні-іграми). Читається один раз при
+     * створенні генератора — див. {@code GeneratorPoi}.
+     */
     public static final ConfigKey<String> GENERATOR_STAGE_ORDER =
-        ConfigKey.option("generators", "stageOrder", "REPAIR_THEN_FUEL",
+        ConfigKey.option("generators", "stageOrder", "FUEL_THEN_REPAIR",
             List.of("REPAIR_THEN_FUEL", "FUEL_THEN_REPAIR"));
 
     // ── survivors ────────────────────────────────────────────────────────
@@ -460,6 +491,26 @@ public final class ConfigSchema {
         ConfigKey.decimal("survivors", "legBreakChanceAtMaxHeight", 0.90, 0.0, 1.0);
 
     /**
+     * Мінімальна висота падіння (блоки), з якої ноги вже зношуються.
+     * Навіть падіння НИЖЧЕ порога нокдауну ({@link #FALL_KNOCKDOWN_HEIGHT})
+     * не безкарне: воно зменшує приховану міцність ніг. Було: нижче порога
+     * не траплялось нічого взагалі. 0 блоків не має сенсу (кожен стрибок
+     * був би падінням), тому мінімум 1.
+     */
+    public static final ConfigKey<Integer> FALL_LEG_WEAR_MIN_HEIGHT =
+        ConfigKey.integer("survivors", "fallLegWearMinHeightBlocks", 2, 1, 64);
+
+    /**
+     * Скільки ПРИХОВАНОЇ міцності ніг (0–100) знімає кожен повний блок
+     * висоти падіння. Діє на будь-яке падіння від
+     * {@link #FALL_LEG_WEAR_MIN_HEIGHT}, а не лише на нокдаун. Коли шкала
+     * доходить до нуля — нога ламається. Міцність повільно відновлюється
+     * ({@code legIntegrityRegenPerSecond}). 0 — падіння не зношує ноги.
+     */
+    public static final ConfigKey<Double> FALL_LEG_WEAR_PER_BLOCK =
+        ConfigKey.decimal("survivors", "fallLegWearPerBlock", 8.0, 0.0, 100.0);
+
+    /**
      * Скільки натискань пробілу треба, щоб підвестися після падіння
      * (стан CRAWLING). Раніше це була константа-літерал у
      * SurvivorModule зі значенням 1 — тобто прогресу не існувало
@@ -499,6 +550,24 @@ public final class ConfigSchema {
      */
     public static final ConfigKey<Integer> MANIAC_HIT_SPEED_TICKS =
         ConfigKey.integer("survivors", "maniacHitSpeedTicks", 100, 0, 6000);
+
+    /**
+     * Скільки тіків діє адреналін (предмет «Адреналін»): виживий біжить
+     * швидше, а стаміна не витрачається (200 тіків = 10 с).
+     */
+    public static final ConfigKey<Integer> ADRENALINE_DURATION_TICKS =
+        ConfigKey.integer("survivors", "adrenalineDurationTicks", 200, 20, 6000);
+
+    /** Рівень ефекту швидкості під адреналіном: 0 = Speed I, 1 = Speed II. */
+    public static final ConfigKey<Integer> ADRENALINE_SPEED_AMPLIFIER =
+        ConfigKey.integer("survivors", "adrenalineSpeedAmplifier", 1, 0, 5);
+
+    /**
+     * «Відкат» після адреналіну: стільки тіків стаміна тримається на нулі
+     * й не відновлюється (100 тіків = 5 с).
+     */
+    public static final ConfigKey<Integer> ADRENALINE_CRASH_TICKS =
+        ConfigKey.integer("survivors", "adrenalineCrashTicks", 100, 0, 6000);
 
     // ── maniac ───────────────────────────────────────────────────────────
     //
@@ -710,7 +779,7 @@ public final class ConfigSchema {
      * маньяка є сильнішою дією, тому дизайн дозволяє інший знос.
      */
     public static final ConfigKey<Integer> CROWBAR_STUN_HIT_WEAR_PERCENT =
-        ConfigKey.integer("maniac", "crowbarStunHitWearPercent", 50, 1, 100);
+        ConfigKey.integer("maniac", "crowbarStunHitWearPercent", 25, 1, 100);
 
     /**
      * Рівень ефекту нудоти (ванільний {@code MobEffects.CONFUSION}),
@@ -719,6 +788,32 @@ public final class ConfigSchema {
      */
     public static final ConfigKey<Integer> CROWBAR_STUN_NAUSEA_AMPLIFIER =
         ConfigKey.integer("maniac", "crowbarStunNauseaAmplifier", 0, 0, 4);
+
+    // ── bat (біта): удар по маньяку, стан "оглушений" ────────────────────
+    // Біта — «старший брат» лома в частині оглушення: б'є по маньяку так
+    // само (ManiacStunModule), але оглушує ТРОХИ ДОВШЕ й коштує 50% міцності
+    // за удар (тобто 2 удари й вона ламається). По капканах біта не працює.
+    // Перезарядка — ВЛАСНА (візуальний бар під предметом), не ванільна.
+
+    /**
+     * Тривалість оглушення маньяка бітою, у тіках. 240 = 12 с — трохи довше
+     * за лом ({@link #CROWBAR_STUN_DURATION_TICKS}, 8 с). Нижня межа та сама,
+     * що в лома: коротше за 8 с стан втрачає сенс.
+     */
+    public static final ConfigKey<Integer> BAT_STUN_DURATION_TICKS =
+        ConfigKey.integer("maniac", "batStunDurationTicks", 240, 160, 600);
+
+    /** Перезарядка біти між ударами по маньяку, у тіках. 600 = 30 с. */
+    public static final ConfigKey<Integer> BAT_STUN_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "batStunCooldownTicks", 600, 0, 12000);
+
+    /** Дальність, з якої біта дістає до маньяка (блоків від очей виживого). */
+    public static final ConfigKey<Double> BAT_STUN_RANGE_BLOCKS =
+        ConfigKey.decimal("maniac", "batStunRangeBlocks", 3.5, 1.0, 8.0);
+
+    /** Скільки % міцності біта втрачає за удар по маньяку. Дизайн: 50. */
+    public static final ConfigKey<Integer> BAT_STUN_HIT_WEAR_PERCENT =
+        ConfigKey.integer("maniac", "batStunHitWearPercent", 50, 1, 100);
 
     // ── maniac_selection ─────────────────────────────────────────────────
 
@@ -833,7 +928,8 @@ public final class ConfigSchema {
     public static final ConfigBlock GAME = ConfigBlock.settings("game", FILE_NAME,
         "Головні правила матчу: мінімум гравців, тривалості технічних фаз "
         + "і дебаг-режим для одиночних перевірок.",
-        MIN_PLAYERS, ROLE_REVEAL_SECONDS, ENDING_SECONDS, DEBUG_MODE, DEBUG_ROLE);
+        MIN_PLAYERS, INTRO_ENABLED, INTRO_REPLAY_SECONDS, INTRO_TIP_SECONDS,
+        ROLE_REVEAL_SECONDS, ENDING_SECONDS, DEBUG_MODE, DEBUG_ROLE);
 
     public static final ConfigBlock WORLD = ConfigBlock.settings("world", "world.yml",
         "Час доби (в усіх фазах) і керовані погодні події під час гри. "
@@ -860,7 +956,7 @@ public final class ConfigSchema {
         HIGHLIGHT_DURATION_TICKS, FAIL_FLASH_TICKS, MINIGAME_FAIL_LOSS_PERCENT,
         REPAIR_SECONDS_PER_STAGE, REPAIR_MAX_DISTANCE_BLOCKS, REPAIR_MAX_LOOK_ANGLE_DEGREES,
         MIN_GENERATOR_TO_PEER, MIN_GENERATOR_TO_MANIAC,
-        SCREWDRIVER_SPEED_BONUS,
+        SCREWDRIVER_SPEED_BONUS, SCREWDRIVER_WEAR_PERCENT_PER_SECOND,
         SCREWDRIVER_MINIGAME_REDUCTION, GENERATOR_STAGE_ORDER);
 
     public static final ConfigBlock SURVIVORS = ConfigBlock.settings("survivors", "survivors.yml",
@@ -868,9 +964,11 @@ public final class ConfigSchema {
         SURVIVOR_MAX_HP, SURVIVOR_SLOTS, FLASHLIGHT_COOLDOWN_TICKS, RESCUE_TICKS,
         DOWNED_BLEED_OUT_TICKS, RESCUE_DECAY_TICKS, REVIVE_HP, DOWNED_CRAWL_SPEED, RESCUE_RANGE_BLOCKS,
         RESCUE_HELPER_BONUS, STAMINA_DRAIN_PER_TICK, STAMINA_REGEN_PER_TICK,
-        FALL_KNOCKDOWN_HEIGHT, LEG_BREAK_MIN_HEIGHT, LEG_BREAK_CHANCE_AT_MIN,
+        FALL_KNOCKDOWN_HEIGHT, FALL_LEG_WEAR_MIN_HEIGHT, FALL_LEG_WEAR_PER_BLOCK,
+        LEG_BREAK_MIN_HEIGHT, LEG_BREAK_CHANCE_AT_MIN,
         LEG_BREAK_MAX_HEIGHT, LEG_BREAK_CHANCE_AT_MAX, STAND_UP_PRESSES, STAND_UP_DECAY_TICKS,
-        HEARTBEAT_RANGE_BLOCKS, MANIAC_MERCY_RADIUS_BLOCKS, MANIAC_HIT_SPEED_TICKS);
+        HEARTBEAT_RANGE_BLOCKS, MANIAC_MERCY_RADIUS_BLOCKS, MANIAC_HIT_SPEED_TICKS,
+        ADRENALINE_DURATION_TICKS, ADRENALINE_SPEED_AMPLIFIER, ADRENALINE_CRASH_TICKS);
 
     public static final ConfigBlock MANIAC = ConfigBlock.settings("maniac", "maniacs.yml",
         "Спільні для всіх маньяків правила полювання.",
@@ -887,7 +985,9 @@ public final class ConfigSchema {
         ELECTRIC_WIRE_SHAKE_DEGREES, ELECTRIC_WIRE_SHAKE_HZ,
         GEO_SCISSORS_RANGE_BLOCKS,
         CROWBAR_STUN_DURATION_TICKS, CROWBAR_STUN_COOLDOWN_TICKS, CROWBAR_STUN_RANGE_BLOCKS,
-        CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER);
+        CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER,
+        BAT_STUN_DURATION_TICKS, BAT_STUN_COOLDOWN_TICKS, BAT_STUN_RANGE_BLOCKS,
+        BAT_STUN_HIT_WEAR_PERCENT);
 
     public static final ConfigBlock MANIAC_SELECTION = ConfigBlock.settings("maniac_selection", "maniacs.yml",
         "Хто стає маньяком і як обирається персонаж.",

@@ -25,7 +25,7 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * окремий маленький рендер, що сам читає hp щокадру.
  *
  * ── Поріг і крива ────────────────────────────────────────────────────
- * Нижче {@link #VIGNETTE_THRESHOLD_FRACTION} (40% хп) вінʼєтка починає
+ * Нижче {@link #VIGNETTE_THRESHOLD_FRACTION} (20% хп) вінʼєтка починає
  * проявлятись, на 0% хп альфа на максимумі {@link #MAX_ALPHA}. Квадрат
  * дробу (не лінійно) — той самий прийом, що {@code computeHeartbeat} у
  * {@code SurvivorModule}: останні відсотки перед смертю мають "бити"
@@ -37,10 +37,10 @@ public final class LowHpVignetteOverlay {
     private LowHpVignetteOverlay() {}
 
     /** Частка хп, нижче якої вінʼєтка починає з'являтись. */
-    private static final float VIGNETTE_THRESHOLD_FRACTION = 0.4f;
+    private static final float VIGNETTE_THRESHOLD_FRACTION = 0.2f;
 
     /** Альфа (0..255) на самому краю екрана при 0 хп. Центр завжди лишається прозорим. */
-    private static final int MAX_ALPHA = 160;
+    private static final int MAX_ALPHA = 115;
 
     /**
      * Колір вінʼєтки — світліший, насичений червоний (раніше 0x660000,
@@ -70,7 +70,7 @@ public final class LowHpVignetteOverlay {
     private static final long FADE_IN_MS = 350;
 
     /** Частка хп, нижче якої вінʼєтка починає додатково БЛИМАТИ (критично мало). */
-    private static final float BLINK_THRESHOLD_FRACTION = 0.12f;
+    private static final float BLINK_THRESHOLD_FRACTION = 0.10f;
 
     /** Період одного циклу блимання (мс): пройти тьмяно→яскраво→тьмяно. */
     private static final long BLINK_PERIOD_MS = 900;
@@ -83,6 +83,10 @@ public final class LowHpVignetteOverlay {
      */
     private static final float BLINK_DEPTH = 0.5f;
 
+    /** Глибина повільної пульсації віньєтки (частка альфи): звичайна й критична зона. */
+    private static final float PULSE_DEPTH = 0.12f;
+    private static final float PULSE_DEPTH_CRITICAL = 0.22f;
+
     /**
      * Момент (мс, {@code System.currentTimeMillis()}), коли хп востаннє
      * ОПУСТИВСЯ нижче порогу. {@code -1} = зараз вище порогу (чи ще
@@ -91,6 +95,23 @@ public final class LowHpVignetteOverlay {
      * поріг знову має плавно з'явитись, а не вискочити миттєво.
      */
     private static long belowThresholdSince = -1L;
+
+    /**
+     * Наскільки мало хп у власного виживого: 0 — вище порога (або не
+     * виживий / лежить / без vitals), 1 — нуль хп. Ту саму шкалу читає
+     * {@code HeartbeatSoundHandler}, щоб серце в грудях і віньєтка
+     * вмикались від одного й того самого порога.
+     */
+    public static float lowHpSeverity() {
+        if (!ClientMatchState.isSurvivor()) return 0f;
+        SurvivorState state = ClientMatchState.survivorState();
+        if (state != SurvivorState.HEALTHY && state != SurvivorState.BROKEN_LEG) return 0f;
+        int maxHp = ClientMatchState.maxHp();
+        if (maxHp <= 0) return 0f;
+        float fraction = Math.max(0f, Math.min(1f, (float) ClientMatchState.hp() / maxHp));
+        if (fraction >= VIGNETTE_THRESHOLD_FRACTION) return 0f;
+        return 1f - fraction / VIGNETTE_THRESHOLD_FRACTION;
+    }
 
     public static void render(GuiGraphics graphics) {
         if (!ClientMatchState.isSurvivor()) return;
@@ -136,11 +157,17 @@ public final class LowHpVignetteOverlay {
         // базової на найтьмянішій фазі. Активується лише під окремим,
         // нижчим порогом, щоб "просто мало хп" не мигтіло — блимає лише
         // справжня критична зона.
-        if (fraction < BLINK_THRESHOLD_FRACTION && fadeIn >= 1f) {
-            double phase = (now % BLINK_PERIOD_MS) / (double) BLINK_PERIOD_MS;
-            float blink = (float) (0.5 - 0.5 * Math.cos(phase * Math.PI * 2)); // 0..1..0, плавно
-            float blinkMul = (1f - BLINK_DEPTH) + BLINK_DEPTH * blink;
-            alphaF *= blinkMul;
+        if (fadeIn >= 1f) {
+            // БАГ (занадто різке блимання): раніше альфа стрибала в такт
+            // серцю подвійним «тук-тук» з глибиною 38–62% — краї екрана
+            // різко спалахували двічі за цикл і дратували. Тепер це
+            // повільне «дихання»: одна плавна синусоїда, глибина лише
+            // 12–22%, тож віньєтка ледь-ледь пульсує, а не блимає.
+            float crit = 1f - Math.min(1f, fraction / VIGNETTE_THRESHOLD_FRACTION);
+            long period = Math.round(2600 - 900 * crit);
+            float wave = 0.5f + 0.5f * (float) Math.sin((now % period) / (double) period * Math.PI * 2.0);
+            float depth = fraction < BLINK_THRESHOLD_FRACTION ? PULSE_DEPTH_CRITICAL : PULSE_DEPTH;
+            alphaF *= 1f - depth * wave;
         }
 
         int alpha = Math.round(alphaF);
@@ -196,6 +223,14 @@ public final class LowHpVignetteOverlay {
      * @param edgeColor колір смуги БЕЗ альфи в старших бітах (RGB-частина читається з нього)
      * @param fromLeft  true — границя зліва (x зростає вглиб екрана); false — границя справа (x спадає)
      */
+    /** Гаусоподібний «горб» навколо {@code center} шириною {@code width} (цикл 0..1). */
+    private static float bump(float phase, float center, float width) {
+        float d = Math.abs(phase - center);
+        d = Math.min(d, 1f - d);
+        float k = d / width;
+        return (float) Math.exp(-k * k * 3.0);
+    }
+
     private static void renderHorizontalEdge(GuiGraphics graphics, int edgeX, int h,
                                              int baseAlpha, int edgeColor, boolean fromLeft) {
         int rgb = edgeColor & 0x00FFFFFF;

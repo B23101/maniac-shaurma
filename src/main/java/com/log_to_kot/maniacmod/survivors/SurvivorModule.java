@@ -213,6 +213,9 @@ public final class SurvivorModule implements PhaseListener {
             // а лежачих гравців розблоковувало. Тепер — лише при виході з
             // ігрового блоку в неігрову фазу.
             for (ServerPlayer player : players) {
+                if (adrenaline.containsKey(player.getUUID())) {
+                    player.removeEffect(MobEffects.MOVEMENT_SPEED);
+                }
                 StaminaService.clear(player);
                 unlockMovement(player);
                 removeCrawlSpeed(player);
@@ -222,6 +225,7 @@ public final class SurvivorModule implements PhaseListener {
             rescuers.clear();
             rescueProgressTicks.clear();
             legRulesApplied.clear();
+            adrenaline.clear();
             pendingLegBreak.clear();
             legIntegrity.clear();
             standUpPresses.clear();
@@ -279,6 +283,7 @@ public final class SurvivorModule implements PhaseListener {
             if (!match().isSurvivor(player.getUUID())) continue;
 
             tickBrokenLegStamina(player);
+            tickAdrenaline(player);
             tickLegIntegrity(player);
             float heartbeat = computeHeartbeat(player, maniac);
             sendVitals(player, heartbeat, false);
@@ -405,7 +410,7 @@ public final class SurvivorModule implements PhaseListener {
         } else {
             legRulesApplied.remove(player.getUUID());
         }
-        StaminaService.setRules(player, buildStaminaRules(broken));
+        StaminaService.setRules(player, buildStaminaRules(player.getUUID(), broken));
     }
 
     /**
@@ -436,6 +441,7 @@ public final class SurvivorModule implements PhaseListener {
         StaminaService.clear(player);
         lastSentVitals.remove(player.getUUID());
         legRulesApplied.remove(player.getUUID());
+        adrenaline.remove(player.getUUID());
         pendingLegBreak.remove(player.getUUID());
         legIntegrity.remove(player.getUUID());
         standUpPresses.remove(player.getUUID());
@@ -462,6 +468,7 @@ public final class SurvivorModule implements PhaseListener {
         legIntegrity.remove(id);
         standUpPresses.remove(id);
         legRulesApplied.remove(id);
+        adrenaline.remove(id);
         lastSentVitals.remove(id);
         rescuers.remove(id);
         rescueProgressTicks.remove(id);
@@ -489,12 +496,7 @@ public final class SurvivorModule implements PhaseListener {
      * "одиниць за секунду" на шкалі 0..100 (maxStamina=100 — той сам
      * вимір, що очікує SurvivorVitalsPacket.stamina() 0.0–1.0 після
      * ділення на maxStamina у sendVitals).
-     */
-    private StaminaRules buildStaminaRules() {
-        return buildStaminaRules(false);
-    }
-
-    /**
+     *
      * @param brokenLeg {@code true} — правила для гравця з поламаною
      *                  ногою: відновлення стаміни ВИМКНЕНЕ на рівні
      *                  бібліотеки. Це не косметика, а єдиний надійний
@@ -505,8 +507,19 @@ public final class SurvivorModule implements PhaseListener {
      *                  її обнулили — шкала «дрижала» б між 0 і малим
      *                  значенням, а спринт міг би вмикатись на кадр.
      */
-    private StaminaRules buildStaminaRules(boolean brokenLeg) {
-        float drainPerSecond = (float) (double) ManiacConfigs.get(ConfigSchema.STAMINA_DRAIN_PER_TICK) * 20f * 100f;
+    private StaminaRules buildStaminaRules(UUID id, boolean brokenLeg) {
+        // Адреналін — ще одне джерело правил (поруч із ногою): поки він діє,
+        // витрата нульова; під час «відкату» відновлення вимкнене так само,
+        // як при поламаній нозі. Стан читається тут, а не передається
+        // параметром, щоб КОЖЕН виклик setRules (старт матчу, нога, адреналін)
+        // давав узгоджені правила й один не затирав інший.
+        AdrenalineState adr = adrenaline.get(id);
+        boolean adrenalineActive = adr != null && !adr.crash;
+        boolean adrenalineCrash = adr != null && adr.crash;
+
+        float drainPerSecond = adrenalineActive
+            ? 0f
+            : (float) (double) ManiacConfigs.get(ConfigSchema.STAMINA_DRAIN_PER_TICK) * 20f * 100f;
         float regenPerSecond = (float) (double) ManiacConfigs.get(ConfigSchema.STAMINA_REGEN_PER_TICK) * 20f * 100f;
         return StaminaRules.builder()
             .active(true)
@@ -521,7 +534,7 @@ public final class SurvivorModule implements PhaseListener {
             // встигає це почути.
             .emptyRecoveryDelaySeconds(3.0f)
             .recoveryDelaySeconds(0.5f)
-            .recoveryEnabled(!brokenLeg)
+            .recoveryEnabled(!brokenLeg && !adrenalineCrash)
             // Спринт блокує сама бібліотека (міксин на setSprinting, клієнт
             // + сервер): на 0 бігти не можна, а після повного виснаження —
             // доки шкала не відновиться до цієї частки (0.2 = 20%). Поки
@@ -587,7 +600,128 @@ public final class SurvivorModule implements PhaseListener {
         // повернення звичайних правил після Шини НЕ дарує гравцю повну
         // шкалу — вона просто починає відновлюватись з нуля за
         // recoveryDelaySeconds, як і задумано дизайном.
-        StaminaService.setRules(player, buildStaminaRules(broken));
+        StaminaService.setRules(player, buildStaminaRules(player.getUUID(), broken));
+    }
+
+    // ── Адреналін ────────────────────────────────────────────────────────
+
+    /** Стан дії адреналіну одного виживого. */
+    private static final class AdrenalineState {
+        /** Скільки тіків лишилось у поточній фазі (дія або відкат). */
+        int ticksLeft;
+        /** false — триває дія (швидкість, стаміна не витрачається); true — відкат. */
+        boolean crash;
+    }
+
+    private final java.util.Map<UUID, AdrenalineState> adrenaline = new java.util.HashMap<>();
+
+    /**
+     * Викликається з {@link com.log_to_kot.maniacmod.items.AdrenalineItem}.
+     *
+     * ── Дизайн ────────────────────────────────────────────────────────
+     * 1) ДІЯ ({@code adrenalineDurationTicks}): ефект швидкості
+     *    ({@code adrenalineSpeedAmplifier}), стаміна повна й НЕ витрачається.
+     * 2) ВІДКАТ ({@code adrenalineCrashTicks}): у момент завершення стаміна
+     *    стає 0 і не відновлюється весь відкат (спринт і стрибок заблоковані
+     *    бібліотекою, бо шкала порожня).
+     * 3) Далі правила стаміни повертаються до звичайних.
+     *
+     * ── Два шари, як у {@link #tickBrokenLegStamina} ──────────────────
+     * Основний — правила {@link StaminaRules} ({@link #buildStaminaRules}):
+     * нульова витрата / вимкнене відновлення на рівні бібліотеки, бо її
+     * тік іде на END, ПІСЛЯ нашого. Страховка — щотіка {@link #tickAdrenaline}
+     * повертає значення, якщо хтось (команда адміна, удар маньяка) його
+     * змінив.
+     *
+     * Відмова (false, предмет не витрачається): не виживий, адреналін уже
+     * діє чи триває відкат, гравець лежить/непритомний/із поламаною ногою
+     * (їхня стаміна замкнена на нулі — {@link #staminaLocked}).
+     */
+    public boolean onAdrenalineApplied(ServerPlayer player) {
+        UUID id = player.getUUID();
+        if (!match().isSurvivor(id) || adrenaline.containsKey(id)) return false;
+
+        SurvivorState state = match().survivorStateOf(id);
+        if (state == null || state.isCrawlOnly() || state.isTerminal() || staminaLocked(state)) return false;
+        if (!StaminaService.isEnabled() || StaminaService.getMaxStamina(player) <= 0) return false;
+
+        int duration = ManiacConfigs.get(ConfigSchema.ADRENALINE_DURATION_TICKS);
+        int amplifier = ManiacConfigs.get(ConfigSchema.ADRENALINE_SPEED_AMPLIFIER);
+
+        AdrenalineState st = new AdrenalineState();
+        st.ticksLeft = duration;
+        adrenaline.put(id, st);
+
+        // ambient=false, visible=false, showIcon=true — як при ударі
+        // маньяка ({@link #onManiacHit}): іконка в куточку, без частинок.
+        player.addEffect(new MobEffectInstance(
+            MobEffects.MOVEMENT_SPEED, duration, amplifier, false, false, true));
+
+        // Правила беруть стан з мапи вище (drain=0), потім — повна шкала.
+        StaminaService.setRules(player, buildStaminaRules(id, false));
+        StaminaService.setStamina(player, StaminaService.getMaxStamina(player), true);
+        sendVitals(player, true);
+        return true;
+    }
+
+    /**
+     * Щотіка для кожного виживого; для тих, хто без адреналіну, — одна
+     * перевірка мапи. Веде таймери, страхує значення стаміни й перемикає
+     * ДІЯ → ВІДКАТ → кінець.
+     */
+    private void tickAdrenaline(ServerPlayer player) {
+        UUID id = player.getUUID();
+        AdrenalineState st = adrenaline.get(id);
+        if (st == null) return;
+
+        SurvivorState state = match().survivorStateOf(id);
+        if (state == null || state.isCrawlOnly() || state.isTerminal() || staminaLocked(state)) {
+            // Гравця збили з ніг / зламали ногу: його стаміну далі веде
+            // tickBrokenLegStamina / стан лежання, адреналін не втручається.
+            endAdrenaline(player, true);
+            return;
+        }
+
+        if (--st.ticksLeft > 0) {
+            if (!st.crash) {
+                float max = StaminaService.getMaxStamina(player);
+                if (max > 0 && StaminaService.getStamina(player) < max) {
+                    StaminaService.setStamina(player, max, true);
+                }
+            } else if (StaminaService.getStamina(player) > 0) {
+                StaminaService.setStamina(player, 0, false);
+            }
+            return;
+        }
+
+        if (st.crash) {
+            endAdrenaline(player, false);
+            return;
+        }
+
+        // Дія скінчилась → відкат: стаміна 0 і без відновлення.
+        int crashTicks = ManiacConfigs.get(ConfigSchema.ADRENALINE_CRASH_TICKS);
+        if (crashTicks <= 0) {
+            endAdrenaline(player, false);
+            return;
+        }
+        st.crash = true;
+        st.ticksLeft = crashTicks;
+        StaminaService.setRules(player, buildStaminaRules(id, false));
+        StaminaService.setStamina(player, 0, false);
+        sendVitals(player, true);
+    }
+
+    /** Знімає адреналін і повертає звичайні правила стаміни. */
+    private void endAdrenaline(ServerPlayer player, boolean cancelSpeed) {
+        UUID id = player.getUUID();
+        adrenaline.remove(id);
+        if (cancelSpeed) player.removeEffect(MobEffects.MOVEMENT_SPEED);
+        if (StaminaService.isEnabled()) {
+            StaminaService.setRules(player,
+                buildStaminaRules(id, staminaLocked(match().survivorStateOf(id))));
+        }
+        sendVitals(player, true);
     }
 
     // ── Хп: ізольовано у фасаді MatchOrchestrator, цей модуль лише читає ──
@@ -640,14 +774,32 @@ public final class SurvivorModule implements PhaseListener {
         int wholeBlocks = (int) Math.floor(fallDistanceBlocks);
 
         int knockdownHeight = ManiacConfigs.get(ConfigSchema.FALL_KNOCKDOWN_HEIGHT);
-        if (wholeBlocks < knockdownHeight) return true; // без наслідків, але й без ванільного урону
 
         // Уже лежить, повзе або непритомний — повторне падіння не
         // додає новий стан поверх наявного й не скидає прогрес
         // вставання (beginCrawling обнулив би лічильник натискань) та
         // не перегенеровує шанс зламаної ноги.
-        SurvivorState current = match().survivorStateOf(player.getUUID());
+        UUID id = player.getUUID();
+        SurvivorState current = match().survivorStateOf(id);
         if (current == SurvivorState.UNCONSCIOUS || current == SurvivorState.CRAWLING) return true;
+
+        // Будь-яке відчутне падіння зношує ноги — навіть нижче порога
+        // нокдауну. Раніше нижче порога не траплялось НІЧОГО: гравець
+        // міг стрибати з 3 блоків безкінечно. Тепер кожне таке падіння
+        // знімає приховану міцність ніг, а коли вона вичерпається —
+        // нога ламається (як і від капканів).
+        boolean wornOut = applyFallLegWear(id, wholeBlocks);
+
+        if (wholeBlocks < knockdownHeight) {
+            // Нижче порога — не лягає, але нога могла зламатись від зносу.
+            if (wornOut && current == SurvivorState.HEALTHY) {
+                match().setSurvivorState(id, SurvivorState.BROKEN_LEG);
+                playLegBreakEffects(player);
+                sendVitals(player, true);
+                broadcastRosterFor(player);
+            }
+            return true; // без ванільного урону
+        }
 
         double legBreakChance = legBreakChanceFor(
             wholeBlocks,
@@ -655,26 +807,51 @@ public final class SurvivorModule implements PhaseListener {
             ManiacConfigs.get(ConfigSchema.LEG_BREAK_CHANCE_AT_MIN),
             ManiacConfigs.get(ConfigSchema.LEG_BREAK_MAX_HEIGHT),
             ManiacConfigs.get(ConfigSchema.LEG_BREAK_CHANCE_AT_MAX));
-        boolean legBroken = legBreakChance > 0.0 && rng.nextDouble() < legBreakChance;
+        boolean rolledBreak = legBreakChance > 0.0 && rng.nextDouble() < legBreakChance;
+
+        // БАГ (повторне падіння лікувало ногу): beginCrawling перезаписує
+        // стан на CRAWLING, а після вставання стан береться з
+        // pendingLegBreak. Для гравця, що вже мав BROKEN_LEG, кидок
+        // кубика міг дати false — і він вставав ЗДОРОВИМ. Тепер уже
+        // зламана нога лишається зламаною при будь-якому падінні.
+        boolean alreadyBroken = current == SurvivorState.BROKEN_LEG;
+        boolean legBroken = rolledBreak || wornOut || alreadyBroken;
 
         // Падіння від fallKnockdownHeightBlocks завжди збиває з ніг:
         // гравець повзе, доки не натисне пробіл (onStandUpAttempt нижче).
-        // Чи зламана нога — залежить від ВИСОТИ (legBreakChanceFor):
-        // 4–5 блоків лише лягає, з 6 з'являється шанс, що росте до
-        // максимуму. Перелом ЧУТИ І ВИДНО одразу (хруст + частинки нижче),
-        // а СТАН BROKEN_LEG (без стаміни/стрибка) вмикається після вставання —
+        // Чи зламана нога — залежить від ВИСОТИ (legBreakChanceFor), від
+        // зносу ніг і від того, чи вона вже була зламана. Перелом ЧУТИ
+        // І ВИДНО одразу (хруст + частинки нижче), а СТАН BROKEN_LEG
+        // (без стаміни/стрибка) вмикається після вставання —
         // так дизайн "CRAWLING = лежить, BROKEN_LEG = ходить без стаміни"
         // не конфліктує: це два послідовні стани, не одночасні.
-        pendingLegBreak.put(player.getUUID(), legBroken);
+        pendingLegBreak.put(id, legBroken);
         beginCrawling(player);
-        if (legBroken) {
+        if (legBroken && !alreadyBroken) {
             // Хруст лунає В МОМЕНТ ПРИЗЕМЛЕННЯ, а не коли гравець
             // підвівся: інакше виглядало, що ногу зламано вставанням.
-            // Стан BROKEN_LEG (без стаміни/стрибка) застосується вже
-            // після вставання — лежачий і так не рухається.
+            // (Якщо нога вже була зламана — повторний хруст не граємо.)
             playLegBreakEffects(player);
         }
         return true;
+    }
+
+    /**
+     * Знос ніг від падіння: знімає з прихованої шкали
+     * {@code fallLegWearPerBlock × повні блоки}, якщо висота не менша за
+     * {@code fallLegWearMinHeightBlocks}. Шкала та сама, що й у капкана
+     * ({@link #legIntegrity}) — тож знос від падінь і пасток складається.
+     *
+     * @return true, якщо шкала дійшла до нуля (нога має зламатись)
+     */
+    private boolean applyFallLegWear(UUID id, int wholeBlocks) {
+        if (wholeBlocks < ManiacConfigs.get(ConfigSchema.FALL_LEG_WEAR_MIN_HEIGHT)) return false;
+        double perBlock = ManiacConfigs.get(ConfigSchema.FALL_LEG_WEAR_PER_BLOCK);
+        if (perBlock <= 0.0) return false;
+        float next = Math.max(0f,
+            legIntegrity.getOrDefault(id, LEG_INTEGRITY_MAX) - (float) (perBlock * wholeBlocks));
+        legIntegrity.put(id, next);
+        return next <= 0f;
     }
 
     /** Хрускіт кісток + частинки — спільне для падіння й пасток. */
@@ -722,7 +899,9 @@ public final class SurvivorModule implements PhaseListener {
      * Лежить, доки не набере потрібну кількість натискань пробілу
      * ({@link #onStandUpAttempt}); рух і поворот фізично заблоковані на
      * цей час — серверний лок (freeze щотіка) плюс клієнтський міксин
-     * блокування руху й стрибка (див. {@code MixinLocalPlayerDownedMovement}).
+     * блокування руху й стрибка ({@code MixinKeyboardInputDownedMovement});
+     * поворот камери глушить {@code ClientLookLock} (два міксини:
+     * {@code MixinMouseHandlerManiacStunned} і {@code MixinEntityTurnManiacStunned}).
      */
     private void beginCrawling(ServerPlayer player) {
         UUID id = player.getUUID();
@@ -959,6 +1138,7 @@ public final class SurvivorModule implements PhaseListener {
         pendingLegBreak.remove(player.getUUID());
         standUpPresses.remove(player.getUUID());
         legRulesApplied.remove(player.getUUID());
+        adrenaline.remove(player.getUUID());
         bleedOutTicksLeft.remove(player.getUUID());
         removeCrawlSpeed(player);
         setDownedGlow(player, false);

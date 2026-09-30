@@ -7,7 +7,9 @@ import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
+import com.log_to_kot.maniacmod.items.BatItem;
 import com.log_to_kot.maniacmod.items.CrowbarItem;
+import com.log_to_kot.maniacmod.items.OwnCooldowns;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ManiacStunPacket;
@@ -109,11 +111,14 @@ public final class ManiacStunModule implements PhaseListener {
     public void onPhaseEnter(GamePhase phase, List<ServerPlayer> players) {
         if (phase != GamePhase.HUNT) return;
         resetState(players);
+        // Власні перезарядки предметів (біта) не переживають рестарт матчу.
+        OwnCooldowns.clearAll(players);
     }
 
     @Override
     public void onPhaseExit(GamePhase phase, List<ServerPlayer> players) {
         resetState(players);
+        OwnCooldowns.clearAll(players);
     }
 
     @Override
@@ -256,6 +261,8 @@ public final class ManiacStunModule implements PhaseListener {
 
         int wearCost = ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_HIT_WEAR_PERCENT);
         int left = CrowbarItem.wear(crowbar, wearCost);
+        // 0% — лом ламається повністю й зникає з руки.
+        CrowbarItem.breakIfWornOut(hitter, crowbar);
         hitter.getCooldowns().addCooldown(crowbar.getItem(),
             ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_COOLDOWN_TICKS));
         notify(hitter, left > 0 ? ActionBarMessageType.INFO : ActionBarMessageType.ERROR,
@@ -274,8 +281,64 @@ public final class ManiacStunModule implements PhaseListener {
         return true;
     }
 
+    /**
+     * Виживий вдарив БІТОЮ по маньяку (ЛКМ). Той самий стан оглушення, що від
+     * лома ({@link #onCrowbarHitManiac}), але: довше ({@code batStunDurationTicks}),
+     * 50% міцності за удар, ВЛАСНА перезарядка ({@link OwnCooldowns}) замість
+     * ванільної — її малює бар під предметом.
+     *
+     * @return true, якщо удар оброблено (навіть якщо біта зламана чи на
+     *         перезарядці — тоді ванільний удар теж треба скасувати); false —
+     *         не наш випадок
+     */
+    public boolean onBatHitManiac(ServerPlayer hitter, ServerPlayer maniac, ItemStack bat) {
+        if (!(bat.getItem() instanceof BatItem)) return false;
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.DAMAGE)) return false;
+        if (!m.isSurvivor(hitter.getUUID())) return false;
+        if (!m.isManiac(maniac.getUUID())) return false;
+
+        if (BatItem.isBroken(bat)) {
+            notify(hitter, ActionBarMessageType.ERROR, "maniacmod.stun.bat_broken");
+            return true;
+        }
+        if (OwnCooldowns.isOnCooldown(hitter, BatItem.COOLDOWN_KEY)) {
+            notify(hitter, ActionBarMessageType.COOLDOWN, "maniacmod.stun.bat_cooldown");
+            return true;
+        }
+
+        double range = ManiacConfigs.get(ConfigSchema.BAT_STUN_RANGE_BLOCKS);
+        if (hitter.getEyePosition().distanceToSqr(maniac.position().add(0, 0.9, 0)) > range * range) {
+            return false;
+        }
+
+        // Уже оглушений маньяк не «освіжається», але біта платить повну ціну
+        // (знос + перезарядка) — та сама логіка, що в лома.
+        boolean alreadyStunned = stunnedManiacId != null && stunnedManiacId.equals(maniac.getUUID());
+
+        int left = BatItem.wear(bat, ManiacConfigs.get(ConfigSchema.BAT_STUN_HIT_WEAR_PERCENT));
+        BatItem.breakIfWornOut(hitter, bat);
+        OwnCooldowns.start(hitter, BatItem.COOLDOWN_KEY, ManiacConfigs.get(ConfigSchema.BAT_STUN_COOLDOWN_TICKS));
+        notify(hitter, left > 0 ? ActionBarMessageType.INFO : ActionBarMessageType.ERROR,
+            left > 0 ? "maniacmod.stun.bat_used" : "maniacmod.stun.bat_broke",
+            String.valueOf(left));
+
+        // Окремого звуку біти ще нема — той самий «метал/дерево по цілі», що лом.
+        hitter.level().playSound(null, maniac.blockPosition(),
+            ModSounds.CROWBAR_HIT.get(), SoundSource.PLAYERS, 1.0f, 0.85f);
+
+        if (alreadyStunned) return true;
+
+        beginStun(maniac, ManiacConfigs.get(ConfigSchema.BAT_STUN_DURATION_TICKS));
+        return true;
+    }
+
     private void beginStun(ServerPlayer maniac) {
-        int duration = ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_DURATION_TICKS);
+        beginStun(maniac, ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_DURATION_TICKS));
+    }
+
+    /** Той самий стан для будь-якої зброї — різниться лише тривалість (лом 8 с, біта 12 с). */
+    private void beginStun(ServerPlayer maniac, int duration) {
         int nauseaAmplifier = ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_NAUSEA_AMPLIFIER);
 
         stunTicksLeft = duration;

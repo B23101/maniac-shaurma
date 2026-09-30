@@ -70,6 +70,18 @@ public final class ManiacCombatModule implements PhaseListener {
      */
     private static final double POINT_BLANK_BLOCKS = 0.75;
 
+    /**
+     * Сила відкидання жертви — МАЛЕНЬКА підача (ванільний меч ≈ 0.4).
+     * Було 1.1 — це відкидало гравця на десятки блоків. 0.25 ≈ відступ
+     * на 1–2 блоки: удар відчутний, але жертву не «вистрілює».
+     */
+    private static final double KNOCKBACK_STRENGTH = 0.25;
+    /** Мінімальний вертикальний імпульс, коли жертва не на землі. */
+    private static final double KNOCKBACK_MIN_LIFT = 0.08;
+
+    /** Шкода дебаг-удару, коли архетипу маньяка немає (одиночний дебаг). */
+    private static final int DEBUG_FALLBACK_DAMAGE = 50;
+
     private final Supplier<MatchOrchestrator> matchSupplier;
 
     /** Тіків перезарядки, що лишилось. 0 = можна бити. */
@@ -170,17 +182,95 @@ public final class ManiacCombatModule implements PhaseListener {
         ServerPlayer victim = findTarget(match, attacker, archetype.attackRangeBlocks());
         if (victim == null) return false;
 
-        boolean downed = match.damageSurvivor(victim.getUUID(), archetype.attackDamage());
-        if (downed) {
-            // Удар збив із ніг — жертва непритомна, адреналін їй не потрібен.
-            match.survivors().onSurvivorDowned(victim);
-        } else {
-            // Живий після удару отримує швидкість I і повну стаміну —
-            // шанс утекти (див. SurvivorModule.onManiacHit).
-            match.survivors().onManiacHit(victim);
-        }
+        double yawRad = Math.toRadians(attacker.getYRot());
+        resolveHit(match, victim, archetype.attackDamage(), Math.sin(yawRad), -Math.cos(yawRad));
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
+    }
+
+    /**
+     * Спільний шлях влучання — і для справжнього удару ({@link #onAttack}),
+     * і для дебаг-команди: шкода (якщо {@code damage >= 0}), стан жертви,
+     * віддача та екранний ефект. Кулдаун сюди НЕ входить — його ставить
+     * лише справжній удар.
+     *
+     * @param damage шкода в хп; від'ємне — без шкоди (лише віддача й ефект)
+     * @return true, якщо удар збив жертву з ніг
+     */
+    private boolean resolveHit(MatchOrchestrator match, ServerPlayer victim, int damage,
+                               double dirX, double dirZ) {
+        boolean downed = false;
+        if (damage >= 0) {
+            downed = match.damageSurvivor(victim.getUUID(), damage);
+            if (downed) {
+                // Удар збив із ніг — жертва непритомна, адреналін їй не потрібен.
+                match.survivors().onSurvivorDowned(victim);
+            } else {
+                // Живий після удару отримує швидкість I і повну стаміну —
+                // шанс утекти (див. SurvivorModule.onManiacHit).
+                match.survivors().onManiacHit(victim);
+            }
+        }
+        applyHitRecoil(victim, dirX, dirZ);
+        ModNetwork.toPlayer(victim,
+            new com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitPacket(downed));
+        return downed;
+    }
+
+    /**
+     * Дебаг-удар ({@code /maniac debug strike}): те саме влучання, що й
+     * справжнє, але без цілі-пошуку, дальності, кулдауну й перевірки фази.
+     *
+     * @param attacker маньяк, від якого рахується напрямок віддачі; може
+     *                 бути {@code null} (одиночний дебаг без маньяка) —
+     *                 тоді жертву відкидає назад від її власного погляду
+     * @param withDamage true — реальна шкода (лише для виживого), false —
+     *                   тільки віддача й екранний ефект
+     * @return true, якщо удар збив жертву з ніг
+     */
+    public boolean debugStrike(ServerPlayer victim, ServerPlayer attacker, boolean withDamage) {
+        MatchOrchestrator match = matchSupplier.get();
+
+        double dirX, dirZ;
+        if (attacker != null && attacker != victim) {
+            double yaw = Math.toRadians(attacker.getYRot());
+            dirX = Math.sin(yaw);
+            dirZ = -Math.cos(yaw);
+        } else {
+            double yaw = Math.toRadians(victim.getYRot());
+            dirX = -Math.sin(yaw);
+            dirZ = Math.cos(yaw);
+        }
+
+        int damage = -1;
+        if (withDamage && match.isSurvivor(victim.getUUID())
+            && match.survivorStateOf(victim.getUUID())
+                != com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS) {
+            ManiacArchetype archetype = match.maniacArchetype();
+            damage = archetype != null ? archetype.attackDamage() : DEBUG_FALLBACK_DAMAGE;
+        }
+        return resolveHit(match, victim, damage, dirX, dirZ);
+    }
+
+    /**
+     * Реальна віддача удару: жертву відкидає у напрямку удару
+     * ({@code dirX/dirZ} — одиничний вектор «від маньяка»), з невеликим
+     * підкиданням, а сама швидкість одразу синхронізується з клієнтом
+     * жертви — інакше сервер відкинув би її, а клієнт цього б не побачив
+     * (гравець керує рухом сам). Плюс ванільна анімація/звук отримання шкоди.
+     */
+    private void applyHitRecoil(ServerPlayer victim, double dirX, double dirZ) {
+        victim.knockback(KNOCKBACK_STRENGTH, dirX, dirZ);
+        // Ванільний knockback підкидає лише з землі; додаємо мінімальний
+        // підйом, щоб відкидання було помітним і в повітрі, і на слизькому.
+        if (!victim.onGround() && victim.getDeltaMovement().y < KNOCKBACK_MIN_LIFT) {
+            victim.setDeltaMovement(victim.getDeltaMovement().x, KNOCKBACK_MIN_LIFT,
+                                    victim.getDeltaMovement().z);
+        }
+        victim.hurtMarked = true;
+        victim.connection.send(new net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket(victim));
+        // Подія 2 = «отримав удар»: червоний спалах моделі + звук болю.
+        victim.level().broadcastEntityEvent(victim, (byte) 2);
     }
 
     /**

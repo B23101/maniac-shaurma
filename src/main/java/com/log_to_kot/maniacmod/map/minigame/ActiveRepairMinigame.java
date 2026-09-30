@@ -19,7 +19,7 @@ public final class ActiveRepairMinigame {
     private final RepairMinigameType type;
 
     /** Ненульове лише для TARGET — параметри конкретного запуску. */
-    private final TargetMinigameSpec targetSpec;
+    private TargetMinigameSpec targetSpec;
     /** Ненульове лише для WIRES — розкладка конкретного запуску. */
     private final WireMinigameLayout wireLayout;
 
@@ -96,6 +96,41 @@ public final class ActiveRepairMinigame {
         targetHits++;
         return targetHits >= targetSpec.hitsRequired() ? Result.SUCCESS : Result.HIT_PROGRESS;
     }
+
+    /**
+     * Переносить ціль у НОВЕ випадкове місце, лишаючи решту параметрів
+     * (seed/швидкість/ширина/потрібні влучання) — викликається після
+     * кожного влучання, щоб ціль не стояла вічно в одній точці. Наступний
+     * клік звіряється вже з новою позицією.
+     *
+     * Нове місце гарантовано ВІДЧУТНО далі від старого (не менше
+     * {@link #MIN_TARGET_SHIFT}, але й не більше, ніж вміщує смуга) — інакше
+     * «випадкове» перенесення на пів пальця виглядало б як вона не рухалась.
+     *
+     * @return нова позиція цілі (0.0-1.0)
+     */
+    public double moveTarget(java.util.Random rng) {
+        double old = targetSpec.targetPosition();
+        double next = old;
+        for (int attempt = 0; attempt < 16; attempt++) {
+            next = TARGET_MIN + rng.nextDouble() * (TARGET_MAX - TARGET_MIN);
+            if (Math.abs(next - old) >= MIN_TARGET_SHIFT) break;
+        }
+        // Запасний варіант, якщо 16 разів поспіль не пощастило: перекидаємо
+        // ціль на протилежний бік смуги відносно старої позиції.
+        if (Math.abs(next - old) < MIN_TARGET_SHIFT) {
+            next = old < (TARGET_MIN + TARGET_MAX) / 2 ? TARGET_MAX - 0.1 : TARGET_MIN + 0.1;
+        }
+        targetSpec = new TargetMinigameSpec(targetSpec.seed(), targetSpec.cursorSpeed(),
+            targetSpec.hitZoneWidth(), next, targetSpec.hitsRequired());
+        return next;
+    }
+
+    /** Межі, в яких ціль може стояти: не по центру й не впритул до країв смуги. */
+    public static final double TARGET_MIN = 0.15;
+    public static final double TARGET_MAX = 0.85;
+    /** Мінімальний зсув цілі при перенесенні (частка смуги). */
+    private static final double MIN_TARGET_SHIFT = 0.20;
 
     /**
      * Реєструє перетягування дроту {@code leftSlot} на правий контакт

@@ -80,6 +80,8 @@ public final class ClientPacketHandler {
      */
     public static void onTrapLoadout(java.util.List<String> trapIds, double placeRange) {
         ClientMatchState.setTrapLoadout(trapIds, placeRange);
+        // Оголошення ролі маньяка: іконки пасток, які він щойно узяв.
+        com.log_to_kot.maniacmod.client.overlay.notify.RoleRevealOverlay.onTrapLoadout(trapIds);
         if (Minecraft.getInstance().screen instanceof com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen) {
             Minecraft.getInstance().setScreen(null);
         }
@@ -91,6 +93,12 @@ public final class ClientPacketHandler {
      * екрана поверх першого.
      */
     public static void onTrapCatalog(java.util.List<String> trapIds, int limit) {
+        // Кіно-вступ блокує екрани (Esc/чат/меню). Каталог приходить раз — не губимо його,
+        // а відкриваємо вибір пасток, щойно розтемнення закінчилось.
+        if (com.log_to_kot.maniacmod.client.intro.IntroClient.blocksScreens()) {
+            com.log_to_kot.maniacmod.client.intro.IntroClient.runWhenUnblocked(() -> onTrapCatalog(trapIds, limit));
+            return;
+        }
         var screen = Minecraft.getInstance().screen;
         if (screen instanceof com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen choose) {
             choose.onCatalogUpdated(trapIds, limit);
@@ -142,7 +150,7 @@ public final class ClientPacketHandler {
             com.log_to_kot.maniacmod.net.s2c.minigame.WireMinigameOpenPacket packet) {
         ClientInputHandler.forceReleaseRepairHold();
         Minecraft.getInstance().setScreen(new com.log_to_kot.maniacmod.client.screen.minigame.WireMinigameScreen(
-            packet.initialRightSlotForLeft(), packet.timeLimitTicks()));
+            packet.initialRightSlotForLeft(), packet.rightColors(), packet.timeLimitTicks()));
     }
 
     /**

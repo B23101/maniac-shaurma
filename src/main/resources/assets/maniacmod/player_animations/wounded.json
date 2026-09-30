@@ -1,0 +1,42 @@
+{
+	"format_version": "1.8.0",
+	"animations": {
+		"wounded": {
+			"loop": true,
+			"bones": {
+				"head": {
+					"rotation": {
+						"vector": [22.5, 0, 0]
+					},
+					"position": {
+						"vector": [0, 0, -2]
+					}
+				},
+				"torso": {
+					"rotation": {
+						"vector": [12.5, 0, 0]
+					},
+					"position": {
+						"vector": [0, 0, -2.25]
+					}
+				},
+				"right_arm": {
+					"rotation": {
+						"vector": [-3.3008, -55.6655, -49.9423]
+					},
+					"position": {
+						"vector": [0, -2, -3]
+					}
+				},
+				"left_arm": {
+					"rotation": {
+						"vector": [2.5, 0, 0]
+					},
+					"position": {
+						"vector": [0, 0, -3]
+					}
+				}
+			}
+		}
+	}
+}

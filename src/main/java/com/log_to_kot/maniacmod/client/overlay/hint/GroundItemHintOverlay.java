@@ -1,10 +1,11 @@
 package com.log_to_kot.maniacmod.client.overlay.hint;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
-import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
+import com.log_to_kot.maniacmod.loot.GroundItemAim;
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.shaurmalib.forge.network.packets.InventorySlotAllocationPacket;
 import net.minecraft.client.Minecraft;
@@ -87,11 +88,19 @@ public final class GroundItemHintOverlay {
 
     public static void render(GuiGraphics graphics) {
         Minecraft mc = Minecraft.getInstance();
-        HitResult hit = mc.player == null ? null : mc.hitResult;
-        GroundItemEntity item = (mc.screen == null
-            && hit instanceof EntityHitResult entityHit
-            && entityHit.getEntity() instanceof GroundItemEntity g
-            && g.hasStack()) ? g : null;
+        // Ціль — по ПРОМЕНЮ погляду (GroundItemAim), а не по ванільному прицілу:
+        // трава перед предметом перекривала приціл, і підказка зникала, хоча
+        // взяти предмет можна. Інша сутність під прицілом (лежачий союзник,
+        // генератор) має пріоритет — тоді підказки про предмет немає.
+        GroundItemEntity item = null;
+        if (mc.player != null && mc.screen == null) {
+            HitResult hit = mc.hitResult;
+            boolean otherEntity = hit instanceof EntityHitResult eh
+                && !(eh.getEntity() instanceof GroundItemEntity);
+            if (!otherEntity) {
+                item = GroundItemAim.find(mc.player, GroundItemAim.CLIENT_MARGIN);
+            }
+        }
 
         if (item == null) {
             if (wasVisible) {
@@ -126,53 +135,24 @@ public final class GroundItemHintOverlay {
         int anchorY = screenH / 2 - ABOVE_CROSSHAIR_GAP + Math.round((1f - ease) * 6f);
 
         Font font = mc.font;
-        if (canPickUp) {
-            drawScaledCentered(graphics, font, name, centerX, anchorY - (font.lineHeight + LINE_GAP), TITLE_COLOR, ease);
-            drawScaledCentered(graphics, font, action, centerX, anchorY, ACTION_COLOR, ease);
-        } else if (!inRange) {
-            // БАГФІКС: раніше тут показувалась сама назва без пояснення —
-            // ванільний рейкаст ловить сутність аж до ~3 блоків, а сервер
-            // (GroundItemEntity.interact) відмовляв уже на 2 блоках
-            // (ConfigSchema.GROUND_ITEM_PICKUP_RANGE). Гравець бачив назву
-            // і тиснув ПКМ у проміжку між цими дистанціями — і отримував
-            // мовчазну відмову сервера без жодного пояснення. Тепер
-            // клієнт знає той самий ліміт (див. GroundItemVisualSettingsPacket)
-            // і чесно каже «підійдіть ближче», а не обіцяє дію, якої
-            // сервер за мить не підтвердить.
-            drawScaledCentered(graphics, font, name, centerX, anchorY - (font.lineHeight + LINE_GAP), TITLE_COLOR, ease);
-            drawScaledCentered(graphics, font, tooFar, centerX, anchorY, ACTION_COLOR, ease);
-        } else {
-            drawScaledCentered(graphics, font, name, centerX, anchorY, TITLE_COLOR, ease);
+        String second = canPickUp ? action : (!inRange ? tooFar : null);
+        int textW = Math.max(font.width(name), second == null ? 0 : font.width(second));
+        int w = Math.max(160, textW + 24);
+        int h = second == null ? 26 : 38;
+        int x = centerX - w / 2;
+        int y = anchorY - h / 2 - 10;
+
+        GeneratorFuelUiTheme.beginAppear(graphics, centerX, y + h / 2f, ease, 8f);
+        GeneratorFuelUiTheme.drawPanel(graphics, x, y, w, h);
+        graphics.drawString(font, name, centerX - font.width(name) / 2, y + 8, GeneratorFuelUiTheme.TEXT, false);
+        if (second != null) {
+            GeneratorFuelUiTheme.divider(graphics, x, y + 19, w);
+            int c = canPickUp ? GeneratorFuelUiTheme.HIGHLIGHT : GeneratorFuelUiTheme.HIT_ZONE;
+            graphics.drawString(font, second, centerX - font.width(second) / 2, y + 24, c, false);
         }
+        GeneratorFuelUiTheme.endAppear(graphics);
     }
 
-    /**
-     * Один рядок тексту з тінню, центрований по X, збільшений
-     * {@link #TEXT_SCALE} навколо своєї власної базової лінії — сусідній
-     * рядок (заданий окремим {@code baselineY}) масштаб не зсуває.
-     */
-    private static void drawScaledCentered(GuiGraphics g, Font font, String text,
-                                            int centerX, int baselineY, int color, float alpha) {
-        // Прозорість самої появи: текст проявляється, а не спалахує.
-        // Колір задано як 0xFFRRGGBB, тож старший байт замінюємо на
-        // поточну альфу — RGB лишається тим самим.
-        int alphaByte = Math.round(UiAnim.clamp01(alpha) * 255f);
-        int shaded = (alphaByte << 24) | (color & 0x00FFFFFF);
-
-        PoseStack pose = g.pose();
-        pose.pushPose();
-        pose.translate(centerX, baselineY, 0);
-        pose.scale(TEXT_SCALE, TEXT_SCALE, 1f);
-        int width = font.width(text);
-        g.drawString(font, text, -width / 2, -font.lineHeight / 2, shaded, true);
-        pose.popPose();
-    }
-
-    /**
-     * Чи можна чесно пообіцяти «ПКМ — взяти». Умови зібрані в одному
-     * місці, щоб сервер і підказка не розходились: вони дзеркалять
-     * перевірки {@code GroundItemEntity.interact}, які клієнт знає.
-     */
     private static boolean canOfferPickup(Minecraft mc) {
         if (!ClientMatchState.allows(PhaseRule.ITEM_USE)) return false;
         if (mc.player.isShiftKeyDown()) return false;

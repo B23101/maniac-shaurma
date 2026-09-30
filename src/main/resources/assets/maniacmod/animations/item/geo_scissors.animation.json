@@ -3,29 +3,9 @@
   "animations": {
     "idle": {
       "loop": true,
-      "animation_length": 2.0,
-      "comment": "Заглушка: ледь помітне погойдування лома в руці. Ім'я 'idle' лишити — його читає CrowbarItem.registerControllers через RawAnimation.begin().thenLoop(\"idle\").",
-      "bones": {
-        "root": {
-          "rotation": {
-            "0.0": [
-              0,
-              0,
-              0
-            ],
-            "1.0": [
-              0,
-              1,
-              0
-            ],
-            "2.0": [
-              0,
-              0,
-              0
-            ]
-          }
-        }
-      }
+      "animation_length": 1.0,
+      "comment": "Ножиці лежать/тримаються нерухомо. Ім'я 'idle' лишити — його читає GeoScissorsItem.registerControllers. Кістки blade_a / blade_b (±21° навколо заклепки) можна анімувати для «клац» при розрізанні.",
+      "bones": {}
     }
   }
 }

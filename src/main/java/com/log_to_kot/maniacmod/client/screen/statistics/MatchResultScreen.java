@@ -6,6 +6,11 @@ import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
 import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
+import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
+import com.log_to_kot.maniacmod.client.style.UiFx;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -57,47 +62,92 @@ public final class MatchResultScreen extends Screen {
             .build());
     }
 
+    private long openedAtMs;
+
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics);
+        if (openedAtMs == 0L) openedAtMs = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
+        float openT = UiAnim.clamp01((now - openedAtMs) / 420f);
+
+        // Фон: плавне затемнення замість ванільної плашки.
+        graphics.fill(0, 0, width, height, GeneratorFuelUiTheme.alpha(0xFF000000, 0.62f * UiAnim.easeOutCubic(openT)));
 
         List<RosterSyncPacket.RosterEntry> roster = ClientMatchState.roster();
         List<RosterSyncPacket.RosterEntry> escaped = filterByState(roster, SurvivorState.ESCAPED);
         List<RosterSyncPacket.RosterEntry> eliminated = filterByState(roster, SurvivorState.ELIMINATED);
         String maniacName = maniacDisplayName(roster);
 
-        int x = width / 2 - PANEL_WIDTH / 2;
-        int y = 30;
+        int rows = Math.max(1, escaped.size()) + Math.max(1, eliminated.size());
+        int panelH = 24 + 16 + 22 + rows * ROW_HEIGHT + 2 * (ROW_HEIGHT + 6) + SECTION_GAP + 16;
+        int panelX = width / 2 - PANEL_WIDTH / 2;
+        int panelY = Math.max(16, (height - 50 - panelH) / 2);
 
-        graphics.drawCenteredString(font, title, width / 2, y, 0xFFFFFF);
-        y += 24;
+        // Панель «висувається» знизу з м'яким масштабом (як банер генератора).
+        float ease = UiAnim.easeOutBack(openT, 0.6f);
+        graphics.pose().pushPose();
+        float cx = width / 2f, cy = panelY + panelH / 2f;
+        graphics.pose().translate(cx, cy + (1f - ease) * 18f, 0f);
+        float sc = 0.90f + 0.10f * ease;
+        graphics.pose().scale(sc, sc, 1f);
+        graphics.pose().translate(-cx, -cy, 0f);
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderColor(1f, 1f, 1f, UiAnim.clamp01(openT * 1.5f));
 
-        graphics.drawString(font,
-            Component.translatable("maniacmod.result.maniac", maniacName), x, y, 0xFFAA00, false);
-        y += SECTION_GAP * 2;
+        ManiacUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, panelH, true);
+        if (openT < 1f) {
+            UiFx.scanBeam(graphics, panelX + 1, panelY + 1, PANEL_WIDTH - 2, panelH - 2, openT, 28, 0xFFFFFF, 50);
+        }
 
-        y = renderSection(graphics, x, y,
-            Component.translatable("maniacmod.result.escaped"), escaped, 0x55FF55);
+        int y = ManiacUiTheme.drawTitle(graphics, font, title, panelX, panelY, PANEL_WIDTH);
+        graphics.drawString(font, Component.translatable("maniacmod.result.maniac", maniacName)
+            .getString(), panelX + 16, y, GeneratorFuelUiTheme.FILL_WARN, false);
+        y += SECTION_GAP + 8;
+
+        int[] rowCounter = {0};
+        y = renderSection(graphics, panelX + 16, y, now,
+            Component.translatable("maniacmod.result.escaped"), escaped, GeneratorFuelUiTheme.FILL, rowCounter);
         y += SECTION_GAP;
-        renderSection(graphics, x, y,
-            Component.translatable("maniacmod.result.eliminated"), eliminated, 0xFF5555);
+        renderSection(graphics, panelX + 16, y, now,
+            Component.translatable("maniacmod.result.eliminated"), eliminated, GeneratorFuelUiTheme.FILL_DANGER, rowCounter);
+
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+        graphics.pose().popPose();
 
         super.render(graphics, mouseX, mouseY, partialTick);
     }
 
-    /** @return Y одразу під намальованою секцією — для наступної секції нижче. */
-    private int renderSection(GuiGraphics graphics, int x, int y,
-                               Component sectionTitle, List<RosterSyncPacket.RosterEntry> entries, int color) {
-        graphics.drawString(font, sectionTitle, x, y, 0xAAAAAA, false);
-        y += ROW_HEIGHT;
+    /** Секція: заголовок з роздільником + рядки, що по черзі «в'їжджають» зліва. */
+    private int renderSection(GuiGraphics graphics, int x, int y, long now,
+                               Component sectionTitle, List<RosterSyncPacket.RosterEntry> entries,
+                               int color, int[] rowCounter) {
+        graphics.drawString(font, sectionTitle.getString().toUpperCase(java.util.Locale.ROOT), x, y,
+            ManiacUiTheme.TEXT_BODY, false);
+        y += ROW_HEIGHT - 2;
+        ManiacUiTheme.divider(graphics, x, y, PANEL_WIDTH - 32);
+        y += 6;
 
         if (entries.isEmpty()) {
-            graphics.drawString(font, Component.translatable("maniacmod.result.none"), x + 6, y, 0x777777, false);
+            graphics.drawString(font, Component.translatable("maniacmod.result.none"), x + 8, y,
+                ManiacUiTheme.TEXT_DIM, false);
             return y + ROW_HEIGHT;
         }
 
         for (RosterSyncPacket.RosterEntry entry : entries) {
-            graphics.drawString(font, entry.displayName(), x + 6, y, color, false);
+            float rowT = UiAnim.easeOutCubic(UiAnim.clamp01(
+                (now - openedAtMs - 260L - rowCounter[0] * 90L) / 320f));
+            rowCounter[0]++;
+            int slideX = Math.round((1f - rowT) * -24f);
+            int a = Math.round(255 * rowT);
+            // Маркер стану + ім'я; блимаючий акцент-квадрат зліва.
+            float blink = 0.6f + 0.4f * (float) Math.sin(now / 380.0 + rowCounter[0]);
+            graphics.fill(x + slideX, y + 2, x + slideX + 3, y + 7,
+                GeneratorFuelUiTheme.alpha(0xFF000000 | (color & 0xFFFFFF), rowT * blink));
+            // Альфа < 4 у ванільному drawString трактується як непрозоре — пропускаємо кадр.
+            if (a >= 8) {
+                graphics.drawString(font, entry.displayName(), x + 8 + slideX, y,
+                    (a << 24) | (GeneratorFuelUiTheme.TEXT & 0xFFFFFF), false);
+            }
             y += ROW_HEIGHT;
         }
         return y;

@@ -6,9 +6,21 @@ import net.minecraft.core.BlockPos;
 
 /**
  * Генератор. v3-еквівалент: game/GeneratorState.java, але модель
- * складніша — зі схеми "Генератори" генератор проходить ДВІ стадії:
+ * складніша — зі схеми "Генератори" генератор проходить ДВІ стадії.
  *
- *   Стадія 1 — REPAIR: лагодження. Пряме утримання ПКМ дає прогрес
+ * ── Порядок стадій ───────────────────────────────────────────────────
+ * Типово (ConfigSchema.GENERATOR_STAGE_ORDER = FUEL_THEN_REPAIR) спершу
+ * заливається бензин, і лише потім генератор лагодиться; значення
+ * REPAIR_THEN_FUEL повертає зворотний порядок. Порядок читається з
+ * конфігу ОДИН РАЗ — при створенні генератора — і далі не змінюється:
+ * зміна конфігу посеред матчу не повинна перевертати стадії в
+ * генератора, що вже частково залитий чи полагоджений.
+ *
+ * Нижче стадії описані за змістом, а не за порядком. Міні-ігри, вибух і
+ * викрутка стосуються лише REPAIR — незалежно від того, першою вона йде
+ * чи другою.
+ *
+ *   Стадія REPAIR: лагодження. Пряме утримання ПКМ дає прогрес
  *              0-100% (див. {@link #addRepairProgress}). Відпустив —
  *              прогрес НЕ скидається, просто чекає, поки продовжать.
  *
@@ -35,7 +47,7 @@ import net.minecraft.core.BlockPos;
  *              Бензин (FUEL) вибух не чіпає взагалі.
  *              {@link #explode(int)} — єдина точка входу для обох
  *              міні-ігор.
- *   Стадія 2 — FUEL: залив бензину. Треба залити FUEL_REQUIRED_PERCENT
+ *   Стадія FUEL: залив бензину. Треба залити FUEL_REQUIRED_PERCENT
  *              (за дизайном 200%) запасу. Бензин береться із заряду
  *              каністри в руці гравця, 1 до 1: скільки відсотків
  *              додалось генератору, стільки ж списалось із каністри
@@ -68,7 +80,10 @@ public class GeneratorPoi extends PointOfInterestArchetype {
 
     public enum VisualState { IDLE, IN_PROGRESS, FAILED, DONE }
 
-    private Stage stage = Stage.REPAIR;
+    /** true — спершу бензин, потім ремонт (див. «Порядок стадій» у докстрінгу класу). */
+    private final boolean fuelFirst;
+
+    private Stage stage;
 
     /**
      * Прогрес лагодження у ТІКАХ утримання (0 … {@link #repairTicksRequired()}).
@@ -110,6 +125,27 @@ public class GeneratorPoi extends PointOfInterestArchetype {
 
     public GeneratorPoi(BlockPos pos) {
         super(pos);
+        this.fuelFirst = "FUEL_THEN_REPAIR".equals(ManiacConfigs.get(ConfigSchema.GENERATOR_STAGE_ORDER));
+        this.stage = fuelFirst ? Stage.FUEL : Stage.REPAIR;
+    }
+
+    /** Стадія, з якої генератор починає (FUEL або REPAIR — залежно від порядку). */
+    public Stage firstStage() {
+        return fuelFirst ? Stage.FUEL : Stage.REPAIR;
+    }
+
+    /** Стадія, якою генератор закінчується (протилежна {@link #firstStage()}). */
+    public Stage lastStage() {
+        return fuelFirst ? Stage.REPAIR : Stage.FUEL;
+    }
+
+    /**
+     * Скільки стадій уже ПРОЙДЕНО: 0 — на першій, 1 — на другій, 2 — готово.
+     * Клієнту це потрібно для підпису «етапи», не вгадуючи порядок сам.
+     */
+    public int stagesDone() {
+        if (stage == Stage.DONE) return 2;
+        return stage == firstStage() ? 0 : 1;
     }
 
     @Override
@@ -165,18 +201,32 @@ public class GeneratorPoi extends PointOfInterestArchetype {
      * @param ticks скільки тіків додати. Зараз завжди 1; параметр
      *              лишається, щоб бонуси інструментів (викрутка)
      *              могли множити внесок, не змінюючи цю модель.
+     * @return true, якщо генератор щойно повністю завершено — тобто ремонт
+     *         був ДРУГОЮ стадією (порядок FUEL_THEN_REPAIR). Коли ремонт
+     *         іде першим, завершення (перехід до заливу) — не кінець, і
+     *         повертається false.
      */
-    public void addRepairProgress(int ticks) {
-        if (stage != Stage.REPAIR) return;
+    public boolean addRepairProgress(int ticks) {
+        if (stage != Stage.REPAIR) return false;
         repairTicks = Math.min(repairTicksRequired(), repairTicks + Math.max(0, ticks));
         // Червоний стан вибуху не затираємо, поки він триває: інші гравці
         // можуть далі лагодити, і без цього FAILED зникав би за один тік.
         if (failedFlashTicks == 0) visualState = VisualState.IN_PROGRESS;
-        if (repairTicks >= repairTicksRequired()) {
-            stage = Stage.FUEL;
-            // FUEL — це наступна стадія, а не завершення: підсвітка
-            // лишається "в процесі", а не "готово", доки не заллють бак.
-        }
+        if (repairTicks < repairTicksRequired()) return false;
+
+        if (fuelFirst) return finish();
+        // Ремонт першою стадією: далі заливка, а не завершення — підсвітка
+        // лишається "в процесі", а не "готово", доки не заллють бак.
+        stage = Stage.FUEL;
+        return false;
+    }
+
+    /** Ставить остаточний стан «готово». @return true — щойно завершено. */
+    private boolean finish() {
+        stage = Stage.DONE;
+        visualState = VisualState.DONE;
+        completed = true;
+        return true;
     }
 
     /**
@@ -188,7 +238,8 @@ public class GeneratorPoi extends PointOfInterestArchetype {
      * контур сутності й екранний маркер запускає {@code GeneratorModule}
      * за {@link #explosionTicksLeft()}.
      *
-     * Бензин (FUEL) вибух не чіпає: {@code fuelPercent} не змінюється.
+     * Бензин (FUEL) вибух не чіпає: {@code fuelPercent} не змінюється
+     * (за типового порядку він на той час уже повністю залитий).
      * Вибухнути можна лише на стадії REPAIR — саме тоді існують
      * міні-ігри.
      *
@@ -212,21 +263,23 @@ public class GeneratorPoi extends PointOfInterestArchetype {
      * так {@code GeneratorModule.tickFuel} вираховує, скільки списати із
      * каністри).
      *
-     * @return true якщо генератор щойно повністю завершено (обидві
-     *         стадії пройдено).
+     * @return true якщо генератор щойно повністю завершено — тобто заливка
+     *         була ДРУГОЮ стадією (порядок REPAIR_THEN_FUEL). Коли бензин
+     *         іде першим, повний бак відкриває ремонт і повертається false.
      */
     public boolean addFuel(int percent) {
         if (stage != Stage.FUEL) return false;
         int required = fuelRequiredPercent();
         fuelPercent = Math.min(required, fuelPercent + percent);
         if (failedFlashTicks == 0) visualState = VisualState.IN_PROGRESS;
-        if (fuelPercent >= required) {
-            stage = Stage.DONE;
-            visualState = VisualState.DONE;
-            completed = true;
-            return true;
+        if (fuelPercent < required) return false;
+
+        if (fuelFirst) {
+            // Бак повний — далі ремонт. Підсвітка лишається "в процесі".
+            stage = Stage.REPAIR;
+            return false;
         }
-        return false;
+        return finish();
     }
 
     @Override
@@ -266,7 +319,8 @@ public class GeneratorPoi extends PointOfInterestArchetype {
      */
     public void tick() {
         if (failedFlashTicks > 0 && --failedFlashTicks == 0 && stage != Stage.DONE) {
-            boolean hasProgress = repairTicks > 0 || fuelPercent > 0 || stage == Stage.FUEL;
+            // Друга стадія означає, що перша вже пройдена — прогрес є.
+            boolean hasProgress = repairTicks > 0 || fuelPercent > 0 || stage != firstStage();
             visualState = hasProgress ? VisualState.IN_PROGRESS : VisualState.IDLE;
         }
     }

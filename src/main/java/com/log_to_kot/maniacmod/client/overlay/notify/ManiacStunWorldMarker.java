@@ -1,94 +1,152 @@
 package com.log_to_kot.maniacmod.client.overlay.notify;
 
+import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
-import com.log_to_kot.maniacmod.client.overlay.WorldToScreen;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.Tesselator;
+import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
+import net.minecraftforge.client.event.RenderLevelStageEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
 
 import java.util.UUID;
 
 /**
- * 5 зірочок, що обертаються, НАД ГОЛОВОЮ оглушеного маньяка — видно
- * УСІМ гравцям матчу (виживим і самому маньяку теж, дивлячись на себе
- * ззовні неможливо, але тімейти й маньяк одне одного бачать однаково).
+ * 5 зірочок, що крутяться НАД ГОЛОВОЮ оглушеного маньяка — тепер це
+ * справжня 3D-геометрія у світі, а не GUI-мітка.
  *
- * ── Джерело даних ────────────────────────────────────────────────────
- * {@link ClientMatchState#isManiacStunned(UUID)} — дзеркало серверного
- * {@code ManiacStunModule}, прийшло через {@code ManiacStunPacket}
- * (широкомовний, усім гравцям матчу — див. докстрінг пакета).
+ * ── Що було не так ───────────────────────────────────────────────────
+ * Раніше зірки малювались у GUI через проєкцію точки на екран
+ * ({@code WorldToScreen}) — тобто ПОВЕРХ усього кадру, без перевірки
+ * глибини: їх було видно крізь блоки, а кільце будувалось у площині
+ * екрана, тож висота залежала від того, звідки дивиться глядач, а не від
+ * самого маньяка.
  *
- * ── Звідки беремо позицію сутності ─────────────────────────────────────
- * {@code UUID → Player} через {@code self.level().getPlayerByUUID(...)}
- * — той самий перевірений прийом, що вже використовує
- * {@code ManiacAttackGuardMixin#maniacmod$hasTargetInRange} для
- * пошуку сутності виживого на клієнті за UUID з {@link ClientMatchState#roster()}.
- * Свідомо НЕ {@code mc.level.players()} (метод з невизначеною
- * доступністю в цій кодовій базі) — перебираємо ростер (уже
- * синхронізований список усіх гравців матчу) і для кожного, хто зараз
- * оглушений, дістаємо сутність за UUID.
+ * ── Як тепер ─────────────────────────────────────────────────────────
+ * Кільце лежить у ГОРИЗОНТАЛЬНІЙ площині світу на висоті
+ * {@code y_ніг + bbHeight + зазор}, тобто над маківкою САМОГО маньяка, і
+ * рухається разом із ним (інтерполяція за partialTick). Кожна зірка —
+ * плоский білборд (повернутий до камери), який малюється зі ЗВИЧАЙНИМ
+ * тестом глибини: блок між камерою й маньяком закриває зірки, як і
+ * будь-який інший об'єкт світу.
  *
- * ── Проєкція ─────────────────────────────────────────────────────────
- * Той самий {@link WorldToScreen}, що інші world-мітки: видно крізь
- * стіни. На відміну від {@code DownedSurvivorMarker} (окремі
- * координати з пакета — видно по всій карті), тут позиція завжди йде
- * від живої клієнтської сутності, тож мітка природно зникає, коли
- * маньяк виходить за межі трекінгу сутностей клієнта — прийнятно, бо
- * стан оглушення короткий (секунди), гравець фізично не встигає піти
- * далеко.
+ * Свого оглушеного маньяка від першої особи не малюємо (зірки були б
+ * прямо в об'єктиві); у третій особі — малюємо.
  */
 @OnlyIn(Dist.CLIENT)
+@Mod.EventBusSubscriber(modid = ManiacMod.MOD_ID, value = Dist.CLIENT,
+                        bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class ManiacStunWorldMarker {
 
-    private static final int EDGE_MARGIN = 20;
-    private static final float OUTER_RADIUS = 4.5f;
-    private static final float RING_RADIUS = 11f;
-
-    /** Один повний оберт кільця зірочок за цей час, мс. */
+    /** Зазор між маківкою й центром кільця, блоки. */
+    private static final double HEAD_GAP = 0.28;
+    /** Радіус кільця, блоки. */
+    private static final float RING_RADIUS = 0.42f;
+    /** Радіус променів однієї зірки, блоки. */
+    private static final float STAR_RADIUS = 0.15f;
+    private static final int STARS = 5;
     private static final long ROTATION_PERIOD_MS = 2200L;
 
-    private static final int STAR_ARGB = 0xFFFFE066;
+    private static final float R = 1.0f, G = 0.878f, B = 0.4f, A = 1.0f;
 
     private ManiacStunWorldMarker() {}
 
-    public static void render(GuiGraphics graphics) {
+    @SubscribeEvent
+    public static void onRenderLevel(RenderLevelStageEvent event) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
+
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) return;
 
-        int width = mc.getWindow().getGuiScaledWidth();
-        int height = mc.getWindow().getGuiScaledHeight();
-        long now = System.currentTimeMillis();
-        float ringRotation = (now % ROTATION_PERIOD_MS) / (float) ROTATION_PERIOD_MS * 360f;
+        Camera camera = event.getCamera();
+        float partial = event.getPartialTick();
+        float spin = (System.currentTimeMillis() % ROTATION_PERIOD_MS) / (float) ROTATION_PERIOD_MS
+            * Mth.TWO_PI;
+
+        boolean began = false;
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buf = tesselator.getBuilder();
+        Matrix4f pose = event.getPoseStack().last().pose();
+        Vec3 cam = camera.getPosition();
 
         for (RosterSyncPacket.RosterEntry entry : ClientMatchState.roster()) {
             UUID id = entry.playerId();
             if (!ClientMatchState.isManiacStunned(id)) continue;
 
-            Player player = mc.level.getPlayerByUUID(id);
-            if (player == null) continue;
+            Player maniac = mc.level.getPlayerByUUID(id);
+            if (maniac == null) continue;
+            if (maniac == mc.player && !camera.isDetached()) continue;
 
-            double wx = player.getX();
-            double wy = player.getY() + player.getBbHeight() + 0.35;
-            double wz = player.getZ();
+            if (!began) {
+                RenderSystem.enableDepthTest();
+                RenderSystem.depthMask(false);
+                RenderSystem.disableCull();
+                RenderSystem.enableBlend();
+                RenderSystem.defaultBlendFunc();
+                RenderSystem.setShader(GameRenderer::getPositionColorShader);
+                buf.begin(VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
+                began = true;
+            }
 
-            WorldToScreen.Point point = WorldToScreen.project(wx, wy, wz, width, height, EDGE_MARGIN);
-            if (point == null) continue;
+            // Над САМИМ маньяком: інтерполяція за partialTick, висота — його власна.
+            double cx = Mth.lerp(partial, maniac.xo, maniac.getX()) - cam.x;
+            double cy = Mth.lerp(partial, maniac.yo, maniac.getY()) + maniac.getBbHeight() + HEAD_GAP - cam.y;
+            double cz = Mth.lerp(partial, maniac.zo, maniac.getZ()) - cam.z;
 
-            drawRing(graphics, point.x(), point.y(), ringRotation);
+            for (int i = 0; i < STARS; i++) {
+                float a = spin + i * Mth.TWO_PI / STARS;
+                float sx = (float) cx + Mth.cos(a) * RING_RADIUS;
+                float sz = (float) cz + Mth.sin(a) * RING_RADIUS;
+                // Легке погойдування по висоті — зірки «літають», але кільце не тікає від голови.
+                float sy = (float) cy + Mth.sin(a * 2f) * 0.03f;
+                drawStar(buf, pose, camera, sx, sy, sz, spin * 2f + i);
+            }
+        }
+
+        if (began) {
+            tesselator.end();
+            RenderSystem.depthMask(true);
+            RenderSystem.enableCull();
+            RenderSystem.disableBlend();
         }
     }
 
-    /** 5 зірочок рівномірно по колу навколо мітки, кожна ще й сама трохи повернута — «крутяться». */
-    private static void drawRing(GuiGraphics graphics, int cx, int cy, float ringRotation) {
-        for (int i = 0; i < 5; i++) {
-            double angle = Math.toRadians(ringRotation + i * 72.0);
-            float sx = cx + (float) (RING_RADIUS * Math.cos(angle));
-            float sy = cy + (float) (RING_RADIUS * 0.55 * Math.sin(angle)) - RING_RADIUS * 0.3f;
-            StarShape.draw(graphics, sx, sy, OUTER_RADIUS, ringRotation * 2f, STAR_ARGB);
+    /** Плоска 5-променева зірка в площині камери (білборд), веером трикутників від центру. */
+    private static void drawStar(BufferBuilder buf, Matrix4f pose, Camera camera,
+                                 float x, float y, float z, float rot) {
+        Vector3f left = camera.getLeftVector();
+        Vector3f up = camera.getUpVector();
+
+        float[] px = new float[10];
+        float[] py = new float[10];
+        for (int i = 0; i < 10; i++) {
+            float r = (i % 2 == 0) ? STAR_RADIUS : STAR_RADIUS * 0.38f;
+            float ang = rot + i * Mth.PI / 5f - Mth.HALF_PI;
+            px[i] = Mth.cos(ang) * r;
+            py[i] = Mth.sin(ang) * r;
+        }
+        for (int i = 0; i < 10; i++) {
+            int j = (i + 1) % 10;
+            buf.vertex(pose, x, y, z).color(R, G, B, A).endVertex();
+            buf.vertex(pose, x + left.x * px[i] + up.x * py[i],
+                             y + left.y * px[i] + up.y * py[i],
+                             z + left.z * px[i] + up.z * py[i]).color(R, G, B, A).endVertex();
+            buf.vertex(pose, x + left.x * px[j] + up.x * py[j],
+                             y + left.y * px[j] + up.y * py[j],
+                             z + left.z * px[j] + up.z * py[j]).color(R, G, B, A).endVertex();
         }
     }
 }
-

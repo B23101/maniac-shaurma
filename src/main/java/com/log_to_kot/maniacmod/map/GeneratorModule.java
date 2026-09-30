@@ -8,6 +8,7 @@ import com.log_to_kot.maniacmod.core.phase.GamePhase;
 import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.items.FuelCanisterItem;
+import com.log_to_kot.maniacmod.items.ScrewdriverItem;
 import com.log_to_kot.maniacmod.map.minigame.ActiveRepairMinigame;
 import com.log_to_kot.maniacmod.map.minigame.RepairMinigameType;
 import com.log_to_kot.maniacmod.map.minigame.TargetMinigameSpec;
@@ -19,6 +20,7 @@ import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.RepairMinigameResultPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.TrapEscapeAttemptPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.WireMinigameOpenPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorCompletedPacket;
@@ -168,7 +170,7 @@ public final class GeneratorModule implements PhaseListener {
         boolean holding = true;
 
         /**
-         * Скільки тіків прожила ця сесія (незалежно від пауз) — проти
+         * Скільки тіків ця сесія пробула на стадії ремонту (незалежно від пауз) — проти
          * {@link ConfigSchema#MINIGAME_GRACE_TICKS}: доки не набіжить,
          * міні-гра на цю сесію не випадає (див. клас-докстрінг конфіга).
          * Рахується щотік у {@link #tickOne}, а не лише під час holding —
@@ -204,6 +206,22 @@ public final class GeneratorModule implements PhaseListener {
          * однакових значень — це рівно один пакет.
          */
         int sentInteraction = GeneratorInteractionPacket.ACTION_NONE;
+
+        /**
+         * Тіки ремонту з викруткою в руці від останнього списання міцності
+         * (0..19). Щоразу, як набігає 20 (секунда), знімається
+         * {@code screwdriverWearPercentPerSecond}. Лічильник, а не
+         * дробова міцність: міцність у NBT — цілі відсотки.
+         */
+        int screwdriverWearTicks = 0;
+
+        /**
+         * Дробовий залишок прогресу викрутки. Множник (1 + bonus) може бути
+         * нецілим (напр. 1.5), а {@code addRepairProgress} приймає цілі
+         * тіки — залишок переноситься на наступний тік, тож нічого не
+         * губиться. Для дефолту ×2 залишок завжди 0.
+         */
+        double screwdriverProgressCarry = 0.0;
 
         RepairSession(BlockPos pos) {
             this.pos = pos;
@@ -443,6 +461,11 @@ public final class GeneratorModule implements PhaseListener {
      * Гравець, що втратив роль виживого, і завершений чи зниклий
      * генератор — це справжнє скасування.
      *
+     * ── Порядок стадій ───────────────────────────────────────────────
+     * Типово спершу FUEL, потім REPAIR (ConfigSchema.GENERATOR_STAGE_ORDER);
+     * порядок фіксує сам {@link GeneratorPoi}, а тут гілка обирається за
+     * поточною стадією — тож код однаковий для обох порядків.
+     *
      * ── Стадія REPAIR ────────────────────────────────────────────────
      * Утримання Shift+ПКМ додає 1 тік прогресу за тік гри, і рівно за
      * REPAIR_SECONDS_PER_STAGE секунд суцільного утримання набирається
@@ -474,7 +497,11 @@ public final class GeneratorModule implements PhaseListener {
 
         // Grace/cooldown лічильники сесії — незалежно від holding і від
         // того, чи зараз активна міні-гра (див. RepairSession.ageTicks).
-        session.ageTicks++;
+        // Лише на стадії REPAIR: міні-ігри бувають тільки там, а при порядку
+        // FUEL_THEN_REPAIR сесія могла довго заливати бензин — без цієї
+        // умови grace давно б минув, і міні-гра вискочила б у першу ж
+        // секунду ремонту.
+        if (generator.stage() == GeneratorPoi.Stage.REPAIR) session.ageTicks++;
         if (session.minigameCooldownTicks > 0) session.minigameCooldownTicks--;
         if (session.blockedNoticeTicks > 0) session.blockedNoticeTicks--;
 
@@ -505,8 +532,17 @@ public final class GeneratorModule implements PhaseListener {
 
         if (generator.stage() == GeneratorPoi.Stage.REPAIR) {
             markWorking(players, session, player, GeneratorInteractionPacket.ACTION_REPAIR);
-            generator.addRepairProgress(1);
+            boolean justCompleted = generator.addRepairProgress(repairTicksThisTick(player, session));
             sendProgress(player, session, generator);
+
+            // Ремонт — ДРУГА стадія (типовий порядок FUEL_THEN_REPAIR): його
+            // завершення і є завершенням генератора. Так само, як у tickFuel
+            // для порядку REPAIR_THEN_FUEL.
+            if (justCompleted) {
+                sounds.completed(generator, levelOf(players));
+                onGeneratorCompleted(generator, players);
+                return true;
+            }
 
             boolean pastGrace = session.ageTicks >= ManiacConfigs.get(ConfigSchema.MINIGAME_GRACE_TICKS);
             boolean pastCooldown = session.minigameCooldownTicks <= 0;
@@ -518,7 +554,7 @@ public final class GeneratorModule implements PhaseListener {
             return true;
         }
 
-        // Stage.FUEL
+        // Stage.FUEL (перша чи друга — залежно від порядку, див. GeneratorPoi)
         tickFuel(player, session, generator, players);
         return true;
     }
@@ -683,11 +719,38 @@ public final class GeneratorModule implements PhaseListener {
         }
     }
 
-    // TODO(майбутнє розширення): SCREWDRIVER_SPEED_BONUS у конфізі
-    // зарезервований під бонус швидкості від інструмента-викрутки в руці
-    // гравця (ScrewdriverItem — поки що незареєстрований предмет). Коли він
-    // з'явиться, множник піде в аргумент GeneratorPoi.addRepairProgress(ticks);
-    // наразі швидкість завжди базова.
+    /**
+     * Скільки тіків прогресу REPAIR цей гравець додає за поточний тік.
+     *
+     * Без викрутки в ГОЛОВНІЙ руці — 1 (базова швидкість). З викруткою —
+     * {@code 1 + screwdriverSpeedBonus} (дефолт ×2), а її міцність
+     * зменшується на {@code screwdriverWearPercentPerSecond} за кожну
+     * секунду (20 тіків) такого ремонту. Викликається лише з гілки, де
+     * прогрес РЕАЛЬНО додається (гравець тримає кнопку, у зоні, без
+     * міні-гри), тому викрутка не зношується, поки нею не працюють.
+     * Останній тік перед поломкою ще зараховується з бонусом.
+     */
+    private int repairTicksThisTick(ServerPlayer player, RepairSession session) {
+        ItemStack held = player.getMainHandItem();
+        if (!(held.getItem() instanceof ScrewdriverItem) || ScrewdriverItem.isBroken(held)) {
+            return 1;
+        }
+
+        double bonus = ManiacConfigs.get(ConfigSchema.SCREWDRIVER_SPEED_BONUS);
+        session.screwdriverProgressCarry += 1.0 + bonus;
+        int ticks = (int) session.screwdriverProgressCarry;
+        session.screwdriverProgressCarry -= ticks;
+
+        if (++session.screwdriverWearTicks >= 20) {
+            session.screwdriverWearTicks = 0;
+            ScrewdriverItem.wear(held, ManiacConfigs.get(ConfigSchema.SCREWDRIVER_WEAR_PERCENT_PER_SECOND));
+            if (ScrewdriverItem.breakIfWornOut(player, held)) {
+                session.screwdriverProgressCarry = 0.0;
+            }
+        }
+        // Мінімум 1: навіть при нецілому множнику <1 ремонт не зупиняється.
+        return Math.max(1, ticks);
+    }
 
     /**
      * Скільки % бензину переноситься на {@code n}-му (з нуля) тіку
@@ -833,7 +896,8 @@ public final class GeneratorModule implements PhaseListener {
         int hitsRequired = ManiacConfigs.get(ConfigSchema.TARGET_MINIGAME_HITS_REQUIRED);
         // Ціль — не по центру й не впритул до країв, інакше повзунок
         // застрягав би в куті на розвороті замість пробігати повз неї.
-        double targetPosition = 0.15 + rng.nextDouble() * 0.70;
+        double targetPosition = ActiveRepairMinigame.TARGET_MIN
+                + rng.nextDouble() * (ActiveRepairMinigame.TARGET_MAX - ActiveRepairMinigame.TARGET_MIN);
         long seed = rng.nextLong();
 
         TargetMinigameSpec spec = new TargetMinigameSpec(
@@ -849,10 +913,15 @@ public final class GeneratorModule implements PhaseListener {
         activeMinigames.put(player.getUUID(), new ActiveRepairMinigame(generator.pos(), layout));
 
         int[] initial = new int[layout.slotCount()];
-        for (int i = 0; i < initial.length; i++) initial[i] = layout.initialRightSlotForLeft(i);
+        int[] rightColors = new int[layout.slotCount()];
+        for (int i = 0; i < initial.length; i++) {
+            initial[i] = layout.initialRightSlotForLeft(i);
+            rightColors[i] = layout.rightColorAt(i);
+        }
 
         ModNetwork.toPlayer(player, new WireMinigameOpenPacket(
-                generator.pos(), initial, ManiacConfigs.get(ConfigSchema.WIRE_MINIGAME_TICKS)));
+                generator.pos(), initial, rightColors,
+                ManiacConfigs.get(ConfigSchema.WIRE_MINIGAME_TICKS)));
     }
 
     /** Максимальна дистанція (у блоках) від генератора під час міні-гри — далі вважається втечею/провалом. */
@@ -924,8 +993,16 @@ public final class GeneratorModule implements PhaseListener {
                 activeMinigames.remove(player.getUUID());
                 succeedMinigame(player);
             }
-            case HIT_PROGRESS -> ModNetwork.toPlayer(player,
-                    RepairMinigameProgressPacket.attempt(minigame.targetHits()));
+            case HIT_PROGRESS -> {
+                // Після КОЖНОГО влучання ціль переїжджає в нове випадкове місце
+                // (сервер підставляє її в спеку, щоб наступний клік звірявся вже
+                // з нею) і везе нову позицію клієнту разом із вердиктом — клієнт
+                // не вгадує, куди вона переїхала. Той самий пакет і екранний
+                // відгук, що й у капкані (див. TrapModule#onEscapeAttempt).
+                double newTarget = minigame.moveTarget(rng);
+                ModNetwork.toPlayer(player, new TrapEscapeAttemptPacket(
+                        minigame.targetHits(), true, newTarget));
+            }
             case FAIL -> {
                 activeMinigames.remove(player.getUUID());
                 failMinigame(player, minigame);
@@ -1246,13 +1323,31 @@ public final class GeneratorModule implements PhaseListener {
      * цього налаштування й раніше ділив на жорстке 2.
      */
     private void sendProgress(ServerPlayer player, RepairSession session, GeneratorPoi generator) {
-        boolean repairStage = generator.stage() == GeneratorPoi.Stage.REPAIR;
+        // Після завершення (DONE) бар лишається на останній стадії, а не
+        // перестрибує на іншу: інакше на останньому тіку ремонт показав би
+        // «бензин 100%».
+        GeneratorPoi.Stage shown = generator.stage() == GeneratorPoi.Stage.DONE
+                ? generator.lastStage() : generator.stage();
+        boolean repairStage = shown == GeneratorPoi.Stage.REPAIR;
         int fuelRequired = Math.max(1, ManiacConfigs.get(ConfigSchema.FUEL_REQUIRED_PERCENT));
         int stagePercent = repairStage
                 ? generator.repairPercent()
                 : Math.min(100, generator.fuelPercent() * 100 / fuelRequired);
 
-        int key = repairStage ? stagePercent : 1000 + generator.fuelPercent();
+        // Хто зараз працює над цим самим генератором: сам отримувач плюс
+        // усі, чия сесія на тій же позиції й справді активна. Склад входить
+        // у ключ, тож пакет піде й тоді, коли хтось долучився/відійшов,
+        // навіть якщо відсоток не змінився.
+        List<UUID> workers = new ArrayList<>();
+        workers.add(player.getUUID());
+        for (Map.Entry<UUID, RepairSession> entry : sessions.entrySet()) {
+            if (entry.getKey().equals(player.getUUID())) continue;
+            if (!entry.getValue().pos.equals(session.pos)) continue;
+            if (isActivelyWorking(entry.getKey(), entry.getValue())) workers.add(entry.getKey());
+        }
+
+        int progressKey = repairStage ? stagePercent : 1000 + generator.fuelPercent();
+        int key = java.util.Objects.hash(progressKey, workers);
         if (key == session.lastSentKey) return;
         session.lastSentKey = key;
 
@@ -1260,9 +1355,11 @@ public final class GeneratorModule implements PhaseListener {
                 true,
                 repairStage ? 0 : 1,
                 stagePercent,
-                repairStage ? 0 : 1,   // стадій пройдено
-                2,                     // стадій усього: REPAIR, FUEL
-                generator.fuelPercent()));
+                generator.stagesDone(), // стадій пройдено (порядок залежить від конфігу)
+                2,                      // стадій усього: REPAIR, FUEL
+                generator.fuelPercent(),
+                fuelRequired,
+                workers));
     }
 
     private void hideProgress(ServerPlayer player) {

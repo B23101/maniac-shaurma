@@ -39,6 +39,8 @@ import java.util.Map;
  *   /maniac debug role <auto|maniac|survivor> — роль для дебаг-старту
  *   /maniac debug traps           — дебаг: примусово відкрити TrapChooseScreen виконавцю
  *   /maniac debug unmorph         — дебаг: зняти роль маньяка з виконавця в БУДЬ-ЯКІЙ фазі (не лише лобі)
+ *   /maniac debug strike [гравець]     — дебаг: удар маньяка по гравцю (шкода + віддача + ефект екрана)
+ *   /maniac debug strike fx [гравець]  — те саме, але без шкоди (лише віддача й ефект екрана)
  *   /maniac morph <maniac|survivor|reset> — дебаг-перетворення в лобі
  *   /maniac phase <фаза>          — ручний перехід (налагодження)
  *   /maniac status                — хто в якій ролі, яка фаза, чи готова карта
@@ -95,6 +97,7 @@ public final class ManiacCommand {
         //   /maniac debug swap survivor [гравець]
         //   /maniac debug traps
         //   /maniac debug stun [гравець]         — оглушити маніяка як ударом лома
+        //   /maniac debug strike [fx] [гравець]  — удар маніяка по гравцю (fx — без шкоди)
         //   /maniac debug unmorph [гравець]      — зняти роль, БУДЬ-ЯКА фаза
         root.then(Commands.literal("debug")
             .executes(ctx -> debugStatus(ctx.getSource()))
@@ -132,6 +135,16 @@ public final class ManiacCommand {
                 .then(Commands.argument("player", EntityArgument.player())
                     .executes(ctx -> debugStun(ctx.getSource(),
                         EntityArgument.getPlayer(ctx, "player")))))
+            .then(Commands.literal("strike")
+                .executes(ctx -> debugStrike(ctx.getSource(), null, true))
+                .then(Commands.argument("player", EntityArgument.player())
+                    .executes(ctx -> debugStrike(ctx.getSource(),
+                        EntityArgument.getPlayer(ctx, "player"), true)))
+                .then(Commands.literal("fx")
+                    .executes(ctx -> debugStrike(ctx.getSource(), null, false))
+                    .then(Commands.argument("player", EntityArgument.player())
+                        .executes(ctx -> debugStrike(ctx.getSource(),
+                            EntityArgument.getPlayer(ctx, "player"), false)))))
             .then(Commands.literal("unmorph")
                 .executes(ctx -> debugUnmorph(ctx.getSource(),
                     ctx.getSource().getEntity() instanceof ServerPlayer p ? p : null))
@@ -233,6 +246,10 @@ public final class ManiacCommand {
                             IntegerArgumentType.getInteger(ctx, "index"))))))
             .then(Commands.literal("clear")
                 .executes(ctx -> clearPoints(ctx.getSource()))));
+
+        // ── /maniac replay ──────────────────────────────────────────────
+        // Replay-ролики кіно-вступу: точки з позиції адміна, інтервали, прев'ю.
+        root.then(com.log_to_kot.maniacmod.intro.IntroReplayCommand.build());
 
         // ── /maniac darkzone ────────────────────────────────────────────
         // Розмітка темних зон: 1..6+ точок командою на поточній позиції
@@ -681,6 +698,46 @@ public final class ManiacCommand {
         ServerPlayer stunned = maniac;
         source.sendSuccess(() -> Component.translatable(
             "maniacmod.command.stun_applied", stunned.getDisplayName()), true);
+        return 1;
+    }
+
+    /**
+     * Дебаг-удар маньяка: жертва — вказаний гравець, а без аргумента —
+     * виконавець. Напрямок віддачі береться від маньяка матчу (якщо він
+     * є й це не сама жертва), інакше — назад від погляду жертви.
+     */
+    private static int debugStrike(CommandSourceStack source, ServerPlayer target, boolean withDamage) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        ServerPlayer victim = target;
+        if (victim == null) {
+            if (source.getEntity() instanceof ServerPlayer self) {
+                victim = self;
+            } else {
+                source.sendFailure(Component.translatable("maniacmod.command.strike_need_player"));
+                return 0;
+            }
+        }
+
+        ServerPlayer attacker = null;
+        for (ServerPlayer online : match.onlinePlayers()) {
+            if (match.isManiac(online.getUUID())) {
+                attacker = online;
+                break;
+            }
+        }
+
+        boolean downed = match.combat().debugStrike(victim, attacker, withDamage);
+
+        ServerPlayer hit = victim;
+        source.sendSuccess(() -> Component.translatable(
+            withDamage ? "maniacmod.command.strike_applied" : "maniacmod.command.strike_fx",
+            hit.getDisplayName()), true);
+        if (downed) {
+            source.sendSuccess(() -> Component.translatable(
+                "maniacmod.command.strike_downed", hit.getDisplayName()), false);
+        }
         return 1;
     }
 

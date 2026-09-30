@@ -33,8 +33,8 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * {@code a→b}, а не контур його bounding-боксу.
  *
  * ── Колір ────────────────────────────────────────────────────────────
- * Нейтрально-сірий (як трос зіплайна), без бурштинового «під напругу»
- * забарвлення — дріт має виглядати як звичайна мотузка/трос.
+ * Чорний (див. {@link RopeLineRenderer#COLOR_R}): ізольований кабель, без
+ * бурштинового «під напругу» забарвлення.
  */
 @OnlyIn(Dist.CLIENT)
 public class ElectricWireRenderer extends EntityRenderer<ElectricWireEntity> {

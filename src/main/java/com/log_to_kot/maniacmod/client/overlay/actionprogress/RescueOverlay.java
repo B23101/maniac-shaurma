@@ -2,38 +2,44 @@ package com.log_to_kot.maniacmod.client.overlay.actionprogress;
 
 import com.log_to_kot.maniacmod.client.ClientInputHandler;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
 /**
- * Екран підняття непритомного — дві сторони однієї дії.
+ * Порятунок лежачого — у стилі панелей генератора
+ * ({@link GeneratorFuelUiTheme}): панель, рядок «назва — значення»,
+ * роздільник, заглиблені бари з блиском, слідом і пульсом небезпеки.
  *
- * ── Лежачий ──────────────────────────────────────────────────────────
- * Панель «Ти без свідомості»: шкала часу до смерті й, коли його піднімають,
- * шкала підняття. Час береться зі списку {@code DownedSurvivorsPacket}
- * (клієнт відлічує сам між пакетами), тож шкала тече плавно.
- *
- * ── Рятівник ─────────────────────────────────────────────────────────
- * Поки утримує ПКМ на лежачому — шкала «Підняття союзника». Поки ще не
- * тримає, але дивиться на нього, — підказка «Утримуй ПКМ» (як біля
- * генератора), щоб гравець узагалі знав, що це можна.
- *
- * Шкала підняття зникає сама, коли пакети прогресу припиняються (див.
- * {@code RescueProgressPacket}): окремого «сховати» немає.
+ *   • лежачий бачить час до смерті (бар порожніє, останні 10 с — червоний
+ *     пульс) і, коли його піднімають, окремий бар підняття;
+ *   • рятівник бачить бар підняття;
+ *   • той, хто дивиться на лежачого, — хінт-панель «утримуй ПКМ».
+ * Логіка/дані ті самі, що й раніше; змінено лише малювання й анімації.
  */
 @OnlyIn(Dist.CLIENT)
 public final class RescueOverlay {
 
     private static final int PANEL_W = 250;
-    private static final int RESCUER_PANEL_W = 190;
+    private static final int RESCUER_PANEL_W = 210;
+    private static final int PAD = 10;
     private static final int BAR_H = 10;
-    private static final int MARGIN = 10;
     private static final int OFFSET_FROM_CENTER = 42;
+
+    private static final long[] lastFrameNanos = new long[1];
+    private static float appear = 0f;
+    private static float timeShown = -1f;
+    private static float timeGhost = -1f;
+    private static float rescueShown = 0f;
+    private static float rescueGhost = 0f;
+    private static int lastView = 0; // 0 нічого, 1 лежачий, 2 рятівник, 3 хінт
 
     private RescueOverlay() {}
 
@@ -41,103 +47,149 @@ public final class RescueOverlay {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
 
+        int view = 0;
         if (ClientMatchState.isDowned(mc.player.getUUID())) {
-            renderVictim(graphics, mc);
+            view = 1;
         } else if (ClientMatchState.isSurvivor()) {
             if (ClientMatchState.rescueActive() && !ClientMatchState.rescueAsVictim()) {
-                renderRescuer(graphics, mc);
+                view = 2;
             } else if (ClientInputHandler.isLookingAtDownedSurvivor()
                     && !ClientMatchState.survivorState().isCrawlOnly()) {
-                renderHint(graphics, mc);
+                view = 3;
             }
         }
+
+        if (view == 0) { reset(); return; }
+        if (view != lastView) { appear = 0f; lastView = view; }
+
+        float dt = UiAnim.frameDt(lastFrameNanos);
+        appear = UiAnim.approach(appear, 1f, 11f, dt);
+        float ease = UiAnim.easeOutCubic(UiAnim.clamp01(appear));
+
+        switch (view) {
+            case 1 -> renderVictim(graphics, mc, ease, dt);
+            case 2 -> renderRescuer(graphics, mc, ease, dt);
+            default -> renderHint(graphics, mc, ease);
+        }
+    }
+
+    private static void reset() {
+        lastFrameNanos[0] = 0L;
+        appear = 0f;
+        timeShown = -1f;
+        timeGhost = -1f;
+        rescueShown = 0f;
+        rescueGhost = 0f;
+        lastView = 0;
     }
 
     // ── Лежачий ──────────────────────────────────────────────────────────
 
-    private static void renderVictim(GuiGraphics graphics, Minecraft mc) {
+    private static void renderVictim(GuiGraphics graphics, Minecraft mc, float ease, float dt) {
         DownedSurvivorsPacket.Entry self = null;
         for (DownedSurvivorsPacket.Entry entry : ClientMatchState.downedEntries()) {
-            if (entry.id().equals(mc.player.getUUID())) {
-                self = entry;
-                break;
-            }
+            if (entry.id().equals(mc.player.getUUID())) { self = entry; break; }
         }
         if (self == null) return;
+        Font font = mc.font;
 
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
-        int panelH = 68;
+        boolean beingRescued = ClientMatchState.rescueActive() && ClientMatchState.rescueAsVictim();
+        int panelH = PAD * 2 + 10 + 6 + 8 + BAR_H + 8 + (beingRescued ? BAR_H : 10);
         int x = screenW / 2 - PANEL_W / 2;
         int y = screenH / 2 + OFFSET_FROM_CENTER;
 
-        graphics.fill(x, y, x + PANEL_W, y + panelH, ManiacUiTheme.PANEL_BG);
-        ManiacUiTheme.border1px(graphics, x, y, PANEL_W, panelH, ManiacUiTheme.BAR_FILL_DANGER);
-
-        int titleY = y + MARGIN - 4;
-        graphics.drawCenteredString(mc.font, Component.translatable("maniacmod.hud.downed.title"),
-            screenW / 2, titleY, ManiacUiTheme.BAR_FILL_DANGER);
-        ManiacUiTheme.divider(graphics, x + MARGIN, titleY + mc.font.lineHeight + 4, PANEL_W - MARGIN * 2);
-
-        int barX = x + MARGIN;
-        int barW = PANEL_W - MARGIN * 2;
-        int bar1Y = titleY + mc.font.lineHeight + 12;
-
-        // Шкала часу до смерті: повна на початку, порожніє.
         long leftMs = ClientMatchState.downedMillisLeft(self);
         boolean urgent = leftMs < 10_000;
-        ManiacUiTheme.drawProgressBar(graphics, barX, bar1Y, barW, BAR_H,
-            ClientMatchState.downedFraction(self),
-            urgent ? ManiacUiTheme.BAR_FILL_DANGER : ManiacUiTheme.BAR_FILL_WARN);
+        float target = UiAnim.clamp01(ClientMatchState.downedFraction(self));
+        timeShown = timeShown < 0f ? target : UiAnim.approach(timeShown, target, 14f, dt);
+        timeGhost = timeGhost < 0f ? target : (target > timeGhost ? target : UiAnim.approach(timeGhost, target, 1.4f, dt));
+        float urgentPulse = urgent ? 0.5f + 0.5f * (float) Math.sin(System.currentTimeMillis() / 170.0) : 0f;
+
+        GeneratorFuelUiTheme.beginAppear(graphics, x + PANEL_W / 2f, y + panelH / 2f, ease, 12f);
+        GeneratorFuelUiTheme.drawPanel(graphics, x, y, PANEL_W, panelH);
+        // Рамка небезпеки: завжди трохи червона, у критичні секунди пульсує.
+        ManiacUiTheme.border1px(graphics, x, y, PANEL_W, panelH,
+            GeneratorFuelUiTheme.alpha(GeneratorFuelUiTheme.FILL_DANGER, 0.55f + 0.45f * urgentPulse));
+
         long seconds = (leftMs + 999) / 1000;
         String time = (seconds / 60) + ":" + String.format("%02d", seconds % 60);
-        graphics.drawCenteredString(mc.font,
-            Component.translatable("maniacmod.hud.downed.time", time),
-            screenW / 2, bar1Y + (BAR_H - mc.font.lineHeight) / 2 + 1, ManiacUiTheme.TEXT_TITLE);
+        int rowX = x + PAD;
+        int rowW = PANEL_W - PAD * 2;
+        int rowY = y + PAD;
+        GeneratorFuelUiTheme.drawTitleRow(graphics, font,
+            Component.translatable("maniacmod.hud.downed.title").getString(), time, rowX, rowY, rowW);
+        GeneratorFuelUiTheme.divider(graphics, x, rowY + 10, PANEL_W);
 
-        int row2Y = bar1Y + BAR_H + 8;
-        if (ClientMatchState.rescueActive() && ClientMatchState.rescueAsVictim()) {
-            ManiacUiTheme.drawProgressBar(graphics, barX, row2Y, barW, BAR_H,
-                ClientMatchState.rescueFraction(), ManiacUiTheme.BAR_FILL_NEUTRAL);
-            graphics.drawCenteredString(mc.font,
-                Component.translatable("maniacmod.hud.downed.being_rescued"),
-                screenW / 2, row2Y + (BAR_H - mc.font.lineHeight) / 2 + 1, ManiacUiTheme.TEXT_TITLE);
+        int barY = rowY + 10 + 8;
+        int timeColor = GeneratorFuelUiTheme.mix(GeneratorFuelUiTheme.FILL_WARN, GeneratorFuelUiTheme.FILL_DANGER,
+            urgent ? 0.5f + 0.5f * urgentPulse : 0f);
+        GeneratorFuelUiTheme.drawBarFx(graphics, rowX, barY, rowW, BAR_H, timeShown, timeGhost, timeColor, urgentPulse * 0.25f);
+
+        int row2Y = barY + BAR_H + 8;
+        if (beingRescued) {
+            float rt = UiAnim.clamp01(ClientMatchState.rescueFraction());
+            rescueShown = UiAnim.approach(rescueShown, rt, 14f, dt);
+            rescueGhost = rt > rescueGhost ? rt : UiAnim.approach(rescueGhost, rt, 1.4f, dt);
+            GeneratorFuelUiTheme.drawBarFx(graphics, rowX, row2Y, rowW, BAR_H, rescueShown, rescueGhost,
+                GeneratorFuelUiTheme.FILL, 0f);
+            String label = Component.translatable("maniacmod.hud.downed.being_rescued").getString();
+            graphics.drawString(font, label, screenW / 2 - font.width(label) / 2,
+                row2Y + (BAR_H - font.lineHeight) / 2 + 1, GeneratorFuelUiTheme.TEXT, true);
         } else {
-            graphics.drawCenteredString(mc.font, Component.translatable("maniacmod.hud.downed.hint"),
-                screenW / 2, row2Y + 1, ManiacUiTheme.TEXT_DIM);
+            rescueShown = 0f;
+            rescueGhost = 0f;
+            String hint = Component.translatable("maniacmod.hud.downed.hint").getString();
+            graphics.drawString(font, hint, screenW / 2 - font.width(hint) / 2, row2Y + 1,
+                GeneratorFuelUiTheme.HIT_ZONE, false);
         }
+        GeneratorFuelUiTheme.endAppear(graphics);
     }
 
     // ── Рятівник ─────────────────────────────────────────────────────────
 
-    private static void renderRescuer(GuiGraphics graphics, Minecraft mc) {
+    private static void renderRescuer(GuiGraphics graphics, Minecraft mc, float ease, float dt) {
+        Font font = mc.font;
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
-        int panelH = 46;
+        int panelH = PAD * 2 + 10 + 8 + BAR_H;
         int x = screenW / 2 - RESCUER_PANEL_W / 2;
         int y = screenH / 2 + OFFSET_FROM_CENTER;
 
-        graphics.fill(x, y, x + RESCUER_PANEL_W, y + panelH, ManiacUiTheme.PANEL_BG);
-        ManiacUiTheme.border1px(graphics, x, y, RESCUER_PANEL_W, panelH, ManiacUiTheme.BORDER);
+        float target = UiAnim.clamp01(ClientMatchState.rescueFraction());
+        rescueShown = UiAnim.approach(rescueShown, target, 14f, dt);
+        rescueGhost = target > rescueGhost ? target : UiAnim.approach(rescueGhost, target, 1.4f, dt);
 
-        int titleY = y + MARGIN - 4;
-        graphics.drawCenteredString(mc.font, Component.translatable("maniacmod.hud.rescue.title"),
-            screenW / 2, titleY, ManiacUiTheme.TEXT_TITLE);
-        ManiacUiTheme.divider(graphics, x + MARGIN, titleY + mc.font.lineHeight + 4, RESCUER_PANEL_W - MARGIN * 2);
-
-        int barX = x + MARGIN;
-        int barW = RESCUER_PANEL_W - MARGIN * 2;
-        int barY = titleY + mc.font.lineHeight + 12;
-        float fraction = ClientMatchState.rescueFraction();
-        ManiacUiTheme.drawProgressBar(graphics, barX, barY, barW, BAR_H, fraction, ManiacUiTheme.BAR_FILL_NEUTRAL);
-        graphics.drawCenteredString(mc.font, (int) (fraction * 100) + "%",
-            screenW / 2, barY + (BAR_H - mc.font.lineHeight) / 2 + 1, ManiacUiTheme.TEXT_TITLE);
+        GeneratorFuelUiTheme.beginAppear(graphics, x + RESCUER_PANEL_W / 2f, y + panelH / 2f, ease, 12f);
+        GeneratorFuelUiTheme.drawPanel(graphics, x, y, RESCUER_PANEL_W, panelH);
+        int rowX = x + PAD;
+        int rowW = RESCUER_PANEL_W - PAD * 2;
+        int rowY = y + PAD;
+        GeneratorFuelUiTheme.drawTitleRow(graphics, font,
+            Component.translatable("maniacmod.hud.rescue.title").getString(),
+            Math.round(rescueShown * 100f) + "%", rowX, rowY, rowW);
+        GeneratorFuelUiTheme.divider(graphics, x, rowY + 10, RESCUER_PANEL_W);
+        GeneratorFuelUiTheme.drawBarFx(graphics, rowX, rowY + 18, rowW, BAR_H, rescueShown, rescueGhost,
+            GeneratorFuelUiTheme.FILL, 0f);
+        GeneratorFuelUiTheme.endAppear(graphics);
     }
 
-    private static void renderHint(GuiGraphics graphics, Minecraft mc) {
+    // ── Хінт «утримуй ПКМ» ───────────────────────────────────────────────
+
+    private static void renderHint(GuiGraphics graphics, Minecraft mc, float ease) {
+        Font font = mc.font;
+        String text = Component.translatable("maniacmod.hud.rescue.hint").getString();
         int screenW = mc.getWindow().getGuiScaledWidth();
         int screenH = mc.getWindow().getGuiScaledHeight();
-        graphics.drawCenteredString(mc.font, Component.translatable("maniacmod.hud.rescue.hint"),
-            screenW / 2, screenH / 2 + OFFSET_FROM_CENTER, ManiacUiTheme.TEXT_ACCENT);
+        int w = Math.max(200, font.width(text) + PAD * 2);
+        int h = PAD * 2 + 10;
+        int x = screenW / 2 - w / 2;
+        int y = screenH / 2 + OFFSET_FROM_CENTER;
+
+        GeneratorFuelUiTheme.beginAppear(graphics, x + w / 2f, y + h / 2f, ease, 10f);
+        GeneratorFuelUiTheme.drawPanel(graphics, x, y, w, h);
+        GeneratorFuelUiTheme.drawTitleLeft(graphics, font, text, x + PAD, y + PAD);
+        GeneratorFuelUiTheme.endAppear(graphics);
     }
 }

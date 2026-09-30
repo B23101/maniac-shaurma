@@ -42,6 +42,14 @@ public record AbilityCooldownPacket(String actionId, int totalTicks) implements 
         return "trap:" + slot;
     }
 
+    /**
+     * Власна перезарядка ПРЕДМЕТА ({@code OwnCooldowns}) — не ванільна. Префікс
+     * {@code item:} не перетинається з {@code ability:}/{@code trap:}/{@code survivor:}.
+     */
+    public static String itemId(String itemKey) {
+        return "item:" + itemKey;
+    }
+
     /** Перезарядка завершена. */
     public static AbilityCooldownPacket ready(String actionId) {
         return new AbilityCooldownPacket(actionId, 0);

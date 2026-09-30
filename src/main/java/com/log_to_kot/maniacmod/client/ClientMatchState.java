@@ -184,7 +184,17 @@ public final class ClientMatchState {
     // ── Запис (викликається лише з ClientPacketHandler) ──────────────────
 
     static void setPhase(GamePhase next) {
+        GamePhase prev = phase;
         phase = next;
+        // Анімація пробудження стартує на вході в ROLE_REVEAL (гравців уже
+        // телепортовано на точки спавну) і гаситься на виході з нього.
+        WakeUpAnimation.onPhaseChanged(prev, next);
+        // Кіно-вступ гаситься виходом з матчу або початком гри (див. IntroClient).
+        com.log_to_kot.maniacmod.client.intro.IntroClient.onPhaseChanged(next);
+        // Той самий вхід у ROLE_REVEAL «заряджає» оголошення ролі: воно
+        // стартує вже після кінця анімації пробудження (виживий) або після
+        // вибору пасток (маньяк) — див. RoleRevealOverlay.
+        com.log_to_kot.maniacmod.client.overlay.notify.RoleRevealOverlay.onPhaseChanged(prev, next);
         // Вихід із матчу гасить усе, що показує HUD. У v3 це доводилось
         // робити в кожному оверлеї окремо — і про половину забували.
         if (next == GamePhase.LOBBY || next == GamePhase.RESET) reset();
@@ -349,11 +359,15 @@ public final class ClientMatchState {
         downedMaxTicks.clear();
         generatorInteraction.clear();
         com.log_to_kot.maniacmod.client.ItemPickupPose.reset();
+        com.log_to_kot.maniacmod.client.WoundedPose.reset();
+        com.log_to_kot.maniacmod.client.DownedPoseAnimation.reset();
+        com.log_to_kot.maniacmod.client.ManiacHitEffect.reset();
         rescueRequired = 0;
         rescueProgress = 0;
         com.log_to_kot.maniacmod.client.overlay.WorldToScreen.invalidate();
         com.log_to_kot.maniacmod.client.overlay.actionprogress.GeneratorProgressOverlay.reset();
         com.log_to_kot.maniacmod.client.overlay.notify.GeneratorExplosionMarker.reset();
+        com.log_to_kot.maniacmod.client.overlay.notify.RoleRevealOverlay.reset();
         com.log_to_kot.maniacmod.client.glow.GeneratorHighlightGlow.reset();
         com.log_to_kot.maniacmod.client.glow.TrapVictimGlow.reset();
     }
@@ -406,6 +420,16 @@ public final class ClientMatchState {
      */
     public static boolean isProne(UUID id) {
         return survivorStateOf(id).isCrawlOnly();
+    }
+
+    /**
+     * Чи гравець ЩОЙНО УПАВ ({@code CRAWLING}) — лише тоді малюється
+     * лежача поза з {@code downed_lie.json}. Непритомний
+     * ({@code UNCONSCIOUS}) повзе й має ванільну поставу повзання,
+     * а не цю позу.
+     */
+    public static boolean isFallen(UUID id) {
+        return survivorStateOf(id) == SurvivorState.CRAWLING;
     }
 
     /** Вид роботи з генератором у цього гравця ({@link #GENERATOR_ACTION_NONE}, якщо нічого). */
@@ -522,6 +546,22 @@ public final class ClientMatchState {
         Long readyAt = abilityReadyAt.get(abilityId);
         if (readyAt == null) return 0L;
         return Math.max(0L, readyAt - currentTick);
+    }
+
+    /**
+     * Тік, на якому перезарядка закінчується (або закінчилась). {@code -1} — запису
+     * немає (не запускалась або скинута). Запис ЛИШАЄТЬСЯ після завершення, тож
+     * візуал може відіграти анімацію «готово» від цього тіка, не тримаючи стану.
+     */
+    public static long abilityReadyAtTick(String abilityId) {
+        Long readyAt = abilityReadyAt.get(abilityId);
+        return readyAt == null ? -1L : readyAt;
+    }
+
+    /** Повна тривалість останньої перезарядки, тіки (0 — запису нема). */
+    public static int abilityTotalTicks(String abilityId) {
+        Integer total = abilityTotal.get(abilityId);
+        return total == null ? 0 : total;
     }
 
     /** Генератори, які зараз підсвічені. Порожньо, якщо підсвітка згасла. */

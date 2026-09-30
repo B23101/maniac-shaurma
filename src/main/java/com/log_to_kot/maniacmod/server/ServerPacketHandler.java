@@ -7,7 +7,10 @@ import com.log_to_kot.maniacmod.abilities.Ability;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import com.log_to_kot.maniacmod.entity.GroundItemEntity;
+import com.log_to_kot.maniacmod.loot.GroundItemAim;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
 
 /**
  * Обробка намірів, надісланих клієнтом.
@@ -169,6 +172,22 @@ public final class ServerPacketHandler {
         if (match == null) return;
 
         match.traps().onEscapeStart(player);
+    }
+
+    /**
+     * ПКМ по предмету на землі, коли ванільний приціл клієнта цілив у траву
+     * перед ним. Сервер НЕ довіряє клієнту: сам перевіряє, що промінь
+     * погляду гравця влучає в цей предмет ({@link GroundItemAim}) і не
+     * закритий блоком із колізією, а далі йде той самий шлях, що й у
+     * звичайної взаємодії — {@code GroundItemEntity#interact} (дальність,
+     * фаза, стан гравця, вільні слоти).
+     */
+    public static void onGroundItemPickup(ServerPlayer player, int entityId) {
+        if (player == null) return;
+        if (!(player.level().getEntity(entityId) instanceof GroundItemEntity item)) return;
+        if (item.isRemoved()) return;
+        if (!GroundItemAim.isAimedAt(player, item, GroundItemAim.SERVER_MARGIN)) return;
+        item.interact(player, InteractionHand.MAIN_HAND);
     }
 
     public static void onRescueHold(ServerPlayer player, boolean holding) {

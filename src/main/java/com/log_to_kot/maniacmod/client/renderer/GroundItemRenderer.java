@@ -94,8 +94,15 @@ public class GroundItemRenderer extends EntityRenderer<GroundItemEntity> {
 
         poseStack.translate(0.0, LIFT_BLOCKS, 0.0);
         // Поворот: Y завжди 0, X — випадковий, фіксований.
-        poseStack.mulPose(Axis.YP.rotationDegrees(GroundItemEntity.ROTATION_Y));
-        poseStack.mulPose(Axis.XP.rotationDegrees(entity.rotationX()));
+        // Виняток — ПЛОСКІ предмети (ножиці): кут по X «перекочував» би плаский
+        // предмет на ребро, тож той самий випадковий кут іде у розворот по
+        // вертикалі, а предмет завжди лежить плашмя.
+        if (isFlatOnGround(stack)) {
+            poseStack.mulPose(Axis.YP.rotationDegrees(entity.rotationX()));
+        } else {
+            poseStack.mulPose(Axis.YP.rotationDegrees(GroundItemEntity.ROTATION_Y));
+            poseStack.mulPose(Axis.XP.rotationDegrees(entity.rotationX()));
+        }
         poseStack.scale(SCALE, SCALE, SCALE);
 
         BakedModel model = itemRenderer.getModel(stack, entity.level(), null, entity.getId());
@@ -104,6 +111,14 @@ public class GroundItemRenderer extends EntityRenderer<GroundItemEntity> {
 
         poseStack.popPose();
         super.render(entity, entityYaw, partialTick, poseStack, buffers, packedLight);
+    }
+
+    /**
+     * Предмети, що мусять лежати плашмя (модель — тонка пластина, яку не можна
+     * котити навколо осі X). Нові плоскі предмети додавати сюди.
+     */
+    private static boolean isFlatOnGround(ItemStack stack) {
+        return stack.getItem() instanceof com.log_to_kot.maniacmod.items.GeoScissorsItem;
     }
 
     @Override

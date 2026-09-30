@@ -1,6 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.WakeUpAnimation;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import net.minecraft.client.player.Input;
 import net.minecraft.client.player.KeyboardInput;
@@ -53,6 +54,19 @@ public abstract class MixinKeyboardInputDownedMovement extends Input {
 
     @Inject(method = "tick", at = @At("RETURN"))
     private void maniacmod$restrictMovementWhenDowned(boolean isSneaking, float sneakSpeed, CallbackInfo ci) {
+        // Анімація пробудження: усі ролі лежать, рух заборонений (сервер
+        // у ROLE_REVEAL і так не дає руху — це лише прибирає «ковзання»).
+        if (WakeUpAnimation.isPlaying()
+            || com.log_to_kot.maniacmod.client.intro.IntroClient.isBlockingInput()) {
+            this.up = false;
+            this.down = false;
+            this.left = false;
+            this.right = false;
+            this.jumping = false;
+            this.forwardImpulse = 0.0F;
+            this.leftImpulse = 0.0F;
+            return;
+        }
         if (!ClientMatchState.isSurvivor()) return;
 
         SurvivorState state = ClientMatchState.survivorState();

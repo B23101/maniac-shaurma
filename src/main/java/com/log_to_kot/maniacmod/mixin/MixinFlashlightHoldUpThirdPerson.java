@@ -52,6 +52,8 @@ public abstract class MixinFlashlightHoldUpThirdPerson {
     private void maniacmod$holdUpFlashlight(LivingEntity entity, float limbSwing, float limbSwingAmount,
                                              float ageInTicks, float netHeadYaw, float headPitch, CallbackInfo ci) {
         if (!(entity instanceof Player player)) return;
+        // Впалий лежить у повнотіловій PAL-позі — руки не чіпаємо.
+        if (com.log_to_kot.maniacmod.client.ClientMatchState.isFallen(player.getUUID())) return;
         PlayerModel<?> self = (PlayerModel<?>) (Object) this;
 
         applyIfFlashlight(self, player.getMainHandItem(), player.getMainArm() == net.minecraft.world.entity.HumanoidArm.RIGHT,

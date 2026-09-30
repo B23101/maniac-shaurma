@@ -1,12 +1,19 @@
 package com.log_to_kot.maniacmod.client.screen.minigame;
 
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.UiAnim;
+import com.log_to_kot.maniacmod.client.style.UiFx;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.c2s.minigame.TargetMinigameClickPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
 /**
  * "Generator Startup" — Hits: 0/N. Тонка ПАЛКА-повзунок їздить
@@ -90,11 +97,11 @@ public final class TargetMinigameScreen extends Screen {
     private final double cursorSpeed;
     private final double hitZoneWidth;
     /**
-     * Позиція цілі (0.0-1.0). НЕ final: у капкані ціль ПЕРЕМІЩУЄТЬСЯ після
-     * КОЖНОЇ спроби (ТЗ 1.2) — сервер присилає нову позицію у
+     * Позиція цілі (0.0-1.0). НЕ final: ціль ПЕРЕМІЩУЄТЬСЯ — у капкані після
+     * КОЖНОЇ спроби (ТЗ 1.2), у генераторі після кожного ВЛУЧАННЯ (промах
+     * там — провал, гра закривається). Сервер присилає нову позицію у
      * {@code TrapEscapeAttemptPacket}, і {@link #onTrapAttempt} її тут
-     * підставляє. У міні-грі генератора ціль нерухома, тож там поле
-     * ніколи не змінюється.
+     * підставляє.
      */
     private double targetPosition;
     private final int hitsRequired;
@@ -133,6 +140,65 @@ public final class TargetMinigameScreen extends Screen {
      */
     private boolean spaceHeld;
 
+    // ── Анімації (чисто косметика: логіку й перевірку влучання не чіпають) ──
+
+    /** Поява панелі: підйом + м'який масштаб, доки по смузі пробігає промінь. */
+    private static final long INTRO_MS = 320;
+
+    /** Скільки екран висить після УСПІХУ, щоб встигла зіграти анімація перемоги. */
+    private static final long SUCCESS_LINGER_MS = 350;
+
+    /** Тривалість тремтіння панелі на промаху. */
+    private static final long SHAKE_MS = 380;
+
+    /** Тривалість «підскоку» лічильника й піпки після влучання. */
+    private static final long POP_MS = 260;
+
+    /** Тривалість розширюваного кільця навколо зони. */
+    private static final long RING_MS = 520;
+
+    /** Шлейф повзунка: скільки «привидів» і з яким кроком у часі (сек). */
+    private static final int TRAIL_STEPS = 6;
+    private static final double TRAIL_STEP_SECONDS = 0.024;
+
+    /** Понад стільки влучань піпки не малюємо (не влізуть) — лишається лише текст. */
+    private static final int MAX_PIPS = 12;
+
+    private static final int GREEN = 0x7FD68D;
+    private static final int RED = 0xE0424E;
+
+    /** Іскра-частинка. Живе в екранних координатах, малюється квадратиком. */
+    private static final class Spark {
+        float x, y, vx, vy, life, maxLife, size;
+        int rgb;
+    }
+
+    private final List<Spark> sparks = new ArrayList<>();
+    private final java.util.Random fxRandom = new java.util.Random();
+    private final long[] frameClock = new long[1];
+
+    /** Позиція цілі, яку МАЛЮЄМО: плавно їде до {@link #targetPosition} (у капкані ціль «перестрибує»). */
+    private float displayTarget;
+
+    /** Яскравість спалаху зони (1 → 0). */
+    private float zoneGlow = 0f;
+
+    /** Наскільки панель зараз підсвічена кольором останньої події (1 → 0). */
+    private float panelFlash = 0f;
+    private int panelFlashRgb = GREEN;
+
+    private long shakeStartMillis = 0;
+    private long popStartMillis = 0;
+    private long ringStartMillis = 0;
+    private boolean ringWasHit;
+
+    /** Позиція (0..1) для вибуху іскор, поставлена подією; малюється в render, де відома геометрія. */
+    private double pendingBurstPos = -1;
+    private boolean pendingBurstHit;
+
+    /** true — гру виграно; екран ще висить {@link #SUCCESS_LINGER_MS}. */
+    private boolean success = false;
+
     /**
      * @param titleKey      ключ локалізації заголовка. Екран ОДИН на дві
      *                      міні-гри (ремонт генератора й визволення з
@@ -148,6 +214,7 @@ public final class TargetMinigameScreen extends Screen {
         this.cursorSpeed = cursorSpeed;
         this.hitZoneWidth = hitZoneWidth;
         this.targetPosition = targetPosition;
+        this.displayTarget = (float) targetPosition;
         this.hitsRequired = hitsRequired;
         this.openedAtMillis = System.currentTimeMillis();
         // Прямо GLFW, а не keyJump: keyPressed нижче ловить фізичний пробіл,
@@ -172,6 +239,17 @@ public final class TargetMinigameScreen extends Screen {
         return false;
     }
 
+    /**
+     * Екран закривається (успіх, провал — будь-який шлях). Якщо гравець ще
+     * тримає пробіл, гра одразу після закриття перечитає його як «стрибок»;
+     * вартовий глушить цей стрибок, доки пробіл не відпущено.
+     */
+    @Override
+    public void removed() {
+        super.removed();
+        com.log_to_kot.maniacmod.client.MinigameJumpGuard.armIfSpaceHeld();
+    }
+
     @Override
     public void onClose() {
         // Навмисно порожньо — див. клас-докстрінг "Чому не закривається по ESC".
@@ -179,8 +257,8 @@ public final class TargetMinigameScreen extends Screen {
 
     /**
      * Викликається {@code ClientPacketHandler} після
-     * {@code TrapEscapeAttemptPacket} — результат ОДНІСЇ спроби в
-     * капкані разом із НОВОЮ позицією цілі.
+     * {@code TrapEscapeAttemptPacket} — результат ОДНІЄЇ спроби (в капкані
+     * або влучання в генераторі) разом із НОВОЮ позицією цілі.
      *
      * <p>Це і є {"візуальний та звуковий feedback" із ТЗ 1.2: спалах
      * зони/тексту (зелений на попадання, червоний на промах) + окремий
@@ -193,9 +271,12 @@ public final class TargetMinigameScreen extends Screen {
      */
     public void onTrapAttempt(int hitsSoFar, boolean hit, double newTargetPosition) {
         this.hits = hitsSoFar;
+        // Де саме повзунок зупинили — для вибуху іскор (до розморозки нижче).
+        double where = frozenCursor >= 0 ? frozenCursor : cursorPosition();
         this.targetPosition = newTargetPosition;
         // Повзунок знову їде — спроба завершена, наступна з чистого аркуша.
         this.frozenCursor = -1;
+        triggerFeedback(where, hit);
         this.flashWasHit = hit;
         this.flashUntilMillis = System.currentTimeMillis() + FLASH_MS;
         playFeedbackSound(hit);
@@ -216,6 +297,7 @@ public final class TargetMinigameScreen extends Screen {
     /** Викликається ClientPacketHandler після RepairMinigameProgressPacket.targetHit(...). */
     public void onHit(int hitsSoFar) {
         this.hits = hitsSoFar;
+        triggerFeedback(frozenCursor >= 0 ? frozenCursor : cursorPosition(), true);
         // Влучання: палка знову їде — наступна спроба з чистого аркуша.
         // Відлік часу НЕ скидаємо: сервер перевіряє позицію за
         // годинником від відкриття гри, і зсув розійшовся б із ним.
@@ -233,7 +315,12 @@ public final class TargetMinigameScreen extends Screen {
         if (finished) return;
         if (success) {
             finished = true;
-            Minecraft.getInstance().setScreen(null);
+            this.success = true;
+            this.hits = Math.max(this.hits, hitsRequired);
+            // Не закриваємо миттєво: даємо зіграти анімації перемоги.
+            if (frozenCursor < 0) frozenCursor = cursorPosition();
+            triggerFeedback(frozenCursor, true);
+            closeAtMillis = System.currentTimeMillis() + SUCCESS_LINGER_MS;
             return;
         }
         // Провал приходить і від промаху, і від виходу за дистанцію чи
@@ -249,6 +336,7 @@ public final class TargetMinigameScreen extends Screen {
         if (failed) return;
         failed = true;
         if (frozenCursor < 0) frozenCursor = cursorPosition();
+        triggerFeedback(frozenCursor, false);
         closeAtMillis = System.currentTimeMillis() + FAIL_LINGER_MS;
     }
 
@@ -308,77 +396,298 @@ public final class TargetMinigameScreen extends Screen {
         return true;
     }
 
+    /**
+     * Запускає візуальний відгук ОДНІЄЇ події (влучання / промах): спалах
+     * зони й панелі, кільце, тремтіння (на промаху), «підскок» лічильника
+     * та вибух іскор. Сама геометрія відома лише в {@link #render}, тож
+     * іскри тут лише ставляться в чергу.
+     */
+    private void triggerFeedback(double positionOnBar, boolean hit) {
+        long now = System.currentTimeMillis();
+        pendingBurstPos = positionOnBar;
+        pendingBurstHit = hit;
+        zoneGlow = 1f;
+        panelFlash = hit ? 0.75f : 1f;
+        panelFlashRgb = hit ? GREEN : RED;
+        ringStartMillis = now;
+        ringWasHit = hit;
+        if (hit) popStartMillis = now;
+        else shakeStartMillis = now;
+    }
+
+    private void spawnBurst(float x, float y, boolean hit) {
+        int count = hit ? 18 : 12;
+        for (int i = 0; i < count; i++) {
+            Spark sp = new Spark();
+            double ang = fxRandom.nextDouble() * Math.PI * 2;
+            // Влучання — віялом вгору/убік; промах — короткий різкий «розліт».
+            float speed = (hit ? 40f : 55f) + fxRandom.nextFloat() * (hit ? 70f : 45f);
+            sp.x = x;
+            sp.y = y;
+            sp.vx = (float) Math.cos(ang) * speed;
+            sp.vy = (float) Math.sin(ang) * speed - (hit ? 28f : 0f);
+            sp.maxLife = sp.life = 0.35f + fxRandom.nextFloat() * 0.35f;
+            sp.size = fxRandom.nextFloat() < 0.3f ? 2f : 1f;
+            sp.rgb = hit ? (fxRandom.nextFloat() < 0.4f ? 0xFFFFFF : GREEN)
+                         : (fxRandom.nextFloat() < 0.4f ? 0xFF9A9A : RED);
+            sparks.add(sp);
+        }
+    }
+
+    private void updateSparks(float dt) {
+        for (Iterator<Spark> it = sparks.iterator(); it.hasNext(); ) {
+            Spark sp = it.next();
+            sp.life -= dt;
+            if (sp.life <= 0f) { it.remove(); continue; }
+            sp.x += sp.vx * dt;
+            sp.y += sp.vy * dt;
+            sp.vy += 120f * dt;          // легка «гравітація»
+            sp.vx *= (1f - 2.2f * dt);   // і тертя
+        }
+    }
+
+    private void drawSparks(GuiGraphics g) {
+        for (Spark sp : sparks) {
+            float k = sp.life / sp.maxLife;
+            int a = Math.round(255f * k);
+            int size = Math.max(1, Math.round(sp.size));
+            int x = Math.round(sp.x), y = Math.round(sp.y);
+            g.fill(x, y, x + size, y + size, (a << 24) | sp.rgb);
+        }
+    }
+
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         // Навмисно НЕ renderBackground(graphics) — референс показує
         // ігровий світ ПОЗАДУ панелі (затемнений, але видимий), а не
         // суцільну ванільну заглушку на весь екран.
+        long now = System.currentTimeMillis();
+        float dt = UiAnim.frameDt(frameClock);
+
+        // Плавний рух відображуваної цілі + згасання спалахів.
+        displayTarget = UiAnim.approach(displayTarget, (float) targetPosition, 18f, dt);
+        zoneGlow = UiAnim.approach(zoneGlow, 0f, 4.5f, dt);
+        panelFlash = UiAnim.approach(panelFlash, 0f, 3.2f, dt);
+        updateSparks(dt);
+
         int panelHeight = 150;
         int panelX = width / 2 - PANEL_WIDTH / 2;
         int panelY = height / 2 - panelHeight / 2 - (HINT_HEIGHT + HINT_GAP) / 2;
 
+        // ── поява панелі ──
+        float intro = UiAnim.clamp01((now - openedAtMillis) / (float) INTRO_MS);
+        float introEase = UiAnim.easeOutCubic(intro);
+
+        // ── тремтіння на промаху: затухаюче коливання по X ──
+        float shakeX = 0f;
+        if (shakeStartMillis != 0) {
+            float p = (now - shakeStartMillis) / (float) SHAKE_MS;
+            if (p >= 1f) shakeStartMillis = 0;
+            else shakeX = (float) Math.sin(p * 38f) * 5f * (1f - p) * (1f - p);
+        }
+
+        graphics.pose().pushPose();
+        graphics.pose().translate(shakeX, 0f, 0f);
+        GeneratorFuelUiTheme.beginAppear(graphics, panelX + PANEL_WIDTH / 2f,
+            panelY + panelHeight / 2f, introEase, 14f);
+
         drawPanelFrame(graphics, panelX, panelY, PANEL_WIDTH, panelHeight);
+        // Кольорова підсвітка панелі по краях після влучання/промаху.
+        UiFx.innerGlow(graphics, panelX, panelY, PANEL_WIDTH, panelHeight, panelFlashRgb, panelFlash, 6);
         int contentY = ManiacUiTheme.drawTitle(graphics, font, title, panelX, panelY, PANEL_WIDTH);
 
-        graphics.drawCenteredString(font,
-            Component.translatable("maniacmod.minigame.target.hits", hits, hitsRequired),
-            panelX + PANEL_WIDTH / 2, contentY, failed ? FAIL_BORDER : ManiacUiTheme.TEXT_BODY);
+        // ── лічильник влучань: текст «підскакує» + піпки ──
+        float pop = popStartMillis == 0 ? 0f
+            : UiAnim.clamp01(1f - (now - popStartMillis) / (float) POP_MS);
+        int textColor = failed ? FAIL_BORDER : (success ? HIT_TEXT : ManiacUiTheme.TEXT_BODY);
+        Component hitsText = Component.translatable("maniacmod.minigame.target.hits", hits, hitsRequired);
+        float scale = 1f + 0.30f * pop * pop;
+        graphics.pose().pushPose();
+        float textCx = panelX + PANEL_WIDTH / 2f;
+        float textCy = contentY + font.lineHeight / 2f;
+        graphics.pose().translate(textCx, textCy, 0f);
+        graphics.pose().scale(scale, scale, 1f);
+        graphics.pose().translate(-textCx, -textCy, 0f);
+        int drawColor = pop > 0.01f ? GeneratorFuelUiTheme.mix(0xFF000000 | textColor, 0xFFFFFFFF, pop) : textColor;
+        graphics.drawCenteredString(font, hitsText, panelX + PANEL_WIDTH / 2, contentY, drawColor);
+        graphics.pose().popPose();
+
+        int pipsY = contentY + font.lineHeight + 4;
+        if (hitsRequired > 0 && hitsRequired <= MAX_PIPS) {
+            drawPips(graphics, panelX + PANEL_WIDTH / 2, pipsY, now, pop);
+        }
 
         int barX = panelX + (PANEL_WIDTH - BAR_WIDTH) / 2;
-        int barY = contentY + font.lineHeight + 18;
+        int barY = pipsY + 5 + 14;
 
         // Смуга-трек: рамка + фон. У провалі — червоні.
         graphics.fill(barX, barY, barX + BAR_WIDTH, barY + BAR_HEIGHT,
             failed ? FAIL_BORDER : ManiacUiTheme.BAR_FRAME);
         graphics.fill(barX + 2, barY + 2, barX + BAR_WIDTH - 2, barY + BAR_HEIGHT - 2,
             failed ? FAIL_BAR_BG : ManiacUiTheme.BAR_BG);
+        // Ледь помітні поділки на треку — дають відчуття швидкості руху повзунка.
+        int tickColor = GeneratorFuelUiTheme.alpha(failed ? FAIL_BORDER : 0xFF8E97A5, 0.22f);
+        for (int i = 1; i < 20; i++) {
+            int tx = barX + 2 + Math.round(i * (BAR_WIDTH - 4) / 20f);
+            int th = (i % 5 == 0) ? 4 : 2;
+            graphics.fill(tx, barY + BAR_HEIGHT - 2 - th, tx + 1, barY + BAR_HEIGHT - 2, tickColor);
+        }
 
         // ЦІЛЬ — прямокутник. Його ширина дорівнює hitZoneWidth, тобто
         // рівно тій зоні, яку перевіряє сервер (TargetMinigameSpec.isHit:
-        // |cursor − target| ≤ hitZoneWidth/2). Раніше це була тонка риска
-        // з напівпрозорим «підказковим» ореолом навколо, і гравець
-        // цілився в риску, хоча влучити можна було й поруч.
-        int targetCenterX = barX + (int) Math.round(this.targetPosition * BAR_WIDTH);
+        // |cursor − target| ≤ hitZoneWidth/2). Малюється за displayTarget —
+        // це та сама позиція, лише плавно доїхала (у капкані ціль після
+        // спроби «перестрибує»; так видно, куди вона поїхала).
+        int targetCenterX = barX + (int) Math.round(displayTarget * BAR_WIDTH);
         int zoneHalf = Math.max(1, (int) Math.round(hitZoneWidth / 2.0 * BAR_WIDTH));
         int zoneLeft = Math.max(barX + 2, targetCenterX - zoneHalf);
         int zoneRight = Math.min(barX + BAR_WIDTH - 2, targetCenterX + zoneHalf);
+        int zoneTop = barY + 2, zoneH = BAR_HEIGHT - 4;
+
         // Спалах-фідбек спроби (ТЗ 1.2): зелений на попадання, червоний на
-        // промах. Живе лише {@link #FLASH_MS}, потім зона повертається до
-        // звичайного вигляду. Стан "провал" (failed) має приоритет над
-        // спалахом: там гра вже скінчилась.
-        boolean flash = flashUntilMillis != 0 && System.currentTimeMillis() < flashUntilMillis;
+        // промах. Живе лише {@link #FLASH_MS}; стан «провал» має пріоритет.
+        boolean flash = flashUntilMillis != 0 && now < flashUntilMillis;
         if (flashUntilMillis != 0 && !flash) flashUntilMillis = 0;
 
         int zoneFill = failed ? 0xFF6A1A20
             : (flash ? (flashWasHit ? 0xFF2C5F38 : 0xFF5F1A22) : 0xFF3F7F4A);
         int zoneEdge = failed ? FAIL_BORDER
             : (flash ? (flashWasHit ? HIT_ZONE : MISS_ZONE) : 0xFF7FD68D);
-        graphics.fill(zoneLeft, barY + 2, zoneRight, barY + BAR_HEIGHT - 2, zoneFill);
-        ManiacUiTheme.border1px(graphics, zoneLeft, barY + 2, zoneRight - zoneLeft, BAR_HEIGHT - 4, zoneEdge);
+        int zoneRgb = failed ? 0xB0242F : (flash && !flashWasHit ? 0xB0242F : GREEN);
 
-        // Текстова частина фідбеку — другим каналом ("окрема анімація"),
-        // щоб попадання/промах читались навіть тим, хто не розрізняє
-        // відтінки кольору.
+        // «Дихання» зони: повільний пульс світіння підказує, куди цілитись.
+        float breathe = 0.5f + 0.5f * (float) Math.sin(now / 260.0);
+        if (!failed && !success) {
+            UiFx.glow(graphics, zoneLeft, zoneTop, zoneRight - zoneLeft, zoneH, zoneRgb,
+                0.35f + 0.25f * breathe + 0.6f * zoneGlow, 4);
+        } else if (zoneGlow > 0.02f) {
+            UiFx.glow(graphics, zoneLeft, zoneTop, zoneRight - zoneLeft, zoneH, zoneRgb, zoneGlow, 5);
+        }
+        graphics.fill(zoneLeft, zoneTop, zoneRight, zoneTop + zoneH, zoneFill);
+        // Ковзний блік усередині зони — «жива» ціль.
+        if (!failed && zoneRight - zoneLeft > 4) {
+            UiFx.scanBeam(graphics, zoneLeft, zoneTop, zoneRight - zoneLeft, zoneH,
+                (now % 1400) / 1400f, 5, 0xFFFFFF, 46);
+        }
+        // Спалах-заливка на влучанні / промаху.
+        if (zoneGlow > 0.02f) {
+            int glowFill = 0xFF000000 | (ringWasHit ? 0xC8FFD0 : 0xFFB0B0);
+            graphics.fill(zoneLeft, zoneTop, zoneRight, zoneTop + zoneH,
+                GeneratorFuelUiTheme.alpha(glowFill, zoneGlow * 0.55f));
+        }
+        ManiacUiTheme.border1px(graphics, zoneLeft, zoneTop, zoneRight - zoneLeft, zoneH, zoneEdge);
+
+        // Кільце-«ударна хвиля» навколо зони.
+        if (ringStartMillis != 0) {
+            float rt = (now - ringStartMillis) / (float) RING_MS;
+            if (rt >= 1f) ringStartMillis = 0;
+            else {
+                int ringColor = 0xFF000000 | (ringWasHit ? GREEN : RED);
+                GeneratorFuelUiTheme.pulseRing(graphics, zoneLeft, zoneTop, zoneRight - zoneLeft, zoneH,
+                    ringColor, UiAnim.easeOutCubic(rt), 14);
+            }
+        }
+
+        // Текстова частина фідбеку — другим каналом, щоб попадання/промах
+        // читались навіть тим, хто не розрізняє відтінки кольору. Плавно
+        // виїжджає й згасає.
         if (flash) {
+            float ft = 1f - (flashUntilMillis - now) / (float) FLASH_MS;
+            float slide = (1f - UiAnim.easeOutCubic(Math.min(1f, ft * 2.5f))) * 6f;
+            float fade = ft < 0.6f ? 1f : 1f - (ft - 0.6f) / 0.4f;
             String label = Component.translatable(flashWasHit
                 ? "maniacmod.minigame.trap.hit" : "maniacmod.minigame.trap.miss").getString();
             graphics.drawCenteredString(font, label, panelX + PANEL_WIDTH / 2,
-                barY + BAR_HEIGHT + 6, flashWasHit ? HIT_TEXT : MISS_TEXT);
+                Math.round(barY + BAR_HEIGHT + 6 + slide),
+                GeneratorFuelUiTheme.alpha(0xFF000000 | ((flashWasHit ? HIT_TEXT : MISS_TEXT) & 0xFFFFFF),
+                    Math.max(0.05f, fade)));
         }
 
-        // ПАЛКА — тонка вертикальна риска, що виступає за смугу.
-        int stickCenterX = barX + (int) Math.round(cursorPosition() * BAR_WIDTH);
+        // ── ПАЛКА: шлейф + ореол + сама риска ──
+        double cursor = cursorPosition();
+        boolean moving = frozenCursor < 0 && !failed && !finished;
+        if (moving) {
+            double elapsedSeconds = (now - openedAtMillis) / 1000.0;
+            for (int i = TRAIL_STEPS; i >= 1; i--) {
+                double past = com.log_to_kot.maniacmod.map.minigame.TargetMinigameSpec
+                    .cursorAt(elapsedSeconds - i * TRAIL_STEP_SECONDS, cursorSpeed);
+                int gx = barX + (int) Math.round(past * BAR_WIDTH) - STICK_WIDTH / 2;
+                float ga = 0.20f * (1f - (i - 1) / (float) TRAIL_STEPS);
+                graphics.fill(gx, barY + 2, gx + STICK_WIDTH, barY + BAR_HEIGHT - 2,
+                    GeneratorFuelUiTheme.alpha(0xFFC2C9D6, ga));
+            }
+        }
+        int stickCenterX = barX + (int) Math.round(cursor * BAR_WIDTH);
         int stickLeft = stickCenterX - STICK_WIDTH / 2;
+        boolean inZone = Math.abs(cursor - displayTarget) <= hitZoneWidth / 2.0;
+        int stickColor = failed ? 0xFFFFFFFF
+            : GeneratorFuelUiTheme.mix(ManiacUiTheme.BAR_FILL_NEUTRAL, 0xFFFFFFFF, inZone ? 1f : 0f);
+        // Ореол: два прозорих шари навколо палки; в зоні — зеленуватий.
+        int haloRgb = inZone && !failed ? GREEN : 0xC2C9D6;
+        graphics.fill(stickLeft - 2, barY - STICK_OVERSHOOT, stickLeft + STICK_WIDTH + 2,
+            barY + BAR_HEIGHT + STICK_OVERSHOOT, GeneratorFuelUiTheme.alpha(0xFF000000 | haloRgb, 0.10f));
+        graphics.fill(stickLeft - 1, barY - STICK_OVERSHOOT, stickLeft + STICK_WIDTH + 1,
+            barY + BAR_HEIGHT + STICK_OVERSHOOT, GeneratorFuelUiTheme.alpha(0xFF000000 | haloRgb, 0.20f));
         graphics.fill(stickLeft, barY - STICK_OVERSHOOT,
-            stickLeft + STICK_WIDTH, barY + BAR_HEIGHT + STICK_OVERSHOOT,
-            failed ? 0xFFFFFFFF : ManiacUiTheme.BAR_FILL_NEUTRAL);
+            stickLeft + STICK_WIDTH, barY + BAR_HEIGHT + STICK_OVERSHOOT, stickColor);
         ManiacUiTheme.border1px(graphics, stickLeft - 1, barY - STICK_OVERSHOOT - 1,
             STICK_WIDTH + 2, BAR_HEIGHT + STICK_OVERSHOOT * 2 + 2, 0xFF2A2A2A);
+        // Маленькі «наконечники» на кінцях палки — читається як стрілка-вказівник.
+        graphics.fill(stickLeft - 2, barY - STICK_OVERSHOOT - 2, stickLeft + STICK_WIDTH + 2,
+            barY - STICK_OVERSHOOT - 1, stickColor);
+        graphics.fill(stickLeft - 2, barY + BAR_HEIGHT + STICK_OVERSHOOT + 1, stickLeft + STICK_WIDTH + 2,
+            barY + BAR_HEIGHT + STICK_OVERSHOOT + 2, stickColor);
+
+        // Промінь по смузі під час появи панелі.
+        if (intro < 1f) {
+            UiFx.scanBeam(graphics, barX, barY, BAR_WIDTH, BAR_HEIGHT, introEase, 12, 0xFFFFFF, 70);
+        }
+
+        // Іскри — з позиції, де повзунок зупинили.
+        if (pendingBurstPos >= 0) {
+            spawnBurst(barX + (float) (pendingBurstPos * BAR_WIDTH), barY + BAR_HEIGHT / 2f, pendingBurstHit);
+            pendingBurstPos = -1;
+        }
+        drawSparks(graphics);
 
         int hintY = panelY + panelHeight + HINT_GAP;
         drawHintFrame(graphics, panelX, hintY, PANEL_WIDTH, HINT_HEIGHT);
 
+        GeneratorFuelUiTheme.endAppear(graphics);
+        graphics.pose().popPose();
+
         super.render(graphics, mouseX, mouseY, partialTick);
+    }
+
+    /**
+     * Ряд піпок «влучань»: заповнена — влучили, порожня — ще ні. Остання
+     * влучена «підскакує» разом із текстом; при перемозі всі коротко блимають.
+     */
+    private void drawPips(GuiGraphics g, int centerX, int y, long now, float pop) {
+        final int w = 12, h = 4, gap = 3;
+        int total = hitsRequired * w + (hitsRequired - 1) * gap;
+        int x0 = centerX - total / 2;
+        for (int i = 0; i < hitsRequired; i++) {
+            int x = x0 + i * (w + gap);
+            boolean filled = i < hits;
+            boolean justHit = filled && i == hits - 1 && pop > 0.01f;
+            int grow = justHit ? Math.round(2f * pop) : 0;
+            int fill;
+            if (failed) fill = filled ? 0xFF8A2A30 : 0xFF2A0C0E;
+            else if (filled) {
+                fill = 0xFF000000 | GREEN;
+                if (success) {
+                    float wave = 0.5f + 0.5f * (float) Math.sin(now / 90.0 - i * 0.7);
+                    fill = GeneratorFuelUiTheme.mix(fill, 0xFFFFFFFF, wave * 0.55f);
+                } else if (justHit) fill = GeneratorFuelUiTheme.mix(fill, 0xFFFFFFFF, pop);
+            } else fill = 0xFF1A1F26;
+            if (filled && !failed) {
+                UiFx.glow(g, x, y, w, h, GREEN, 0.5f + (justHit ? pop : 0f), 2);
+            }
+            g.fill(x - grow, y - grow, x + w + grow, y + h + grow, fill);
+            ManiacUiTheme.border1px(g, x - grow, y - grow, w + grow * 2, h + grow * 2,
+                failed ? 0xFF5A1A20 : (filled ? 0xFF2C5F38 : 0xFF3A424E));
+        }
     }
 
     /** Панель міні-гри; у провалі — червоний фон і рамка замість стандартних. */

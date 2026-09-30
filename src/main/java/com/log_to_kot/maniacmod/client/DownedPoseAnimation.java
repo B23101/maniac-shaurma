@@ -1,160 +1,151 @@
 package com.log_to_kot.maniacmod.client;
 
 import com.log_to_kot.maniacmod.ManiacMod;
-import dev.shaurmalib.common.playeranim.PoseAction;
-import dev.shaurmalib.common.playeranim.PoseActionRegistry;
-import dev.shaurmalib.common.playeranim.PoseLayerId;
-import dev.shaurmalib.common.playeranim.PoseSource;
-import dev.shaurmalib.forge.playeranim.PlayerPoseController;
+import dev.kosmx.playerAnim.api.layered.AnimationStack;
+import dev.kosmx.playerAnim.api.layered.IAnimation;
+import dev.kosmx.playerAnim.api.layered.KeyframeAnimationPlayer;
+import dev.kosmx.playerAnim.api.layered.ModifierLayer;
+import dev.kosmx.playerAnim.core.data.KeyframeAnimation;
+import dev.kosmx.playerAnim.minecraftApi.PlayerAnimationAccess;
+import dev.kosmx.playerAnim.minecraftApi.PlayerAnimationRegistry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.AbstractClientPlayer;
-import net.minecraft.world.entity.player.Player;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.HashSet;
 
 /**
- * Лежача поза виживого (playerlib) — візуальна частина стану «впав».
+ * Лежача поза впалого виживого — ПОВНОТІЛА анімація через PlayerAnimator
+ * (PAL), той самий підхід, що дроп-анімація у снайперах.
  *
- * ── Що тут і що НЕ тут ───────────────────────────────────────────────
- * ХІТБОКС лежачого гравця робить зовсім інший механізм —
- * {@code MixinPlayerDownedPose} (примусова {@code Pose.SWIMMING},
- * 0.6×0.6 замість 0.6×1.8). Цей клас хітбокс не чіпає взагалі: він
- * накладає поверх пози АНІМАЦІЮ тіла, щоб лежачий виглядав як
- * людина, що лежить (лікті вперті, голова піднята), а не як
- * витягнута по стійці «смирно» модель.
+ * ── Чому PAL-шар, а не запис кутів у setupAnim ───────────────────────
+ * Раніше кути з {@code downed_lie.json} вручну писались у {@code PlayerModel}
+ * в {@code setupAnim TAIL}. Туди ж пишуть поза ліхтарика, ванільна локомоція,
+ * анімація пробудження тощо — тож поза «плавала» і накладалась на інші.
+ * PAL-шар з високим пріоритетом веде ВСЕ тіло (голова, тулуб, руки, ноги)
+ * окремим шаром: ніщо ванільне його не перебиває.
  *
- * ── Чому на КОЖНОГО лежачого, а не лише на себе ──────────────────────
- * PAL (PlayerAnimator) застосовує {@code AnimationStack} КОЖНОГО
- * {@code AbstractClientPlayer} під час рендера, але наповнити цей стек
- * може лише клієнт, який про позу ЗНАЄ. Клієнт дізнається про чужих
- * лежачих із {@code DownedSurvivorsPacket}/{@code RosterSyncPacket}
- * (див. {@link ClientMatchState#isProne}), тому запускати позу треба
- * для всіх, кого видно, — інакше тіло лежало б лише у себе на екрані, а
- * всі інші бачили б стоячого гравця, що «їде» по землі.
+ * ── Коли грає ────────────────────────────────────────────────────────
+ * Лише поки гравець впав ({@link ClientMatchState#isFallen}, тобто
+ * {@code CRAWLING}). Непритомний повзе ванільною постаттю повзання.
+ * Кожен тік клієнт звіряє всіх гравців світу (свого й чужих) і вмикає /
+ * вимикає їхній шар. Кліп грається один раз і застигає на останньому
+ * кадрі ({@code "loop": "hold_on_last_frame"} у JSON).
  *
- * ── Розбіжність із сервером неможлива ────────────────────────────────
- * Клас нічого не вирішує: він лише повторює те, що вже вирішив сервер
- * (стан виживого) і що вже прийшло пакетами. Це виключно косметика —
- * жодної ігрової переваги з неї не випливає, і вона безпечно зникає,
- * якщо PAL не встановлено (усі виклики {@code PlayerPoseController}
- * відмовостійкі й повертають {@code false}).
+ * Файл: {@code assets/maniacmod/player_animation/downed_lie.json}
+ * (папка в однині — саме її сканує PAL).
  *
- * ── Чому власний {@code Set}, а не «тригерити щотік» ─────────────────
- * {@code playAction} перезапускає кліп із fade-in. Викликати його щотік
- * означало б безкінечно рестартувати анімацію (виглядало б як судоми).
- * Тому запам'ятовуємо, кому вже граємо, і запускаємо рівно на переході
- * «встав → ліг».
+ * Чисто косметика: клас нічого не вирішує в матчі.
  */
 @OnlyIn(Dist.CLIENT)
 @Mod.EventBusSubscriber(modid = ManiacMod.MOD_ID, value = Dist.CLIENT,
                         bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class DownedPoseAnimation {
 
-    /** Ім'я дії; файл — {@code assets/maniacmod/player_animations/downed_lie.json}. */
-    public static final String LIE_ACTION = ManiacMod.MOD_ID + ":downed_lie";
+    public static final ResourceLocation CLIP_ID =
+        new ResourceLocation(ManiacMod.MOD_ID, "downed_lie");
 
-    /** Кому зараз граємо позу. */
-    private static final Set<UUID> posing = new HashSet<>();
+    /** Високий пріоритет — шар лягає над усіма іншими PAL-шарами. */
+    private static final int LAYER_PRIORITY = 5000;
 
-    /**
-     * Реєстрація дії. Викликати РІВНО ОДИН раз при старті клієнта
-     * ({@code ClientSetup.onClientSetup}) — реєстр глобальний.
-     *
-     * Шар {@link PoseLayerId#DEATH_LIE}: він найвищий (1100), тобто
-     * остаточно перекриває локомоцію на тих кістках, які є у файлі.
-     * Для лежачого це саме те, що потрібно: у цьому стані немає жодної
-     * іншої пози, з якою треба було б ділити тіло. Вищий шар для нього
-     * не потрібен, а інші ({@code ITEM_ACTION} — ліхтарик/каністра)
-     * свідомо нижчі: лежачий предметів не тримає.
-     *
-     * fade-in 6 тіків: падіння вже саме по собі різке, а мить, коли
-     * гравець торкнувся землі, не має виглядати як «миттєво інша
-     * людина». fade-out 8 — вставання теж плавне.
-     */
-    public static void registerActions() {
-        PoseActionRegistry.register(PoseAction.of(
-            LIE_ACTION,
-            PoseSource.hold(ManiacMod.MOD_ID, "downed_lie").withFade(6, 8),
-            PoseLayerId.DEATH_LIE));
+    /** Шар конкретної СУТНОСТІ гравця (після респавну сутність нова, стек — теж). */
+    private static final class Entry {
+        final AbstractClientPlayer player;
+        final ModifierLayer<IAnimation> layer;
+        boolean playing;
+
+        Entry(AbstractClientPlayer player, ModifierLayer<IAnimation> layer) {
+            this.player = player;
+            this.layer = layer;
+        }
+    }
+
+    private static final Map<UUID, Entry> ENTRIES = new HashMap<>();
+
+    private DownedPoseAnimation() {}
+
+    /** Лишено для сумісності. */
+    public static void registerActions() {}
+
+    private static KeyframeAnimation clip() {
+        try {
+            return PlayerAnimationRegistry.getAnimation(CLIP_ID);
+        } catch (Throwable t) {
+            ManiacMod.LOGGER.warn("[ManiacMod] downed_lie: PAL недоступний: {}", t.toString());
+            return null;
+        }
+    }
+
+    private static Entry entryFor(AbstractClientPlayer player) {
+        Entry e = ENTRIES.get(player.getUUID());
+        if (e != null && e.player == player) return e;
+
+        AnimationStack stack = PlayerAnimationAccess.getPlayerAnimLayer(player);
+        if (stack == null) return null;
+        ModifierLayer<IAnimation> layer = new ModifierLayer<>();
+        stack.addAnimLayer(LAYER_PRIORITY, layer);
+        e = new Entry(player, layer);
+        ENTRIES.put(player.getUUID(), e);
+        return e;
+    }
+
+    private static void start(AbstractClientPlayer player) {
+        Entry e = entryFor(player);
+        if (e == null || e.playing) return;
+        KeyframeAnimation anim = clip();
+        if (anim == null) return; // спробуємо знову наступного тіку
+        e.layer.setAnimation(new KeyframeAnimationPlayer(anim));
+        e.playing = true;
+    }
+
+    private static void stop(AbstractClientPlayer player) {
+        Entry e = ENTRIES.get(player.getUUID());
+        if (e == null || !e.playing) return;
+        e.layer.setAnimation(null);
+        e.playing = false;
     }
 
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level;
+        ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
-            // Вийшли зі світу: клієнтські записи однаково мертві, але
-            // залишений UUID змусив би нас «думати», що поза ще грає,
-            // і наступний матч почався б без неї. Скидаємо локально —
-            // сам шар PAL чиститься на disconnect окремо.
-            posing.clear();
+            ENTRIES.clear();
             return;
         }
-
-        // 1. Хто ПОВИНЕН лежати зараз.
-        Set<UUID> shouldPose = new HashSet<>();
-        List<AbstractClientPlayer> candidates = new ArrayList<>();
-        for (Player player : level.players()) {
-            if (!(player instanceof AbstractClientPlayer clientPlayer)) continue;
-            if (!ClientMatchState.isProne(clientPlayer.getUUID())) continue;
-            shouldPose.add(clientPlayer.getUUID());
-            candidates.add(clientPlayer);
-        }
-
-        // 2. Почати тим, кому ще не граємо. `false` означає, що PAL ще
-        //    не готовий (ресурси/реєстр) — у такому разі НЕ позначаємо
-        //    гравця як «грає», щоб спробувати наступного тіку.
-        for (AbstractClientPlayer player : candidates) {
-            if (posing.contains(player.getUUID())) continue;
-            if (PlayerPoseController.playAction(player, LIE_ACTION)) {
-                posing.add(player.getUUID());
+        try {
+            Set<UUID> present = new HashSet<>();
+            for (AbstractClientPlayer p : level.players()) {
+                present.add(p.getUUID());
+                if (ClientMatchState.isFallen(p.getUUID())) start(p);
+                else stop(p);
             }
-        }
-
-        // 3. Зупинити тим, хто більше не лежить (встав, помер, вибув).
-        for (UUID id : new ArrayList<>(posing)) {
-            if (shouldPose.contains(id)) continue;
-            posing.remove(id);
-            AbstractClientPlayer player = findPlayer(level, id);
-            if (player != null) {
-                PlayerPoseController.stopAction(player, LIE_ACTION);
+            for (Iterator<Map.Entry<UUID, Entry>> it = ENTRIES.entrySet().iterator(); it.hasNext(); ) {
+                Map.Entry<UUID, Entry> me = it.next();
+                if (!present.contains(me.getKey())) {
+                    me.getValue().layer.setAnimation(null);
+                    it.remove();
+                }
             }
+        } catch (Throwable t) {
+            ManiacMod.LOGGER.warn("[ManiacMod] downed_lie tick: {}", t.toString());
         }
-
-        // Окремо прибирати "залишки" не потрібно: гравець, що зник із
-        // ростеру, наступного тіка не потрапить у shouldPose і піде
-        // звичайним шляхом кроку 3 (зупинка там безпечна навіть коли
-        // сутності вже немає — PlayerPoseController просто нічого не знайде).
-    }
-
-    private static AbstractClientPlayer findPlayer(ClientLevel level, UUID id) {
-        for (Player player : level.players()) {
-            if (player.getUUID().equals(id) && player instanceof AbstractClientPlayer clientPlayer) {
-                return clientPlayer;
-            }
-        }
-        // Поза межами списку видимих гравців — спробувати дістати
-        // сутність напряму (той самий прийом, що в ManiacStunWorldMarker).
-        if (level.getPlayerByUUID(id) instanceof AbstractClientPlayer clientPlayer) {
-            return clientPlayer;
-        }
-        return null;
     }
 
     /** Скидання при виході з матчу — див. {@code ClientMatchState#reset}. */
     public static void reset() {
-        posing.clear();
+        for (Entry e : ENTRIES.values()) e.layer.setAnimation(null);
+        ENTRIES.clear();
     }
 }

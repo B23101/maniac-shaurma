@@ -157,7 +157,12 @@ public final class ServerHooks {
             && match.isSurvivor(attacker.getUUID())
             && match.isManiac(targetPlayer.getUUID())) {
             event.setCanceled(true);
-            match.maniacStun().onCrowbarHitManiac(attacker, targetPlayer, attacker.getMainHandItem());
+            var held = attacker.getMainHandItem();
+            if (held.getItem() instanceof com.log_to_kot.maniacmod.items.BatItem) {
+                match.maniacStun().onBatHitManiac(attacker, targetPlayer, held);
+            } else {
+                match.maniacStun().onCrowbarHitManiac(attacker, targetPlayer, held);
+            }
             return;
         }
 

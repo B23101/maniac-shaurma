@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 /**
  * Лежачий виживий: не дає РЕНДЕРЕРУ покласти модель, бо це вже робить
- * анімація {@code downed_lie.json}.
+ * повнотілова PAL-анімація {@code downed_lie} ({@code DownedPoseAnimation}).
  *
  * ── Що було не так ───────────────────────────────────────────────────
  * Хітбокс лежачого тримає {@code MixinPlayerDownedPose}: він ставить
@@ -48,7 +48,7 @@ public abstract class MixinPlayerRendererDownedUpright {
                        target = "Lnet/minecraft/client/player/AbstractClientPlayer;getSwimAmount(F)F"),
               require = 0)
     private float maniacmod$noSwimLayingWhenDowned(AbstractClientPlayer player, float partialTick) {
-        if (CANCEL_SWIM_LAYING && ClientMatchState.isProne(player.getUUID())) return 0.0f;
+        if (CANCEL_SWIM_LAYING && ClientMatchState.isFallen(player.getUUID())) return 0.0f;
         return player.getSwimAmount(partialTick);
     }
 }

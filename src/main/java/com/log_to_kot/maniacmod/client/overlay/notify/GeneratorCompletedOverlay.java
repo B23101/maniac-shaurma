@@ -1,7 +1,8 @@
 package com.log_to_kot.maniacmod.client.overlay.notify;
 
 import com.log_to_kot.maniacmod.client.style.UiAnim;
-import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
@@ -52,7 +53,7 @@ public final class GeneratorCompletedOverlay {
     private static final long TOTAL_MS = FADE_IN_MS + HOLD_MS + FADE_OUT_MS;
 
     private static final int PANEL_WIDTH = 320;
-    private static final int PANEL_HEIGHT = 40;
+    private static final int PANEL_HEIGHT = 46;
     private static final int ABOVE_CENTER_OFFSET = 70;
 
     private static String text = null;
@@ -98,14 +99,21 @@ public final class GeneratorCompletedOverlay {
         pose.scale(scale, scale, 1f);
         pose.translate(-screenW / 2f, -(panelY + PANEL_HEIGHT / 2f), 0f);
 
-        int panelBg = applyAlpha(ManiacUiTheme.PANEL_BG, alpha);
-        int border = applyAlpha(ManiacUiTheme.BORDER_BRIGHT, alpha);
-        int textColor = applyAlpha(ManiacUiTheme.TEXT_TITLE, alpha);
-
-        graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + PANEL_HEIGHT, panelBg);
-        ManiacUiTheme.border1px(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, border);
+        // Панель у стилі генератора + бар «життя» банера, що спорожнює за час показу.
+        RenderSystem.enableBlend();
+        RenderSystem.setShaderColor(1f, 1f, 1f, alpha);
+        GeneratorFuelUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT);
         graphics.drawCenteredString(mc.font, text,
-            panelX + PANEL_WIDTH / 2, panelY + (PANEL_HEIGHT - mc.font.lineHeight) / 2, textColor);
+            panelX + PANEL_WIDTH / 2, panelY + 9, GeneratorFuelUiTheme.TEXT);
+        float life = 1f - Math.min(1f, age / (float) TOTAL_MS);
+        GeneratorFuelUiTheme.drawBarFx(graphics, panelX + 10, panelY + PANEL_HEIGHT - 12, PANEL_WIDTH - 20, 5,
+            life, life, GeneratorFuelUiTheme.FILL, Math.max(0f, 1f - age / 300f));
+        // Розбіжне кільце при появі.
+        if (age < 500) {
+            GeneratorFuelUiTheme.pulseRing(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT,
+                GeneratorFuelUiTheme.HIGHLIGHT, age / 500f, 12);
+        }
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
 
         pose.popPose();
     }

@@ -11,6 +11,8 @@ rescueHelperBonus: 0.2
 staminaDrainPerTick: 0.008
 staminaRegenPerTick: 0.004
 fallKnockdownHeightBlocks: 4
+fallLegWearMinHeightBlocks: 2
+fallLegWearPerBlock: 8.0
 legBreakMinHeightBlocks: 6
 legBreakChanceAtMinHeight: 0.2
 legBreakMaxHeightBlocks: 10
@@ -20,3 +22,6 @@ heartbeatRangeBlocks: 12
 standUpDecayTicks: 80
 maniacMercyRadiusBlocks: 15
 maniacHitSpeedTicks: 100
+adrenalineDurationTicks: 200
+adrenalineSpeedAmplifier: 1
+adrenalineCrashTicks: 100

@@ -214,7 +214,16 @@ public final class TrapChooseScreen extends Screen {
 
         maybeFinishConfirm(now);
 
+        // Відкриття: фон плавно темніє, по панелі пробігає промінь-«розгортка».
+        float openT = Math.min(1f, (now - openedAtMillis) / 380f);
+        graphics.fill(0, 0, width, height,
+            com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme.alpha(0xFF000000,
+                0.38f * com.log_to_kot.maniacmod.client.style.UiAnim.easeOutCubic(openT)));
         ManiacUiTheme.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, panelH, true);
+        if (openT < 1f) {
+            com.log_to_kot.maniacmod.client.style.UiFx.scanBeam(graphics, panelX + 1, panelY + 1,
+                PANEL_WIDTH - 2, panelH - 2, openT, 26, 0xFFFFFF, 46);
+        }
 
         graphics.drawCenteredString(font, getTitle().getString().toUpperCase(Locale.ROOT),
             panelX + PANEL_WIDTH / 2, titleTop(), ManiacUiTheme.TEXT_TITLE);

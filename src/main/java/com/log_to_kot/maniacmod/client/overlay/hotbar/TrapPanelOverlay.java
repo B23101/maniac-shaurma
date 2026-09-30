@@ -3,8 +3,9 @@ package com.log_to_kot.maniacmod.client.overlay.hotbar;
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.ManiacKeybinds;
-import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
+import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.UiAnim;
+import com.log_to_kot.maniacmod.client.style.UiFx;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -53,7 +54,10 @@ public final class TrapPanelOverlay {
     private static final int MARGIN_BOTTOM = 14;
 
     /** Активний слот — той самий жовтогарячий акцент, що й пастки в хотбарі маньяка. */
-    private static final int ACTIVE_BORDER = 0xFFFF9838;
+    private static final int ACTIVE_BORDER = GeneratorFuelUiTheme.HIGHLIGHT;
+    private static final int TRAP_STRIP = GeneratorFuelUiTheme.FILL_WARN;
+    private static final float[] readyFlash = new float[8];
+    private static final boolean[] wasCooling = new boolean[8];
 
     // ── Анімаційний стан (статичний — клас без інстансу, як і хотбар) ────
     // entrance       : плавний в'їзд колонки зліва, 0 → 1.
@@ -123,12 +127,12 @@ public final class TrapPanelOverlay {
 
         // Плавний в'їзд колонки зліва-знизу: поки entrance росте 0→1,
         // панель піднімається на місце (ease-out — гальмує в кінці).
-        int slide = Math.round((1f - UiAnim.easeOutCubic(UiAnim.clamp01(entrance))) * (SLOT + MARGIN_LEFT));
-        int x = MARGIN_LEFT - slide;
-        int yShift = Math.round((1f - UiAnim.easeOutCubic(UiAnim.clamp01(entrance))) * MARGIN_BOTTOM * 0.5f);
-
+        // Каскад: слоти в'їжджають зліва по черзі, з легким overshoot.
         for (int slot = 0; slot < ids.size(); slot++) {
-            renderSlot(graphics, mc, slot, ids.get(slot), x, top + slot * (SLOT + GAP) + yShift, tick, selectionPulse);
+            float local = UiAnim.clamp01(entrance * 1.4f - slot * 0.12f);
+            float e = UiAnim.easeOutBack(local, 0.9f);
+            int x = MARGIN_LEFT - Math.round((1f - e) * (SLOT + MARGIN_LEFT + 6));
+            renderSlot(graphics, mc, slot, ids.get(slot), x, top + slot * (SLOT + GAP), tick, selectionPulse);
         }
     }
 
@@ -139,17 +143,31 @@ public final class TrapPanelOverlay {
         boolean ready = remaining <= 0f;
         boolean active = ClientMatchState.activeTrapSlot() == slot;
 
-        graphics.fill(x, y, x + SLOT, y + SLOT, ManiacUiTheme.SLOT_FILL);
+        // Слот у стилі панелей генератора.
+        int border = active ? ACTIVE_BORDER : GeneratorFuelUiTheme.PANEL_BORDER;
+        GeneratorFuelUiTheme.drawSlot(graphics, x, y, SLOT, SLOT, border);
+        if (active) {
+            float breathe = 0.7f + 0.3f * (float) Math.sin(System.currentTimeMillis() / 280.0);
+            UiFx.glow(graphics, x, y, SLOT, SLOT, ACTIVE_BORDER, 0.30f * breathe + pulse * 0.5f, 4);
+            ManiacBorder.draw(graphics, x + 1, y + 1, SLOT - 2, SLOT - 2, withAlpha(ACTIVE_BORDER, breathe));
+            UiFx.brackets(graphics, x, y, SLOT, SLOT, withAlpha(ACTIVE_BORDER, 0.95f), 6,
+                0.35f + 0.65f * pulse, 4);
+            // Ковзний блик по активному слоту.
+            UiFx.scanBeam(graphics, x + 1, y + 1, SLOT - 2, SLOT - 2,
+                (System.currentTimeMillis() % 2400L) / 2400f, 6, 0xFFFFFF, 26);
+        }
+        // Смужка типу (пастка) зверху.
+        graphics.fill(x + 1, y + 1, x + SLOT - 1, y + 3, withAlpha(TRAP_STRIP, ready ? 0.9f : 0.4f));
 
-        // Рамка: активний слот — товстіша й жовтогаряча (він «в руці»).
-        int border = active ? ACTIVE_BORDER
-            : ready ? ManiacUiTheme.MENU_ACCENT_GOLD : ManiacUiTheme.BORDER;
-        ManiacUiTheme.border1px(graphics, x, y, SLOT, SLOT, border);
-        if (active) ManiacUiTheme.border1px(graphics, x + 1, y + 1, SLOT - 2, SLOT - 2, border);
+        // Спалах готовності: коли кулдаун щойно скінчився.
+        int fi = Math.min(slot, readyFlash.length - 1);
+        if (wasCooling[fi] && ready) readyFlash[fi] = 1f;
+        wasCooling[fi] = !ready;
+        readyFlash[fi] = UiAnim.approach(readyFlash[fi], 0f, 4.5f, 0.016f);
 
         // Пружний спалах довкола активного слота — затухає за PULSE_DECAY_SPEED.
         if (active && pulse > 0.03f) {
-            ManiacUiTheme.border1px(graphics, x - 1, y - 1, SLOT + 2, SLOT + 2, withAlpha(ACTIVE_BORDER, pulse));
+            GeneratorFuelUiTheme.pulseRing(graphics, x, y, SLOT, SLOT, ACTIVE_BORDER, 1f - pulse, 9);
         }
 
         drawIcon(graphics, trapId, x, y, ready ? 1.0f : 0.40f);
@@ -157,6 +175,8 @@ public final class TrapPanelOverlay {
         if (!ready) {
             int curtain = Math.round((SLOT - 2) * remaining);
             graphics.fill(x + 1, y + 1, x + SLOT - 1, y + 1 + curtain, 0xB0000000);
+            GeneratorFuelUiTheme.drawBarFx(graphics, x + 4, y + SLOT - 7, SLOT - 8, 4,
+                1f - remaining, 1f - remaining, TRAP_STRIP, 0f);
 
             // Округлення вгору: «0с» ніколи не показується, поки пастка не готова.
             int seconds = (int) Math.ceil(
@@ -164,17 +184,31 @@ public final class TrapPanelOverlay {
             String text = String.valueOf(seconds);
             graphics.drawString(mc.font, text,
                 x + (SLOT - mc.font.width(text)) / 2,
-                y + (SLOT - mc.font.lineHeight) / 2 + 2,
-                ManiacUiTheme.TEXT_TITLE, true);
+                y + (SLOT - mc.font.lineHeight) / 2 - 1,
+                GeneratorFuelUiTheme.TEXT, true);
+        }
+        if (readyFlash[fi] > 0.02f) {
+            graphics.fill(x + 1, y + 1, x + SLOT - 1, y + SLOT - 1,
+                GeneratorFuelUiTheme.alpha(0xFFFFFFFF, readyFlash[fi] * 0.5f));
+            GeneratorFuelUiTheme.pulseRing(graphics, x, y, SLOT, SLOT, TRAP_STRIP, 1f - readyFlash[fi], 8);
         }
 
         // Справжня назва прив'язки: перепризначення клавіші видно одразу.
         String key = ManiacKeybinds.TRAPS[slot].getTranslatedKeyMessage().getString();
-        graphics.drawString(mc.font, key, x + 4, y + 3,
-            active ? ACTIVE_BORDER : ready ? ManiacUiTheme.TEXT_ACCENT : ManiacUiTheme.TEXT_BODY, true);
+        graphics.drawString(mc.font, key, x + 4, y + 5,
+            active ? ACTIVE_BORDER : ready ? GeneratorFuelUiTheme.HIGHLIGHT : GeneratorFuelUiTheme.HIT_ZONE, true);
     }
 
-    /** Накладає прозорість на колір 0xFFRRGGBB, зберігаючи його RGB. */
+    /** Локальний хелпер 1px рамки (щоб не тягнути стару тему). */
+    private static final class ManiacBorder {
+        static void draw(GuiGraphics g, int x, int y, int w, int h, int c) {
+            g.fill(x, y, x + w, y + 1, c);
+            g.fill(x, y + h - 1, x + w, y + h, c);
+            g.fill(x, y, x + 1, y + h, c);
+            g.fill(x + w - 1, y, x + w, y + h, c);
+        }
+    }
+
     private static int withAlpha(int color, float alpha) {
         int a = Math.round(UiAnim.clamp01(alpha) * 255f);
         return (a << 24) | (color & 0x00FFFFFF);
