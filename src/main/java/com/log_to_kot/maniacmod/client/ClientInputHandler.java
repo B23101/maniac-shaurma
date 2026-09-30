@@ -11,6 +11,7 @@ import com.log_to_kot.maniacmod.net.c2s.intent.HighlightTogglePacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.StandUpPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import dev.shaurmalib.forge.network.packets.InventorySlotAllocationPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.EntityHitResult;
@@ -117,8 +118,47 @@ public final class ClientInputHandler {
         return heldGenerator;
     }
 
+    /**
+     * Гасить натискання ванільних клавіш хотбару для слотів, яких у гравця
+     * немає за розподілом слотів.
+     *
+     * ── Чому це потрібно ─────────────────────────────────────────────
+     * «Підсвітка» виживого сидить на клавіші 5 — тій самій, що й ванільний
+     * {@code key.hotbar.5}. Слотів у виживого 4, п'ятого нема, але ванільна
+     * обробка клавіш ({@code Minecraft.handleKeybinds}) однаково ставить
+     * {@code inventory.selected = 4} — і слот перемикався на «неіснуючий»
+     * щоразу, як гравець тиснув підсвітку.
+     *
+     * ── Чому саме START ──────────────────────────────────────────────
+     * {@code handleKeybinds} виконується всередині тіка, до {@code END}.
+     * Якщо забрати клік лише на END, слот уже перемкнено. На START клік
+     * ще не спожитий, тож ванілі нічого не лишається обробляти. Наші
+     * власні {@code KeyMapping} (підсвітка, пастки) — окремі об'єкти зі
+     * своїми лічильниками кліків, їх це не зачіпає.
+     *
+     * Без обмежень (креатив за політикою EXEMPT, лобі без ролі) — нічого
+     * не гасимо, всі 9 слотів працюють як у ванілі.
+     */
+    private static void swallowVanillaHotbarKeysForUnavailableSlots() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+        if (!InventorySlotAllocationPacket.ClientHandler.isRestricted()) return;
+
+        net.minecraft.client.KeyMapping[] hotbarKeys = mc.options.keyHotbarSlots;
+        for (int slot = 0; slot < hotbarKeys.length; slot++) {
+            if (InventorySlotAllocationPacket.ClientHandler.isAllowed(slot)) continue;
+            while (hotbarKeys[slot].consumeClick()) {
+                // навмисно порожньо: клік з'їдаємо, слот не перемикаємо
+            }
+        }
+    }
+
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase == TickEvent.Phase.START) {
+            swallowVanillaHotbarKeysForUnavailableSlots();
+            return;
+        }
         if (event.phase != TickEvent.Phase.END) return;
 
         Minecraft mc = Minecraft.getInstance();

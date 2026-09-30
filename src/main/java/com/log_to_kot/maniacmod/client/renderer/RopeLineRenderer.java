@@ -31,8 +31,8 @@ public final class RopeLineRenderer {
     /** Чорний кабель. Правиться лише тут — колір спільний для дроту й прев'ю розміщення. */
     public static final float COLOR_R = 0.03f, COLOR_G = 0.03f, COLOR_B = 0.035f;
 
-    /** Товщина стрічки (та сама, що в зіплайна). */
-    private static final float SCALE = 0.09F;
+    /** Товщина стрічки. У зіплайна 0.09 — для дроту-розтяжки це надто масивно, тому тонше (правиться лише тут). */
+    private static final float SCALE = 0.03F;
 
     private RopeLineRenderer() {}
 
