@@ -9,13 +9,15 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.UUID;
 
 /**
- * Спільні правила розміщення пасток: не під гравцем і не ближче N
- * блоків до жодного гравця. Ці правила ОДНАКОВІ для капкана, мотузки,
+ * Спільні правила розміщення пасток: не в гравця (його хітбокс не
+ * має перетинати місце пастки) і не крізь гравця (для дроту гравець —
+ * стіна). Ці правила ОДНАКОВІ для капкана, мотузки,
  * дроту, розтяжки — тому це окремий клас, а не метод, дубльований у
  * кожному {@link TrapArchetype}-підкласі. Зміна правила (наприклад,
  * збільшити мінімальну відстань) — одна правка тут.
@@ -26,7 +28,7 @@ import java.util.UUID;
  * від людей навколо.
  *
  * ── Чому виживі беруться з матчу, а не з усіх гравців сервера ────────
- * «Не ближче N блоків до гравця» стосується тих, хто може потрапити в
+ * Правило «не в гравця» стосується тих, хто може потрапити в
  * пастку: виживих матчу. Маньяк, що ставить пастку впритул до себе, —
  * нормальна ситуація, а глядачі й ті, хто вже вибув, пастку не
  * спрацьовують і місце не блокують.
@@ -85,32 +87,48 @@ public final class TrapPlacementRules {
     }
 
     /**
-     * Чи хтось із виживих стоїть ближче за {@code trapMinDistanceToPlayerBlocks}
-     * до місця пастки. Це включає «не під гравцем»: гравець прямо над
-     * блоком має відстань менше за будь-який осмислений мінімум, тож
-     * окремої перевірки «під ногами» не потрібно — дві перевірки, що
-     * означають одне, розійшлись би при першій зміні конфігу.
+     * Чи хтось із виживих стоїть НА самому місці пастки — тобто його
+     * хітбокс перетинає клітинку над блоком-підлогою (і ще блок вище, щоб
+     * гравець у стрибку теж рахувався).
      *
-     * Відстань міряється ГОРИЗОНТАЛЬНО від центру пастки: вертикальна
-     * різниця не має значення, коли гравець висить на драбині чи стоїть
-     * на поверх вище — пастка однаково опиниться під ним.
+     * Раніше тут була заборона в радіусі N блоків навколо гравця; тепер
+     * заборонено лише ставити пастку В гравця. Поряд з ним — можна.
      */
     private static boolean isTooCloseToAnySurvivor(BlockPos floor, ServerPlayer placer) {
-        int min = ManiacConfigs.get(ConfigSchema.TRAP_MIN_DISTANCE_TO_PLAYER);
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return false;
-
-        double minSqr = (double) min * min;
-        double cx = floor.getX() + 0.5;
-        double cz = floor.getZ() + 0.5;
 
         for (UUID id : match.survivorIds()) {
             ServerPlayer survivor = match.onlinePlayer(id);
             if (survivor == null || survivor == placer) continue;
+            if (occupiesCell(floor, survivor.getBoundingBox())) return true;
+        }
+        return false;
+    }
 
-            double dx = survivor.getX() - cx;
-            double dz = survivor.getZ() - cz;
-            if (dx * dx + dz * dz < minSqr) return true;
+    /** Клітинка пастки: стовп 1×1 від верхньої грані підлоги заввишки {@value #CELL_HEIGHT}. */
+    private static final double CELL_HEIGHT = 2.0;
+
+    /** Чи хітбокс гравця перетинає клітинку пастки над {@code floor}. */
+    public static boolean occupiesCell(BlockPos floor, AABB playerBox) {
+        AABB cell = new AABB(
+            floor.getX(), floor.getY() + 1.0, floor.getZ(),
+            floor.getX() + 1.0, floor.getY() + 1.0 + CELL_HEIGHT, floor.getZ() + 1.0);
+        return cell.intersects(playerBox);
+    }
+
+    /**
+     * Чи перетинає відрізок дроту a→b хітбокс хоч одного виживого. Такий
+     * гравець рахується стіною: дріт крізь нього не протягнути.
+     */
+    public static boolean isSegmentBlockedBySurvivor(Vec3 a, Vec3 b, ServerPlayer placer) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return false;
+
+        for (UUID id : match.survivorIds()) {
+            ServerPlayer survivor = match.onlinePlayer(id);
+            if (survivor == null || survivor == placer) continue;
+            if (WireGeometry.segmentTouchesBox(a, b, survivor.getBoundingBox())) return true;
         }
         return false;
     }

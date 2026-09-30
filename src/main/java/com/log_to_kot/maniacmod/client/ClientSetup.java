@@ -20,8 +20,11 @@ import com.log_to_kot.maniacmod.client.overlay.roster.TabRosterOverlay;
 import com.log_to_kot.maniacmod.client.overlay.debug.DebugOverlay;
 import com.log_to_kot.maniacmod.client.overlay.vitals.SurvivorVitalsOverlay;
 import com.log_to_kot.maniacmod.client.overlay.vitals.LowHpVignetteOverlay;
-import com.log_to_kot.maniacmod.client.renderer.CrowbarDurabilityDecorator;
-import com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator;
+import com.log_to_kot.maniacmod.client.renderer.ItemHudDecorator;
+import com.log_to_kot.maniacmod.items.BatItem;
+import com.log_to_kot.maniacmod.items.CrowbarItem;
+import com.log_to_kot.maniacmod.items.FuelCanisterItem;
+import com.log_to_kot.maniacmod.items.ScrewdriverItem;
 import com.log_to_kot.maniacmod.client.renderer.GroundItemRenderer;
 import com.log_to_kot.maniacmod.client.renderer.BearTrapRenderer;
 import com.log_to_kot.maniacmod.client.renderer.ElectricWireMountRenderer;
@@ -80,6 +83,10 @@ public final class ClientSetup {
      */
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
+        // Іконка вікна гри — як у snipers_shaurma: config/maniacmod/window_icon.png
+        // (створюється з ресурсів мода при першому запуску). Виклик GLFW — у головному потоці.
+        event.enqueueWork(CustomWindowIcon::trySetIcon);
+
         InventorySlotAllocationClientHooks.setCustomHotbarRenderer(new ManiacHotbarOverlay());
         ShaurmaLib.attachTabVisibility(new TabRosterOverlay());
 
@@ -164,6 +171,7 @@ public final class ClientSetup {
         event.registerEntityRenderer(ModEntityTypes.GROUND_ITEM.get(), GroundItemRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.GENERATOR.get(), GeneratorRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.BEAR_TRAP.get(), BearTrapRenderer::new);
+        event.registerEntityRenderer(ModEntityTypes.ROPE_TRAP.get(), com.log_to_kot.maniacmod.client.renderer.RopeTrapRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.ELECTRIC_WIRE.get(), ElectricWireRenderer::new);
         event.registerEntityRenderer(ModEntityTypes.ELECTRIC_WIRE_MOUNT.get(), ElectricWireMountRenderer::new);
         // Рендерер маньяка не реєструється за EntityType (усі маньяки —
@@ -181,14 +189,12 @@ public final class ClientSetup {
      */
     @SubscribeEvent
     public static void onRegisterItemDecorations(RegisterItemDecorationsEvent event) {
-        event.register(ModItems.get("fuel_canister").get(), new FuelCanisterChargeDecorator());
-        event.register(ModItems.get("crowbar").get(), new CrowbarDurabilityDecorator());
-        // Викрутка: число міцності (знімається -5%/с під час ремонту).
-        event.register(ModItems.get("screwdriver").get(), new CrowbarDurabilityDecorator());
-        // Біта: число міцності (правий верхній кут) + ВЛАСНИЙ бар перезарядки під іконкою.
-        event.register(ModItems.get("bat").get(), new CrowbarDurabilityDecorator());
-        event.register(ModItems.get("bat").get(),
-            new com.log_to_kot.maniacmod.client.renderer.ItemCooldownBarDecorator(com.log_to_kot.maniacmod.items.BatItem.COOLDOWN_KEY));
+        // ОДИН декоратор на предмет: відсотки й перезарядка не накладаються
+        // (у спокої — число, під час перезарядки — бар + секунди), див. ItemHudDecorator.
+        event.register(ModItems.get("fuel_canister").get(), new ItemHudDecorator(FuelCanisterItem::getCharge, null));
+        event.register(ModItems.get("crowbar").get(), new ItemHudDecorator(CrowbarItem::getDurability, CrowbarItem.COOLDOWN_KEY));
+        event.register(ModItems.get("screwdriver").get(), new ItemHudDecorator(ScrewdriverItem::getDurability, null));
+        event.register(ModItems.get("bat").get(), new ItemHudDecorator(BatItem::getDurability, BatItem.COOLDOWN_KEY));
     }
 
     /** Кастомні частинки: провайдери й кадри ({@code particles/*.json}). */
@@ -208,6 +214,9 @@ public final class ClientSetup {
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_ground_item_hint",
             (gui, graphics, partialTick, width, height) ->
                 GroundItemHintOverlay.render(graphics));
+        event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_trap_place_hint",
+            (gui, graphics, partialTick, width, height) ->
+                com.log_to_kot.maniacmod.client.traps.TrapPlacementHintOverlay.render(graphics));
         event.registerAbove(VanillaGuiOverlay.CROSSHAIR.id(), "maniac_trap_escape_hint",
             (gui, graphics, partialTick, width, height) ->
                 TrapEscapeHintOverlay.render(graphics));

@@ -9,6 +9,7 @@ import com.log_to_kot.maniacmod.core.phase.PhaseListener;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.BearTrapEntity;
 import com.log_to_kot.maniacmod.entity.ElectricWireEntity;
+import com.log_to_kot.maniacmod.entity.RopeTrapEntity;
 import com.log_to_kot.maniacmod.items.GeoScissorsItem;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.map.minigame.TargetMinigameSpec;
@@ -241,7 +242,11 @@ public final class TrapModule implements PhaseListener {
             ManiacArchetype archetype = m == null ? null : m.maniacArchetype();
             if (archetype != null) {
                 for (ServerPlayer p : players) {
-                    if (m.isManiac(p.getUUID())) syncCatalogIfChoiceNeeded(p, archetype);
+                    if (!m.isManiac(p.getUUID())) continue;
+                    // Вибирати нема з чого — беремо пастки й шлемо набір ОДРАЗУ, а не
+                    // на вході в HUNT: інакше оголошення ролі маньяка (воно стартує
+                    // від цього пакета) висіло б порожнім увесь ROLE_REVEAL.
+                    if (!autoPickIfNoChoice(p, archetype)) syncCatalogIfChoiceNeeded(p, archetype);
                 }
             }
         }
@@ -288,6 +293,9 @@ public final class TrapModule implements PhaseListener {
         // стирати його на вході в ROLE_REVEAL означало б знищити вибір,
         // який щойно зроблено.
         if (phase == GamePhase.LOBBY || phase == GamePhase.RESET) resetChoice();
+        // Страховка: порожній склад підсвітки ПІСЛЯ всього очищення — гарантовано
+        // гасить контури в усіх, навіть якщо проміжний пакет випередила зміна фази.
+        broadcastVictimGlow();
     }
 
     @Override
@@ -413,6 +421,34 @@ public final class TrapModule implements PhaseListener {
         ModNetwork.toPlayer(maniac, new TrapCatalogPacket(ids, limit));
     }
 
+    /**
+     * Каталог не більший за ліміт → вибору немає: беремо всі пастки й шлемо
+     * набір маньяку негайно.
+     *
+     * @return true, якщо вибір закрито автоматично (екран вибору не потрібен)
+     */
+    public boolean autoPickIfNoChoice(ServerPlayer maniac, ManiacArchetype archetype) {
+        if (archetype == null) return false;
+        int limit = Math.min(ManiacConfigs.get(ConfigSchema.TRAPS_PER_MATCH),
+                             ManiacArchetype.MAX_TRAP_SLOTS);
+        if (archetype.traps().size() > limit) return false;
+        if (chosenSlots.isEmpty()) chooseAll(archetype);
+        syncLoadout(maniac);
+        return true;
+    }
+
+    /**
+     * Маньяк іще має обрати пастки: каталог більший за ліміт, а вибір не
+     * зроблено. Поки це так, {@code MatchOrchestrator} не закриває ROLE_REVEAL
+     * (у межах обмеженого запасу часу) — інакше вибір мовчки втрачався б.
+     */
+    public boolean choicePending(ManiacArchetype archetype) {
+        if (archetype == null) return false;
+        int limit = Math.min(ManiacConfigs.get(ConfigSchema.TRAPS_PER_MATCH),
+                             ManiacArchetype.MAX_TRAP_SLOTS);
+        return archetype.traps().size() > limit && chosenSlots.isEmpty();
+    }
+
     /** Порожній набір — клієнт ховає панель і виходить із режиму розміщення. */
     private void clearLoadoutOnClient(List<ServerPlayer> players) {
         MatchOrchestrator m = match();
@@ -498,7 +534,7 @@ public final class TrapModule implements PhaseListener {
 
         finishPlacement(maniac, slot, type, body, point);
         maniac.serverLevel().playSound(null, point,
-            ModSounds.TRAP_PLACE.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
+            type.placeSound(), SoundSource.BLOCKS, 1.0f, 1.0f);
         return TrapArchetype.PlacementResult.OK;
     }
 
@@ -610,7 +646,18 @@ public final class TrapModule implements PhaseListener {
             if (isOccupied(level, point)) return TrapArchetype.PlacementResult.OCCUPIED;
         }
 
-        return type.validatePlacement(level, a, b);
+        TrapArchetype.PlacementResult pair = type.validatePlacement(level, a, b);
+        if (!pair.ok()) return pair;
+
+        // Гравець — така сама перешкода, як блок: дріт крізь нього не
+        // протягнути. Клієнт позицій виживих не знає (щоб колір не
+        // видавав їх крізь стіни), тож це лише серверна перевірка.
+        Vec3 wa = ElectricWireArchetype.wireAnchor(level, a);
+        Vec3 wb = ElectricWireArchetype.wireAnchor(level, b);
+        if (TrapPlacementRules.isSegmentBlockedBySurvivor(wa, wb, maniac)) {
+            return TrapArchetype.PlacementResult.OBSTRUCTED;
+        }
+        return TrapArchetype.PlacementResult.OK;
     }
 
     /**
@@ -622,7 +669,7 @@ public final class TrapModule implements PhaseListener {
     private boolean isOccupied(ServerLevel level, BlockPos floor) {
         AABB box = new AABB(floor.above());
         for (Entity e : level.getEntities((Entity) null, box.inflate(0.3),
-                x -> x instanceof BearTrapEntity)) {
+                x -> x instanceof BearTrapEntity || x instanceof RopeTrapEntity)) {
             if (isRegistered(e)) return true;
         }
 
@@ -951,6 +998,13 @@ public final class TrapModule implements PhaseListener {
         MatchOrchestrator m = match();
         if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return false;
 
+        // Мотузка: спершу підвішений союзник у прицілі, інакше — сам собі
+        // (якщо підвішений я). Ножиці ПКМ, без цілі на дріт.
+        if (m.isSurvivor(player.getUUID())) {
+            if (tryCutHangingInSight(player)) return true;
+            if (ropeHangs.containsKey(player.getUUID()) && cutRope(player, player)) return true;
+        }
+
         ServerLevel level = player.serverLevel();
         double range = ManiacConfigs.get(ConfigSchema.GEO_SCISSORS_RANGE_BLOCKS);
         Vec3 eye = player.getEyePosition();
@@ -1141,6 +1195,11 @@ public final class TrapModule implements PhaseListener {
      * модифікований і слати пакет коли завгодно.
      */
     public void onEscapeStart(ServerPlayer player) {
+        // Підвішений мотузкою: F відкриває екран розкачування (можна повторно).
+        if (ropeHangs.containsKey(player.getUUID())) {
+            ModNetwork.toPlayer(player, new com.log_to_kot.maniacmod.net.s2c.minigame.RopeMinigameOpenPacket());
+            return;
+        }
         UUID trapId = escapePromptTrap.remove(player.getUUID());
         Integer left = escapePromptTicks.remove(player.getUUID());
         if (trapId == null || left == null) return;
@@ -1325,6 +1384,309 @@ public final class TrapModule implements PhaseListener {
         return level.getEntities().get(trapId) instanceof BearTrapEntity trap ? trap : null;
     }
 
+    // ── Мотузка-підвіс ───────────────────────────────────────────────────
+    //
+    // Модель: жорсткий маятник. Кут theta (рад) відраховується від вертикалі
+    // у бік осі гойдання (вправо від погляду жертви на момент підвішування).
+    // Щотіка: omega = (omega - k·theta)·(1 - damping); theta += omega.
+    // Натискання A/D додає omega·kick лише у ТАКТ (у напрямку поточного руху й
+    // не частіше за інтервал) — інакше промах, який гасить розгойдування вдвічі.
+    // Розмах ≥ ropeSwingBreakDegrees — нитка рветься, жертва вільна.
+    // Позицією жертви керує СЕРВЕР (teleportTo щотіка, коли вона зрушила):
+    // без гравітації, з фіксованим yaw — вона «висить» і не може тікати.
+
+    /** Половина висоти тіла: центр підвішеного тіла над початком хітбокса жертви. */
+    private static final double ROPE_BODY_HALF = 1.0;
+    /** На скільки голова висить над підлогою у спокої. */
+    private static final double ROPE_HEAD_CLEARANCE = 0.5;
+    /** Скільки напрямків гойдання перебираємо по півколу (15° крок). */
+    private static final int ROPE_AXIS_CANDIDATES = 12;
+    /** Скільки позицій маятника перевіряємо в кожну сторону. */
+    private static final int ROPE_AXIS_SAMPLES = 6;
+    /** Повільніше за це вважається «стоїть»: тоді натискання будь-якого напрямку зараховується. */
+    private static final double ROPE_REST_OMEGA = 0.004;
+
+    /** Стан одного підвісу (за UUID жертви). theta/omega/lastPress змінюються щотіка. */
+    private static final class RopeHang {
+        final UUID ropeId;
+        final Vec3 pivot;          // точка на стелі
+        final double length;       // від pivot до центру тіла
+        final Vec3 axis;           // одиничний вектор осі гойдання
+        final float yaw;           // фіксований yaw жертви
+        final double breakRad;
+        double theta;
+        double omega;
+        long lastPress = Long.MIN_VALUE / 2;
+
+        RopeHang(UUID ropeId, Vec3 pivot, double length, Vec3 axis, float yaw, double breakRad) {
+            this.ropeId = ropeId;
+            this.pivot = pivot;
+            this.length = length;
+            this.axis = axis;
+            this.yaw = yaw;
+            this.breakRad = breakRad;
+        }
+    }
+
+    /** UUID жертви → її підвіс. Ключі ⊂ {@link #victims}. */
+    private final Map<UUID, RopeHang> ropeHangs = new HashMap<>();
+
+    /** Тік мотузки (з {@code RopeTrapEntity.tick}): або чекає жертву, або веде розгойдування. */
+    public void tickRope(RopeTrapEntity rope) {
+        PlacedTrap info = placed.get(rope.getUUID());
+        if (info == null) return;
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return;
+
+        if (rope.isSnapped()) {
+            tickRopeHang(rope);
+            return;
+        }
+        for (ServerPlayer candidate : rope.level().getEntitiesOfClass(ServerPlayer.class, rope.getBoundingBox())) {
+            if (immunity.containsKey(candidate.getUUID())) continue;
+            if (victims.containsKey(candidate.getUUID())) continue;
+            if (!canCatch(candidate)) continue;
+            if (!info.type().shouldTrigger(candidate)) continue;
+            triggerRope(rope, info, candidate);
+            return;
+        }
+    }
+
+    private static Vec3 ropeOrigin(RopeHang h, double theta) {
+        double s = Math.sin(theta);
+        double c = Math.cos(theta);
+        return new Vec3(
+            h.pivot.x + h.axis.x * h.length * s,
+            h.pivot.y - h.length * c - ROPE_BODY_HALF,
+            h.pivot.z + h.axis.z * h.length * s);
+    }
+
+    /**
+     * Вибирає напрямок гойдання там, де НЕМАЄ стін. Перебирає {@code ROPE_AXIS_CANDIDATES}
+     * осей по колу (вісь двостороння: +θ і −θ), на кожній перевіряє, чи влізе
+     * тіло в позиціях маятника від 1/6 до повного кута розриву. Обирається
+     * вісь із найменшою кількістю заблокованих позицій; при рівності — ближча
+     * до «вправо від погляду» (камері природніше). Повертає кут осі в градусах
+     * (у тій самій конвенції, що {@code RopeTrapEntity#swingAxis}).
+     */
+    private float chooseSwingAxisYaw(ServerLevel level, Vec3 pivot, double length,
+                                     double breakRad, float viewYaw) {
+        float bestYaw = viewYaw;
+        int bestBlocked = Integer.MAX_VALUE;
+        double bestPenalty = Double.MAX_VALUE;
+
+        for (int i = 0; i < ROPE_AXIS_CANDIDATES; i++) {
+            float offset = i * (180f / ROPE_AXIS_CANDIDATES);
+            // Нормалізуємо відступ у (-90, 90]: «майже вправо» краще за «майже вліво».
+            float d = offset > 90f ? offset - 180f : offset;
+            float yaw = viewYaw + d;
+            double r = Math.toRadians(yaw);
+            Vec3 axis = new Vec3(-Math.cos(r), 0, -Math.sin(r));
+
+            int blocked = 0;
+            for (int k = 1; k <= ROPE_AXIS_SAMPLES; k++) {
+                double theta = breakRad * k / ROPE_AXIS_SAMPLES;
+                for (int sign = -1; sign <= 1; sign += 2) {
+                    double t = theta * sign;
+                    double sn = Math.sin(t), cs = Math.cos(t);
+                    double cx = pivot.x + axis.x * length * sn;
+                    double cy = pivot.y - length * cs - ROPE_BODY_HALF;
+                    double cz = pivot.z + axis.z * length * sn;
+                    var box = new net.minecraft.world.phys.AABB(
+                        cx - 0.3, cy, cz - 0.3, cx + 0.3, cy + 1.8, cz + 0.3);
+                    if (!level.noCollision(box)) blocked++;
+                }
+            }
+            double penalty = Math.abs(d);
+            if (blocked < bestBlocked || (blocked == bestBlocked && penalty < bestPenalty)) {
+                bestBlocked = blocked;
+                bestPenalty = penalty;
+                bestYaw = yaw;
+            }
+        }
+        return bestYaw;
+    }
+
+    private void triggerRope(RopeTrapEntity rope, PlacedTrap info, ServerPlayer victim) {
+        float yaw = victim.getYRot();               // погляд фіксується
+        Vec3 pivot = rope.ceilingPoint();
+        double restY = rope.getY() + ROPE_HEAD_CLEARANCE;
+        double length = pivot.y - (restY + ROPE_BODY_HALF);
+        double breakRad = Math.toRadians(ManiacConfigs.get(ConfigSchema.ROPE_SWING_BREAK_DEGREES));
+
+        // Вісь гойдання — туди, де вільно (не обов'язково вздовж погляду).
+        float axisYaw = chooseSwingAxisYaw(victim.serverLevel(), pivot, length, breakRad, yaw);
+        double ar = Math.toRadians(axisYaw);
+        Vec3 axis = new Vec3(-Math.cos(ar), 0, -Math.sin(ar));
+
+        RopeHang hang = new RopeHang(rope.getUUID(), pivot, length, axis, yaw, breakRad);
+        ropeHangs.put(victim.getUUID(), hang);
+        victims.put(victim.getUUID(), rope.getUUID());
+
+        rope.setVictim(victim.getId());
+        rope.setAxisYaw(axisYaw);
+        rope.setBreakAngle((float) breakRad);
+        rope.setSwing(0f);
+        rope.setSnapped(true);
+
+        ManiacMod.lib().interactionLockModule()
+            .lock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
+        victim.setNoGravity(true);
+        victim.setDeltaMovement(Vec3.ZERO);
+        victim.fallDistance = 0f;
+        Vec3 origin = ropeOrigin(hang, 0.0);
+        victim.teleportTo(victim.serverLevel(), origin.x, origin.y, origin.z, yaw, 0f);
+
+        rope.level().playSound(null, rope.blockPosition(),
+            ModSounds.ROPE_CATCH.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
+        info.type().applyEffect(victim, rope.blockPosition());
+        broadcastVictimGlow();
+
+        MatchOrchestrator m = match();
+        if (m != null) m.survivors().forceVitalsRefresh(victim);
+        notify(victim, ActionBarMessageType.INFO, "maniacmod.trap.rope_hung");
+        // Підказка «Натисни F» — міні-гра відкривається окремим екраном, як у капкана.
+        ModNetwork.toPlayer(victim, new TrapEscapePromptPacket(true));
+    }
+
+    private void tickRopeHang(RopeTrapEntity rope) {
+        UUID vid = victimOf(rope.getUUID());
+        RopeHang h = vid == null ? null : ropeHangs.get(vid);
+        ServerPlayer v = vid == null ? null : onlinePlayer(vid);
+        if (h == null || v == null) {
+            // Жертви більше нема (вийшла, скинули) — пастка одноразова, прибираємо.
+            if (vid != null) endRopeHang(vid);
+            placed.remove(rope.getUUID());
+            rope.discard();
+            return;
+        }
+
+        double k = ManiacConfigs.get(ConfigSchema.ROPE_SWING_FREQUENCY);
+        double damping = ManiacConfigs.get(ConfigSchema.ROPE_SWING_DAMPING);
+        h.omega = (h.omega - k * h.theta) * (1.0 - damping);
+        double next = h.theta + h.omega;
+
+        if (Math.abs(next) >= h.breakRad) {
+            v.level().playSound(null, v.blockPosition(),
+                ModSounds.ROPE_ESCAPE.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
+            notify(v, ActionBarMessageType.SUCCESS, "maniacmod.trap.rope_snapped");
+            endRopeHang(v.getUUID());
+            return;
+        }
+
+        // Стіни не гальмують: напрямок гойдання вибрано там, де вільно
+        // ({@link #chooseSwingAxisYaw}); якщо скрізь тісно — проходимо крізь
+        // блок, щоб розкачування не вмирало об стіну.
+        h.theta = next;
+        Vec3 origin = ropeOrigin(h, next);
+        if (origin.distanceToSqr(v.position()) > 1.0E-4) {
+            v.teleportTo(v.serverLevel(), origin.x, origin.y, origin.z, h.yaw, 0f);
+        }
+        // Жертва не падає й не їде: гасимо все, що встигла накопичити фізика.
+        v.setDeltaMovement(Vec3.ZERO);
+        v.fallDistance = 0f;
+        v.setNoGravity(true);
+        rope.setSwing((float) h.theta);
+    }
+
+    /**
+     * Натискання A (-1) чи D (+1) підвішеною жертвою. Сервер сам вирішує,
+     * чи це «в такт»: клієнт лише каже, яку клавішу тиснули.
+     */
+    public void onRopeSwing(ServerPlayer player, int dir) {
+        RopeHang h = ropeHangs.get(player.getUUID());
+        if (h == null || dir == 0) return;
+        int d = dir > 0 ? 1 : -1;
+
+        long now = player.level().getGameTime();
+        int interval = ManiacConfigs.get(ConfigSchema.ROPE_SWING_PRESS_INTERVAL_TICKS);
+        boolean tooFast = now - h.lastPress < interval;
+        boolean wrongWay = Math.abs(h.omega) > ROPE_REST_OMEGA && d * h.omega < 0;
+        h.lastPress = now;   // промах теж «використовує» вікно — спам не проходить
+
+        if (tooFast || wrongWay) {
+            h.omega *= 0.5;  // схибив — розгойдування слабшає
+        } else {
+            h.omega += ManiacConfigs.get(ConfigSchema.ROPE_SWING_KICK) * d;
+        }
+    }
+
+    /** Знімає підвіс: жертва вільна (падає), нитка зникає, короткий імунітет. */
+    private void endRopeHang(UUID victimId) {
+        RopeHang h = ropeHangs.remove(victimId);
+        victims.remove(victimId);
+        ServerPlayer v = onlinePlayer(victimId);
+        ManiacMod.lib().interactionLockModule()
+            .unlock(victimId, LockType.MOVEMENT, LOCK_REASON);
+        if (v != null) {
+            ModNetwork.toPlayer(v, new TrapEscapePromptPacket(false));
+            v.setNoGravity(false);
+            v.fallDistance = 0f;
+            immunity.put(victimId, RELEASE_IMMUNITY_TICKS);
+            MatchOrchestrator m = match();
+            if (m != null) m.survivors().forceVitalsRefresh(v);
+        }
+        if (h != null) {
+            placed.remove(h.ropeId);
+            if (v != null && v.serverLevel().getEntity(h.ropeId) instanceof RopeTrapEntity rope) {
+                rope.discard();
+            }
+        }
+        broadcastVictimGlow();
+    }
+
+    /**
+     * ПКМ ножицями по підвішеному гравцеві (союзником) або самим підвішеним.
+     * Ножиці одноразові — витрачаються, як і на дроті.
+     */
+    private boolean cutRope(ServerPlayer cutter, ServerPlayer victim) {
+        if (!ropeHangs.containsKey(victim.getUUID())) return false;
+        ItemStack scissors = scissorsInHand(cutter);
+        if (scissors.isEmpty()) return false;
+
+        victim.level().playSound(null, victim.blockPosition(),
+            ModSounds.ROPE_ESCAPE.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
+        scissors.shrink(1);
+        endRopeHang(victim.getUUID());
+        notify(victim, ActionBarMessageType.SUCCESS, "maniacmod.trap.rope_cut");
+        if (cutter != victim) notify(cutter, ActionBarMessageType.INFO, "maniacmod.trap.rope_cut_ally");
+        return true;
+    }
+
+    /**
+     * Промінь погляду проти хітбоксів підвішених ІНШИХ гравців (блок на шляху
+     * закриває ціль). Найближчого влученого — розрізає.
+     */
+    private boolean tryCutHangingInSight(ServerPlayer player) {
+        if (ropeHangs.isEmpty()) return false;
+        double range = ManiacConfigs.get(ConfigSchema.GEO_SCISSORS_RANGE_BLOCKS) + 0.5;
+        Vec3 eye = player.getEyePosition();
+        Vec3 end = eye.add(player.getViewVector(1.0f).normalize().scale(range));
+
+        double blockDist = range;
+        var blockHit = player.level().clip(new net.minecraft.world.level.ClipContext(
+            eye, end, net.minecraft.world.level.ClipContext.Block.COLLIDER,
+            net.minecraft.world.level.ClipContext.Fluid.NONE, player));
+        if (blockHit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
+            blockDist = eye.distanceTo(blockHit.getLocation());
+        }
+
+        ServerPlayer best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (UUID vid : ropeHangs.keySet()) {
+            if (vid.equals(player.getUUID())) continue;
+            ServerPlayer v = onlinePlayer(vid);
+            if (v == null || v.level() != player.level()) continue;
+            var hit = v.getBoundingBox().inflate(0.3).clip(eye, end);
+            if (hit.isEmpty()) continue;
+            double d = eye.distanceTo(hit.get());
+            if (d > blockDist + 0.3 || d >= bestDist) continue;
+            bestDist = d;
+            best = v;
+        }
+        return best != null && cutRope(player, best);
+    }
+
     // ── Звільнення ───────────────────────────────────────────────────────
 
     /**
@@ -1356,7 +1718,7 @@ public final class TrapModule implements PhaseListener {
             notify(hitter, ActionBarMessageType.ERROR, "maniacmod.trap.crowbar_broken");
             return true;
         }
-        if (hitter.getCooldowns().isOnCooldown(crowbar.getItem())) {
+        if (com.log_to_kot.maniacmod.items.OwnCooldowns.isOnCooldown(hitter, com.log_to_kot.maniacmod.items.CrowbarItem.COOLDOWN_KEY)) {
             notify(hitter, ActionBarMessageType.COOLDOWN, "maniacmod.trap.crowbar_cooldown");
             return true;
         }
@@ -1386,7 +1748,7 @@ public final class TrapModule implements PhaseListener {
         int left = com.log_to_kot.maniacmod.items.CrowbarItem.wear(crowbar);
         // 0% — лом ламається повністю й зникає з руки.
         com.log_to_kot.maniacmod.items.CrowbarItem.breakIfWornOut(hitter, crowbar);
-        hitter.getCooldowns().addCooldown(crowbar.getItem(),
+        com.log_to_kot.maniacmod.items.OwnCooldowns.start(hitter, com.log_to_kot.maniacmod.items.CrowbarItem.COOLDOWN_KEY,
             ManiacConfigs.get(ConfigSchema.CROWBAR_COOLDOWN_TICKS));
         notify(hitter, left > 0 ? ActionBarMessageType.INFO : ActionBarMessageType.ERROR,
             left > 0 ? "maniacmod.trap.crowbar_used" : "maniacmod.trap.crowbar_broke",
@@ -1470,6 +1832,12 @@ public final class TrapModule implements PhaseListener {
                 && standsUp(m.survivorStateOf(id));
             if (stillTrapWorthy) continue;
 
+            // Підвішений упав/вибув/вийшов — нитка відпускає (і зникає).
+            if (ropeHangs.containsKey(id)) {
+                endRopeHang(id);
+                continue;
+            }
+
             UUID trapId = victims.remove(id);
             if (p == null) continue;
 
@@ -1487,6 +1855,12 @@ public final class TrapModule implements PhaseListener {
     }
 
     private void releaseEveryone(List<ServerPlayer> players) {
+        // Підвішені: повна розв'язка (гравітація — вона зберігається в NBT
+        // гравця!, лок, підказка F, нитка, підсвітка) — так само, як при розриві.
+        for (UUID id : new ArrayList<>(ropeHangs.keySet())) {
+            endRopeHang(id);
+        }
+        ropeHangs.clear();
         for (UUID id : new ArrayList<>(victims.keySet())) {
             ManiacMod.lib().interactionLockModule().unlock(id, LockType.MOVEMENT, LOCK_REASON);
             ServerPlayer victim = onlinePlayer(id);
@@ -1504,6 +1878,11 @@ public final class TrapModule implements PhaseListener {
     /** Гравець вийшов із сервера — не лишаємо замок і запис у мапах. */
     public void onPlayerLeft(ServerPlayer player) {
         UUID id = player.getUUID();
+        RopeHang leftHang = ropeHangs.remove(id);
+        if (leftHang != null) {
+            player.setNoGravity(false);   // інакше після перезаходу висітиме в повітрі
+            placed.remove(leftHang.ropeId);
+        }
         if (victims.remove(id) != null) {
             ManiacMod.lib().interactionLockModule().unlock(id, LockType.MOVEMENT, LOCK_REASON);
             broadcastVictimGlow();

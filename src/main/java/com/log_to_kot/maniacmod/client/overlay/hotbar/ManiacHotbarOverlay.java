@@ -328,7 +328,6 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         int radius = SLOT_SIZE / 2;
 
         fillCircle(graphics, centerX, centerY, radius, GeneratorFuelUiTheme.PANEL_BG);
-        fillCircle(graphics, centerX, centerY, radius - 1, 0x66000000);
         strokeCircle(graphics, centerX, centerY, radius, STRIKE_BORDER, 1);
 
         // Кільце перезарядки удару: той самий канал (AbilityCooldownPacket
@@ -403,7 +402,8 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         if (!stack.isEmpty()) renderItem(graphics, minecraft, itemX, itemY, itemSize, stack);
 
         String number = String.valueOf(displayNumber);
-        graphics.drawString(minecraft.font, number, x + 5, y + SLOT_SIZE - 11, SLOT_NUMBER_COLOR, true);
+        // Номер — у лівому верхньому куті: внизу слота тепер бар перезарядки / відсотки предмета.
+        graphics.drawString(minecraft.font, number, x + 5, y + 5, SLOT_NUMBER_COLOR, true);
     }
 
     // ── Геометрія: прямий квадрат ─────────────────────────────────────

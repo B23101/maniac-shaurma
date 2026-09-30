@@ -366,6 +366,9 @@ public final class ServerHooks {
     public static void broadcastPhase(List<ServerPlayer> players,
                                       com.log_to_kot.maniacmod.core.phase.GamePhase phase) {
         ModNetwork.toPlayers(players, new PhaseSyncPacket(phase));
+        // Ціль залежить від фази (HUNT → генератори, POWERED → вихід), тож
+        // її стан їде разом зі зміною фази, а не чекає ростер-тіка.
+        broadcastObjectives(players);
         // Рольові канали чату відкриваються/закриваються разом з фазою
         // (технічні фази — спільний канал лобі, ігрові — канал ролі).
         ChatModule.syncChannels(players);
@@ -382,5 +385,20 @@ public final class ServerHooks {
         if (match == null) return;
         ModNetwork.toPlayers(players,
             new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket(match.rosterEntries(players)));
+        // Tab показує і «хто є хто», і «що зараз робимо» — обидва пакети
+        // йдуть тим самим ритмом (подія + раз на секунду), тож клієнт ніколи
+        // не бачить нових гравців зі старою ціллю.
+        broadcastObjectives(players);
+    }
+
+    /**
+     * Розсилає поточну ціль матчу («N з M генераторів», віхи) для
+     * tab-екрана. Окремо від {@link #broadcastRoster}, бо генератор
+     * завершується подією, яку не варто чекати до наступної секунди.
+     */
+    public static void broadcastObjectives(List<ServerPlayer> players) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        ModNetwork.toPlayers(players, match.objectiveSnapshot());
     }
 }

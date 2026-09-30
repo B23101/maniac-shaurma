@@ -242,7 +242,7 @@ public final class ManiacStunModule implements PhaseListener {
             notify(hitter, ActionBarMessageType.ERROR, "maniacmod.trap.crowbar_broken");
             return true;
         }
-        if (hitter.getCooldowns().isOnCooldown(crowbar.getItem())) {
+        if (OwnCooldowns.isOnCooldown(hitter, CrowbarItem.COOLDOWN_KEY)) {
             notify(hitter, ActionBarMessageType.COOLDOWN, "maniacmod.trap.crowbar_cooldown");
             return true;
         }
@@ -263,7 +263,7 @@ public final class ManiacStunModule implements PhaseListener {
         int left = CrowbarItem.wear(crowbar, wearCost);
         // 0% — лом ламається повністю й зникає з руки.
         CrowbarItem.breakIfWornOut(hitter, crowbar);
-        hitter.getCooldowns().addCooldown(crowbar.getItem(),
+        OwnCooldowns.start(hitter, CrowbarItem.COOLDOWN_KEY,
             ManiacConfigs.get(ConfigSchema.CROWBAR_STUN_COOLDOWN_TICKS));
         notify(hitter, left > 0 ? ActionBarMessageType.INFO : ActionBarMessageType.ERROR,
             left > 0 ? "maniacmod.stun.crowbar_used" : "maniacmod.trap.crowbar_broke",

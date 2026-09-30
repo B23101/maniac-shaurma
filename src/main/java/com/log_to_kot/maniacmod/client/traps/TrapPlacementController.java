@@ -28,15 +28,14 @@ import net.minecraftforge.fml.common.Mod;
  * підтверджую»; чи можна ставити насправді, вирішує сервер
  * ({@code TrapModule#onPlaceConfirmed}) і перераховує все заново.
  *
- * ── Що показує квадрат, а що — ні ────────────────────────────────────
+ * ── Що показує квадрат ───────────────────────────────────────────────
  * Зелений/червоний береться з {@link TrapArchetype#validatePlacement} —
- * ТІЄЇ САМОЇ функції, що й на сервері, тож геометрія (повний блок, вільне
- * місце над ним) не розходиться. Але правило «не ближче N блоків до
- * виживого» клієнт перевірити НЕ може й не повинен: він не знає, де
- * виживі, а колір квадрата став би для маньяка радаром крізь стіни.
- * Тому зелений квадрат означає «місце придатне», а не «сервер точно
- * дозволить»; відмову через близькість гравця маньяк бачить у
- * повідомленні після ПКМ.
+ * ТІЄЇ САМОЇ функції, що й на сервері, — плюс клієнтського дзеркала
+ * правил про людей і вже поставлені пастки ({@link TrapPlacementClientRules}):
+ * «гравець у клітинці», «пастка вже стоїть», «гравець на лінії дроту».
+ * Тож червоний квадрат означає реальну відмову, а ПРИЧИНА ({@link #targetResult()})
+ * пишеться на екрані одразу ({@link TrapPlacementHintOverlay}), без очікування
+ * відповіді сервера після ПКМ. Сервер усе одно перерахує при підтвердженні.
  *
  * ── ПКМ і Esc ────────────────────────────────────────────────────────
  *   • ПКМ у режимі — лише підтвердження. Ванільне використання глушить
@@ -92,6 +91,9 @@ public final class TrapPlacementController {
         TrapArchetype type = trapOf(ClientMatchState.activeTrapSlot());
         return type != null && type.placementShape() == TrapArchetype.PlacementShape.TWO_POINTS;
     }
+
+    /** Причина, з якої місце під прицілом не підходить (або OK). Для напису на екрані. */
+    public static TrapArchetype.PlacementResult targetResult() { return targetResult; }
 
     /** Чи місце під прицілом придатне (зелений квадрат). false, якщо цілі немає. */
     public static boolean targetValid() {
@@ -203,10 +205,25 @@ public final class TrapPlacementController {
             return;
         }
 
+        // Правила про людей і вже поставлені пастки — те, що раніше клієнт
+        // лишав серверу (і маньяк дізнавався про відмову лише після ПКМ).
+        TrapArchetype.PlacementResult around = TrapPlacementClientRules.checkPlayers(mc.level, target);
+        if (!around.ok()) {
+            targetResult = around;
+            return;
+        }
+        around = TrapPlacementClientRules.checkOccupied(mc.level, target);
+        if (!around.ok()) {
+            targetResult = around;
+            return;
+        }
+
         // Друга точка дроту: колір має відображати перевірку ПАРИ
-        // (Y, довжина, перешкоди), а не лише цієї точки.
+        // (Y, довжина, перешкоди, гравець на лінії), а не лише цієї точки.
         if (firstPoint != null && type.placementShape() == TrapArchetype.PlacementShape.TWO_POINTS) {
-            targetResult = type.validatePlacement(mc.level, firstPoint, target);
+            TrapArchetype.PlacementResult pair = type.validatePlacement(mc.level, firstPoint, target);
+            if (pair.ok()) pair = TrapPlacementClientRules.checkWireSegment(mc.level, firstPoint, target);
+            targetResult = pair;
             return;
         }
         targetResult = single;

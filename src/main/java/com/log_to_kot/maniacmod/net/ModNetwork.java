@@ -16,6 +16,8 @@ import com.log_to_kot.maniacmod.net.c2s.hold.RescueHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.hold.GeneratorRepairHoldPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.StandUpPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.TrapEscapeStartPacket;
+import com.log_to_kot.maniacmod.net.c2s.intent.RopeSwingPacket;
+import com.log_to_kot.maniacmod.net.s2c.minigame.RopeMinigameOpenPacket;
 import com.log_to_kot.maniacmod.net.c2s.intent.TrapPlacePacket;
 import com.log_to_kot.maniacmod.net.c2s.traps.TrapChoosePacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
@@ -45,6 +47,7 @@ import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.StandUpProgressPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.PhaseSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
+import com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.vitals.SurvivorVitalsPacket;
 import net.minecraft.network.FriendlyByteBuf;
@@ -84,8 +87,9 @@ public final class ModNetwork {
      * зчитати чужі байти й отримати незрозумілий краш посеред матчу.
      *
      * 15: {@code WireMinigameOpenPacket} несе ще й кольори правої колодки.
+     * 16: {@code ObjectiveSyncPacket} — ціль матчу для tab-екрана.
      */
-    private static final String PROTOCOL_VERSION = "15";
+    private static final String PROTOCOL_VERSION = "16";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -148,11 +152,15 @@ public final class ModNetwork {
         s2c(GeneratorInteractionPacket.class,     GeneratorInteractionPacket::new);
         s2c(ItemPickupPacket.class,               ItemPickupPacket::new);
         s2c(ManiacHitPacket.class,                ManiacHitPacket::new);
+        c2s(RopeSwingPacket.class,                RopeSwingPacket::new);
+        s2c(RopeMinigameOpenPacket.class,         RopeMinigameOpenPacket::new);
         // Кіно-вступ (PROTOCOL 14): старт з параметрами подачі й сигнал розтемнення.
         s2c(com.log_to_kot.maniacmod.net.s2c.intro.IntroStartPacket.class,
             com.log_to_kot.maniacmod.net.s2c.intro.IntroStartPacket::new);
         s2c(com.log_to_kot.maniacmod.net.s2c.intro.IntroRevealPacket.class,
             com.log_to_kot.maniacmod.net.s2c.intro.IntroRevealPacket::new);
+        // PROTOCOL 16: ціль матчу для tab-екрана («N з M генераторів», віхи).
+        s2c(ObjectiveSyncPacket.class,            ObjectiveSyncPacket::new);
         c2s(GroundItemPickupPacket.class,         GroundItemPickupPacket::new);
     }
 

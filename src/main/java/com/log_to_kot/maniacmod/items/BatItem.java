@@ -25,7 +25,7 @@ import java.util.function.Consumer;
  *   <li>по капканах НЕ працює (це інструмент лома);</li>
  *   <li>перезарядка ВЛАСНА, а не ванільна {@code ItemCooldowns}: сервер
  *       веде її в {@link OwnCooldowns}, клієнт малює візуальний бар під
- *       іконкою предмета ({@code ItemCooldownBarDecorator}).</li>
+ *       іконкою предмета ({@code ItemHudDecorator}).</li>
  * </ul>
  *
  * ── Що тут, а що в ManiacStunModule ──────────────────────────────────

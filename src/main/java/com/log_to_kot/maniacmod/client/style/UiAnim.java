@@ -91,6 +91,17 @@ public final class UiAnim {
         play(SoundEvents.NOTE_BLOCK_PLING.get(), 0.5f, 0.7f);
     }
 
+    /** Генератор у Tab дійшов до кінця — дзвінкий акорд із двох тонів. */
+    public static void playTabGeneratorDone() {
+        play(SoundEvents.NOTE_BLOCK_BELL.get(), 0.55f, 1.0f);
+        play(SoundEvents.NOTE_BLOCK_BELL.get(), 0.40f, 1.5f);
+    }
+
+    /** Гравцю в Tab стало гірше (втрата хп/вибуття) — глухий тривожний «тум». */
+    public static void playTabAlarm() {
+        play(SoundEvents.NOTE_BLOCK_BASEDRUM.get(), 0.45f, 0.42f);
+    }
+
     private static void play(SoundEvent sound, float volume, float pitch) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.getSoundManager() == null) return;

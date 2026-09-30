@@ -27,7 +27,7 @@ UI" — так з'являється дублювання одних і тих �
 | Пакет | Що це | Частота | Приклади |
 |---|---|---|---|
 | `identity/` | хто я (роль/архетип) | раз на матч | `RoleSyncPacket` |
-| `matchstate/` | стан, спільний для всіх гравців | на подію матчу | `PhaseSyncPacket`, `RosterSyncPacket` |
+| `matchstate/` | стан, спільний для всіх гравців | на подію матчу | `PhaseSyncPacket`, `RosterSyncPacket`, `ObjectiveSyncPacket` |
 | `vitals/` | показники ВЛАСНОГО гравця | часто (по зміні) | `SurvivorVitalsPacket` |
 | `actionprogress/` | прогрес дії, що триває зараз | по дії | `GeneratorProgressPacket`, `GeneratorHighlightPacket`, `AbilityCooldownPacket`, `StandUpProgressPacket` |
 | `notify/` | одноразова подія, не стан | на подію | `ActionBarPacket`, `CountdownPacket` |
@@ -124,3 +124,14 @@ docstring `RosterSyncPacket`. stamina/heartbeat туди свідомо НЕ
 
 Мод має власний канал (`maniacmod:main`), окремо від
 `shaurma_lib:main`. Версії пакетів мода й бібліотеки не перетинаються.
+
+## ObjectiveSyncPacket (ціль матчу для Tab)
+
+Повний СТАН (не подія): «N з M генераторів», прогрес кожного
+(0..100 через обидві стадії, порядок стадій — з `generators.stageOrder`
+через `GeneratorPoi.stagesDone()`) і маска досягнутих `MatchObjectives`.
+Шлеться разом із ростером (подія + раз на секунду), при зміні фази та
+одразу після завершення генератора. `GeneratorCompletedPacket` лишається
+одноразовою ПОДІЄЮ для банера — Tab його не використовує, бо його не бачить
+той, хто відкрив Tab пізніше. Клієнт нічого не рахує: див.
+`ClientMatchState.objectives()`.

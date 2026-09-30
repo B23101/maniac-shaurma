@@ -76,6 +76,7 @@ public final class TestManiacArchetype extends ManiacArchetype {
      */
     @Override
     public List<TrapArchetype> traps() {
-        return List.of(new BearTrapArchetype(), new ElectricWireArchetype());
+        return List.of(new BearTrapArchetype(), new ElectricWireArchetype(),
+            new com.log_to_kot.maniacmod.traps.RopeBindArchetype());
     }
 }

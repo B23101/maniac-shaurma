@@ -183,7 +183,7 @@ public final class ManiacCombatModule implements PhaseListener {
         if (victim == null) return false;
 
         double yawRad = Math.toRadians(attacker.getYRot());
-        resolveHit(match, victim, archetype.attackDamage(), Math.sin(yawRad), -Math.cos(yawRad));
+        resolveHit(match, attacker, victim, archetype.attackDamage(), Math.sin(yawRad), -Math.cos(yawRad));
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
     }
@@ -197,10 +197,11 @@ public final class ManiacCombatModule implements PhaseListener {
      * @param damage шкода в хп; від'ємне — без шкоди (лише віддача й ефект)
      * @return true, якщо удар збив жертву з ніг
      */
-    private boolean resolveHit(MatchOrchestrator match, ServerPlayer victim, int damage,
+    private boolean resolveHit(MatchOrchestrator match, ServerPlayer attacker, ServerPlayer victim, int damage,
                                double dirX, double dirZ) {
         boolean downed = false;
         if (damage >= 0) {
+            if (attacker != null) match.recordManiacHit(victim.getUUID(), attacker.getUUID());
             downed = match.damageSurvivor(victim.getUUID(), damage);
             if (downed) {
                 // Удар збив із ніг — жертва непритомна, адреналін їй не потрібен.
@@ -249,7 +250,7 @@ public final class ManiacCombatModule implements PhaseListener {
             ManiacArchetype archetype = match.maniacArchetype();
             damage = archetype != null ? archetype.attackDamage() : DEBUG_FALLBACK_DAMAGE;
         }
-        return resolveHit(match, victim, damage, dirX, dirZ);
+        return resolveHit(match, attacker, victim, damage, dirX, dirZ);
     }
 
     /**

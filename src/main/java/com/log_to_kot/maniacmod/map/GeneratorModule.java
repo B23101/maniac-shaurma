@@ -1256,6 +1256,10 @@ public final class GeneratorModule implements PhaseListener {
                 ModNetwork.toPlayer(player, packet);
             }
         }
+
+        // Tab-екран (усі ролі, глядачі теж) отримує новий стан цілі одразу,
+        // а не за секунду з наступним ростером.
+        com.log_to_kot.maniacmod.server.ServerHooks.broadcastObjectives(players);
     }
 
     // ── Допоміжне ────────────────────────────────────────────────────────

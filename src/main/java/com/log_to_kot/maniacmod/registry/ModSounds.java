@@ -88,6 +88,15 @@ public final class ModSounds {
     public static final RegistryObject<SoundEvent> WIRE_ZAP_3   = register("wire_zap_3");
     public static final RegistryObject<SoundEvent> WIRE_CUT     = register("wire_cut");
 
+    // ── Мотузка ─────────────────────────────────────────────────────────
+    // rope_place  — маньяк поставив мотузку;
+    // rope_catch  — жертва зловилась і підвисла;
+    // rope_escape — жертва вибралась (нитка порвалась / перерізана).
+    // Свої звуки, а не капкана: мотузка звучить інакше.
+    public static final RegistryObject<SoundEvent> ROPE_PLACE  = register("rope_place");
+    public static final RegistryObject<SoundEvent> ROPE_CATCH  = register("rope_catch");
+    public static final RegistryObject<SoundEvent> ROPE_ESCAPE = register("rope_escape");
+
     // Фідбек міні-гри "ціль" (ТЗ 1.2 вимагає окремого ЗВУКОВОГО відгуку
     // на попадання й на промах). Тут реєструються ЛИШЕ події —
     // файли додаються окремо (див. sounds.json): без файлу подія просто

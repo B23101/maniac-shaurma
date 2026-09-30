@@ -6,6 +6,7 @@ import com.log_to_kot.maniacmod.entity.ElectricWireEntity;
 import com.log_to_kot.maniacmod.entity.ElectricWireMountEntity;
 import com.log_to_kot.maniacmod.entity.GeneratorEntity;
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
+import com.log_to_kot.maniacmod.entity.RopeTrapEntity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraftforge.registries.DeferredRegister;
@@ -128,6 +129,21 @@ public final class ModEntityTypes {
                 .noSummon()
                 .fireImmune()
                 .build("electric_wire_mount"));
+
+    /**
+     * Мотузка-підвіс. Хітбокс як у капкана (0.9×0.3): це «тригер» на підлозі,
+     * на який треба наступити. Нитка до стелі малюється рендерером, хітбокса
+     * не має (culling-бокс перевизначено в сутності).
+     */
+    public static final RegistryObject<EntityType<RopeTrapEntity>> ROPE_TRAP =
+        ENTITY_TYPES.register("rope_trap", () ->
+            EntityType.Builder.<RopeTrapEntity>of(RopeTrapEntity::new, MobCategory.MISC)
+                .sized(0.9f, 0.3f)
+                .clientTrackingRange(16)
+                .updateInterval(10)
+                .noSummon()
+                .fireImmune()
+                .build("rope_trap"));
 
     // TODO(міграція maniacs): MANIAC EntityType переїжджає сюди разом
     // з модулем маньяків.

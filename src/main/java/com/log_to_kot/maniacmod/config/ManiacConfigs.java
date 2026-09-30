@@ -218,10 +218,15 @@ public final class ManiacConfigs {
             // інакше адмін отримав би ПОРОЖНІЙ файл, а значення жили б
             // тільки в пам'яті (і жодного рядка, щоб їх побачити й
             // поправити). Ключі динамічного блока все одно зі схеми.
+            //
+            // Якщо дефолт у jar є — копіюємо його ТЕКСТОМ як є: так файл у
+            // адміна з першого запуску має групи, пояснення й порядок, які
+            // написані в ресурсі (YAML.dump їх би стер).
+            String jarText = readJarText(block);
             Map<String, Object> content = defaults.isEmpty() ? schemaDefaults(block) : defaults;
             try {
                 Files.createDirectories(file.getParent());
-                Files.writeString(file, YAML.dump(content), StandardCharsets.UTF_8);
+                Files.writeString(file, jarText != null ? jarText : YAML.dump(content), StandardCharsets.UTF_8);
                 LOADER.invalidate(file);
                 diag.healedBlock(file.getFileName().toString());
             } catch (IOException e) {
@@ -424,18 +429,12 @@ public final class ManiacConfigs {
      * снапшот. Викликається лише з обробника {@code SettingsChangePacket}
      * (сервер, права оператора вже перевірені раніше в ланцюжку).
      *
-     * ── Чому текстом мапи, а не point-fix у файлі ────────────────────
-     * На відміну від {@link #heal}, який лише ДОПИСУЄ відсутній блок і
-     * ніколи не чіпає наявний вміст (щоб не стерти коментарі й порядок
-     * адмінських правок), запис із GUI — це навпаки, свідома зміна
-     * ІСНУЮЧОГО значення на бажання адміна. Тут файл перечитується як
-     * мапа, один ключ у ній підмінюється, і мапа переписується цілком
-     * через {@link #YAML}. Коментарі в файлі (якщо адмін їх туди
-     * дописав руками) цим перезаписом губляться — це усвідомлений
-     * компроміс: GUI не вміє редагувати текст, лише значення, тому не
-     * може їх зберегти. Хто хоче зберегти власні коментарі — редагує
-     * yml руками і чекає на автопідхоплення ({@link #tickWatcher()}),
-     * а не тисне кнопки в меню.
+     * ── Як пишеться ──────────────────────────────────────────────────
+     * Спершу змінюється ЛИШЕ рядок зі значенням ({@link ConfigTextEditor}):
+     * коментарі, групи й порядок ключів у файлі лишаються як були. Якщо
+     * рядок ключа не знайшовся (нестандартний запис), файл перечитується як
+     * мапа й переписується цілком через {@link #YAML} — тоді коментарі
+     * губляться, але значення все одно зберігається.
      *
      * @return null при успіху; людський опис помилки, якщо ключ
      *         невідомий або значення не проходить валідацію ключа.
@@ -468,6 +467,22 @@ public final class ManiacConfigs {
         Object corrected = key.resolve(parsedRaw, probe);
 
         Path file = tree.namespaceDir().resolve(block.fileName());
+
+        // Спершу пробуємо змінити ЛИШЕ рядок зі значенням — так коментарі,
+        // групи й порядок ключів у файлі лишаються. Якщо рядок не знайшовся
+        // (нестандартний запис), нижче працює старий шлях через dump.
+        String edited = editInPlace(file, block, key.name(), scalarToYaml(corrected));
+        if (edited != null) {
+            try {
+                Files.writeString(file, edited, StandardCharsets.UTF_8);
+                LOADER.invalidate(file);
+            } catch (IOException e) {
+                return "Не вдалось записати " + block.fileName() + ": " + e.getMessage();
+            }
+            reload("GUI-меню налаштувань: " + key.path());
+            return null;
+        }
+
         // Копія, а не пряма мутація: readDisk() може повернути мапу з
         // внутрішнього кешу CachedYamlLoader (LOADER.readYamlCached) —
         // писати в неї напряму означає псувати чужий кеш-запис до того,
@@ -490,6 +505,29 @@ public final class ManiacConfigs {
 
         reload("GUI-меню налаштувань: " + key.path());
         return null;
+    }
+
+    /** Новий текст файлу із заміненим значенням ключа або null, якщо рядка не знайдено. */
+    private static String editInPlace(Path file, ConfigBlock block, String keyName, String yamlValue) {
+        if (!Files.exists(file)) return null;
+        try {
+            String text = Files.readString(file, StandardCharsets.UTF_8);
+            // Вкладений блок (є мапа під ключем block.id()) чи плоский файл.
+            boolean nested = readDisk(file).get(block.id()) instanceof Map<?, ?>;
+            return ConfigTextEditor.replaceValue(text, nested ? block.id() : null, keyName, yamlValue);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Текст дефолтного yml із jar або null, якщо ресурсу немає. */
+    private static String readJarText(ConfigBlock block) {
+        String resource = "/config/maniacmod/" + block.fileName();
+        try (InputStream in = ManiacMod.class.getResourceAsStream(resource)) {
+            return in == null ? null : new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /**

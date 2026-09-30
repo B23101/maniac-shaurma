@@ -27,6 +27,7 @@
     "MixinWakeUpPose",
     "MixinWoundedPose",
     "MixinCameraWakeUp",
+    "MixinCameraRopeHang",
     "MixinSwapOffhandClient"
   ],
   "server": [],

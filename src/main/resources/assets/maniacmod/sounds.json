@@ -167,6 +167,30 @@
       }
     ]
   },
+  "rope_place": {
+    "sounds": [
+      {
+        "name": "maniacmod:rope_place",
+        "stream": false
+      }
+    ]
+  },
+  "rope_catch": {
+    "sounds": [
+      {
+        "name": "maniacmod:rope_catch",
+        "stream": false
+      }
+    ]
+  },
+  "rope_escape": {
+    "sounds": [
+      {
+        "name": "maniacmod:rope_escape",
+        "stream": false
+      }
+    ]
+  },
   "minigame_hit": {
     "sounds": [
       {

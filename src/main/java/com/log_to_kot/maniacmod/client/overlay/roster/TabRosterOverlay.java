@@ -1,249 +1,271 @@
 package com.log_to_kot.maniacmod.client.overlay.roster;
 
 import com.log_to_kot.maniacmod.client.ClientMatchState;
+import com.log_to_kot.maniacmod.client.style.ManiacTabTheme;
 import com.log_to_kot.maniacmod.client.style.UiAnim;
+import com.log_to_kot.maniacmod.client.style.UiFx;
 import com.log_to_kot.maniacmod.core.phase.GamePhase;
-import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
-import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
-import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
-import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
-import com.log_to_kot.maniacmod.survivors.SurvivorState;
-import dev.shaurmalib.common.tab.TabCell;
-import dev.shaurmalib.common.tab.TabColumn;
-import dev.shaurmalib.common.tab.TabRow;
 import dev.shaurmalib.forge.tab.TabListStyle;
 import dev.shaurmalib.forge.tab.TabVisibilityModule;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Tab-екран мода: утримання ванільної клавіші Tab (через
- * {@link TabVisibilityModule}, підключений у
- * {@code ClientSetup.onClientSetup}) показує список УСІХ гравців
- * матчу замість ванільного player_list.
+ * {@link TabVisibilityModule}, підключений у {@code ClientSetup}) показує
+ * ПРИЛАДОВУ ПАНЕЛЬ МАТЧУ замість ванільного player_list.
+ *
+ * ── Що на екрані ─────────────────────────────────────────────────────
+ *   ┌────────────────────────── МАНЬЯК ───────────────────────────┐
+ *   │ [ 3D генератор ] ЗАВДАННЯ · назва · 2/5 · слоти · віхи     │ ← {@link TabObjectiveCard}
+ *   ├───────────────┬──────────────────────────────────────────────┤
+ *   │ МАНЬЯК (3D)   │ ВИЖИВШІ   ▸ картки з хп/таймером            │ ← {@link TabManiacCard}
+ *   ├───────────────┤ ВИБУЛИ    ▸ стислі рядки                     │   {@link TabSurvivorList}
+ *   │ ТИ (3D) / ЗВЕД│ ГЛЯДАЧІ                                      │ ← {@link TabSideCards}
+ *   └───────────────┴──────────────────────────────────────────────┘
+ * У лобі ролей іще нема: зверху лише онлайн-лічильник, ліворуч — «ТИ»,
+ * праворуч — усі гравці.
  *
  * ── Джерело даних ────────────────────────────────────────────────────
- * Єдине джерело — {@link ClientMatchState#roster()}, що наповнюється з
- * {@link com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket}.
- * Цей клас нічого не рахує сам (як і решта оверлеїв мода) — лише
- * розкладає вже готові {@code RosterEntry} в рядки {@link TabRow}.
+ * Виключно {@link ClientMatchState} ({@code roster()} — хто є хто,
+ * {@code objectives()} — що робимо, {@code downedEntries()} — таймери
+ * лежачих). Клас НІЧОГО не рахує сам: лише розкладає готове по
+ * карточках ({@link TabContext}).
  *
- * ── Один рушій рендеру на всі три ролі ────────────────────────────────
- * Маньяк / виживий / глядач — не три окремі layout-и, а один список,
- * відсортований так, щоб маньяк був згори, потім живі виживі (за
- * спаданням хп), потім ті, хто вже вибув (сірим, перекреслено), потім
- * глядачі. У {@code LOBBY} ролі ще не призначені (усі SPECTATOR за
- * {@code RosterSyncPacket} — {@code RoleSyncPacket} шлеться лише на
- * {@code ROLE_REVEAL}), тому в лобі всі рядки виглядають як звичайний
- * список "хто на сервері" без поділу на команди.
+ * ── Хореографія (секунди від натискання Tab) ─────────────────────────
+ *   0.00  світла лінія розтягується по центру екрана
+ *   0.12  панель розгортається вертикально («вмикання CRT»)
+ *   0.20  іскри по краях (без звуку)
+ *   0.45  назви «розшифровуються» з шуму, картки в'їжджають по черзі
+ *   0.55  слоти генераторів наливаються до реального прогресу
+ *   0.50  3D-моделі стають видимими й починають обертатись
+ * Закриття — зворотне: панель схлопується в лінію за {@code progress}
+ * (його веде {@link TabVisibilityModule}, ~0.1 с).
+ *
+ * ── 3D ───────────────────────────────────────────────────────────────
+ * Моделі малюються лише коли панель розгорнута ПОВНІСТЮ: під час
+ * масштабування сутність спотворилась би, а її прозорість не підкоряється
+ * множнику панелі. Див. {@link TabModel3d}.
+ *
+ * ── Стиль ────────────────────────────────────────────────────────────
+ * Вигляд — {@link ManiacTabTheme}, підключена до бібліотечного
+ * {@link TabListStyle} другим аргументом конструктора (shaurma-lib
+ * тепер підтримує теми, див. {@code dev.shaurmalib.forge.tab.TabTheme}).
  *
  * ── Instance, не static ──────────────────────────────────────────────
- * {@link TabListStyle} тримає анімаційний стан (позиція/прозорість
- * рядків) між кадрами — той самий патерн, що {@code ManiacHotbarOverlay}
- * (instance, що реалізує контракт бібліотеки), а не статичний клас, як
- * прості оверлеї без анімаційної пам'яті ({@code SurvivorVitalsOverlay}).
+ * Анімаційний стан (слоти, рядки, іскри) живе між кадрами — той самий
+ * патерн, що {@code ManiacHotbarOverlay}.
  */
 public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
 
-    private static final int PANEL_WIDTH = 300;
-    private static final int ROW_WIDTH = 280;
-    private static final int NAME_COLUMN_OFFSET = 0;
-    private static final int STATUS_COLUMN_OFFSET = 190;
+    private static final int PANEL_W = 440;
+    private static final int PAD = 10;
+    private static final int LEFT_W = 140;
+    private static final int COL_GAP = 6;
+    private static final int GAP = 6;
+    private static final int FOOTER_H = 14;
+    private static final int LEFT_MIN_H = 196;
+    private static final int LOBBY_LEFT_MIN_H = 120;
+    private static final int MANIAC_CARD_H = 118;
 
-    private static final List<TabColumn> COLUMNS = List.of(
-        new TabColumn("maniacmod.tab.column.name", NAME_COLUMN_OFFSET),
-        new TabColumn("maniacmod.tab.column.status", STATUS_COLUMN_OFFSET)
-    );
+    private final ManiacTabTheme theme = new ManiacTabTheme();
+    private final TabListStyle style = new TabListStyle(this::resolveSkin, theme);
 
-    private final TabListStyle style = new TabListStyle(this::resolveSkin);
+    private final TabContext ctx = new TabContext();
+    private final TabObjectiveCard objectiveCard = new TabObjectiveCard();
+    private final TabManiacCard maniacCard = new TabManiacCard();
+    private final TabSideCards sideCards = new TabSideCards();
+    private final TabSurvivorList survivorList = new TabSurvivorList();
+    private final UiFx.Sparks sparks = new UiFx.Sparks(160);
 
-    /** Попереднє значення {@code progress} — для крайового детекту відкриття/закриття. */
-    private float lastProgress = 0f;
+    private final long[] frameClock = new long[1];
+    private long openedAtMs = 0L;
+    private boolean introSparksDone = false;
+
+    // ── Життєвий цикл (викликає TabVisibilityModule) ─────────────────────
 
     @Override
-    public void render(net.minecraftforge.client.gui.overlay.ForgeGui gui,
-                        net.minecraft.client.gui.GuiGraphics graphics,
-                        float partialTick, int screenWidth, int screenHeight,
-                        float progress) {
+    public void onOpen() {
+        openedAtMs = System.currentTimeMillis();
+        introSparksDone = false;
+        frameClock[0] = 0L;
+        sparks.clear();
+        objectiveCard.onOpen(ClientMatchState.objectives());
+        maniacCard.onOpen();
+        sideCards.onOpen();
+        survivorList.onOpen();
+        // Звуків появи/закриття немає навмисно: Tab відкривається безшумно.
+    }
+
+    @Override
+    public void onClose() {
+        // Безшумно (див. onOpen).
+    }
+
+    // ── Кадр ─────────────────────────────────────────────────────────────
+
+    @Override
+    public void render(net.minecraftforge.client.gui.overlay.ForgeGui gui, GuiGraphics g,
+                       float partialTick, int screenWidth, int screenHeight, float progress) {
         style.tick();
+        Minecraft mc = Minecraft.getInstance();
+        boolean open = TabVisibilityModule.isOpen();
 
-        // Звук на самому відкритті/закритті (перехід progress через 0.5),
-        // а не щокадру — інакше звук спамив би протягом усієї анімації.
-        lastProgress = progress;
+        // ── збір контексту кадру ──
+        TabContext c = ctx;
+        c.g = g;
+        c.font = mc.font;
+        c.style = style;
+        c.theme = theme;
+        c.sparks = sparks;
+        c.nowMs = System.currentTimeMillis();
+        c.t = open ? Math.max(0f, (c.nowMs - openedAtMs) / 1000f) : Math.max(c.t, 2f);
+        c.dt = UiAnim.frameDt(frameClock);
+        c.me = myUuid();
+        c.myRole = ClientMatchState.role();
+        c.phase = ClientMatchState.phase();
+        c.lobby = c.phase == GamePhase.LOBBY;
+        c.objectives = ClientMatchState.objectives();
+        c.partition(ClientMatchState.roster());
 
-        List<RosterSyncPacket.RosterEntry> entries = orderedEntries();
-        style.pruneAnimState(entries.stream()
-            .map(e -> e.playerId().toString())
-            .collect(Collectors.toSet()));
+        // ── розкладка ──
+        final int innerW = PANEL_W - PAD * 2;
+        final int listW = innerW - LEFT_W - COL_GAP;
+        int listH = survivorList.measure(c);
+        int leftMin = c.lobby ? LOBBY_LEFT_MIN_H : LEFT_MIN_H;
+        int bodyH = Math.max(leftMin, listH);
+        int objH = c.lobby ? 14 : TabObjectiveCard.HEIGHT + GAP;
+        int panelH = theme.titleHeight() + objH + bodyH + GAP + FOOTER_H;
 
-        int rowCount = entries.size();
-        int panelHeight = TabListStyle.TITLE_H + TabListStyle.HDR_H + rowCount * TabListStyle.ROW_H + 6;
-        int panelX = (screenWidth - PANEL_WIDTH) / 2;
-        int panelY = (screenHeight - panelHeight) / 2;
+        float fit = Math.min(1f, (screenHeight - 12f) / panelH);
+        float cxScreen = screenWidth / 2f;
+        float cyScreen = screenHeight / 2f;
+        int panelX = Math.round(cxScreen - PANEL_W / 2f);
+        int panelY = Math.round(cyScreen - panelH / 2f);
 
-        // Плавний «виїзд» панелі згори під час відкриття — поверх власної
-        // fade-анімації TabListStyle (progress), а не замість неї.
-        float appear = UiAnim.easeOutCubic(UiAnim.clamp01(progress));
-        graphics.pose().pushPose();
-        graphics.pose().translate(0f, Math.round((1f - appear) * 14f), 0f);
+        // ── вступ/закриття: лінія → розгортання вертикально ──
+        float lineP = open ? TabFx.stage(c.t, 0f, 0.12f) : 1f;
+        float grow = open ? TabFx.stageOut(c.t, 0.10f, 0.42f) : UiAnim.easeInOutCubic(UiAnim.clamp01(progress));
+        if (open && c.t >= 0.52f) grow = 1f;
+        float scaleY = Math.max(0.012f, grow);
+        boolean fullyOpen = open && grow >= 0.999f && progress >= 0.999f;
+        c.model3d = fullyOpen && c.t > 0.5f && fit >= 0.999f;
+        // fit < 1 — панель не влізає по висоті й стиснута: 3D тоді теж вимикаємо
+        // (моделі в такому масштабі й так не читаються, а ризик спотворень зайвий).
 
-        style.drawPanel(graphics, panelX, panelY, PANEL_WIDTH, panelHeight, progress);
+        var pose = g.pose();
+        pose.pushPose();
+        pose.translate(cxScreen, cyScreen, 0f);
+        pose.scale(fit, fit * scaleY, 1f);
+        pose.translate(-cxScreen, -cyScreen, 0f);
 
-        int centerX = panelX + PANEL_WIDTH / 2;
-        // Заголовок — назва режиму мода ("МАНЬЯК"), не фаза матчу:
-        // у snipers_shaurma кожен окремий render*Tab-метод малював саме
-        // назву свого режиму (SC/SD/SCN) у titleKey, а "Powered by
-        // SHAURMA" (gui.snipers_shaurma.brand.sub — та сама фраза, той
-        // самий бренд-підпис) завжди йшов другим рядком як subtitleKey.
-        // Тут це було не перенесено: title показував лише "Лобі"/"Матч"
-        // (без назви режиму), а subtitleKey передавався як null — тому
-        // ні назва режиму, ні бренд-підпис узагалі не малювались.
-        style.drawHeader(graphics, Minecraft.getInstance().font, centerX, panelY,
-            progress, "maniacmod.tab.title.mode", "maniacmod.tab.brand");
+        if (grow < 0.06f) {
+            drawLine(g, cxScreen, cyScreen, lineP, progress);
+        } else {
+            drawPanelContents(c, panelX, panelY, innerW, listW, listH, bodyH, objH, panelH, progress, fullyOpen);
+        }
+        pose.popPose();
 
-        int columnsY = panelY + TabListStyle.TITLE_H;
-        int rowX = panelX + (PANEL_WIDTH - ROW_WIDTH) / 2;
-        style.drawColumnHeaderBg(graphics, rowX, columnsY, ROW_WIDTH, progress);
-        style.drawColumns(graphics, Minecraft.getInstance().font, rowX, columnsY + 3, COLUMNS, progress);
+        // Іскри — у координатах екрана, поверх усього.
+        if (fullyOpen) {
+            if (!introSparksDone && c.t > 0.5f) {
+                introSparksDone = true;
+                emitIntroSparks(panelX, panelY, panelH, fit, cyScreen);
+            }
+            sparks.tickAndRender(g, c.dt, 140f);
+        }
+    }
 
-        int rowsTop = columnsY + TabListStyle.HDR_H;
-        UUID myId = myUuid();
+    // ── Панель ───────────────────────────────────────────────────────────
 
-        for (int i = 0; i < entries.size(); i++) {
-            RosterSyncPacket.RosterEntry entry = entries.get(i);
-            String animKey = entry.playerId().toString();
+    private void drawPanelContents(TabContext c, int px, int py, int innerW, int listW,
+                                   int listH, int bodyH, int objH, int panelH,
+                                   float progress, boolean fullyOpen) {
+        GuiGraphics g = c.g;
+        float bgAnim = UiAnim.clamp01(progress * 1.4f);
+        style.drawPanel(g, px, py, PANEL_W, panelH, bgAnim);
 
-            float targetY = rowsTop + i * TabListStyle.ROW_H;
-            style.syncRowY(animKey, targetY);
-            int rowY = Math.round(style.getAnimY(animKey, targetY));
+        int cx = px + PANEL_W / 2;
+        style.drawHeader(g, c.font, cx, py, bgAnim,
+            "maniacmod.tab.title.mode", c.phase.translationKey());
 
-            boolean isMe = myId != null && entry.playerId().equals(myId);
-            boolean isTerminal = entry.role() == RoleSyncPacket.Role.SURVIVOR && entry.state().isTerminal();
-            boolean isLobby = ClientMatchState.phase() == GamePhase.LOBBY;
-            boolean isSpectator = !isLobby
-                && (entry.role() == RoleSyncPacket.Role.SPECTATOR || isTerminal);
-            float rowAlpha = progress * style.syncOpacity(animKey, isSpectator);
+        int x0 = px + PAD;
+        int y = py + theme.titleHeight();
 
-            TabRow row = TabRow.builder(animKey)
-                .skinUuid(entry.playerId())
-                .isMe(isMe)
-                .isSpectator(isSpectator)
-                .isRespawning(entry.state() == SurvivorState.UNCONSCIOUS)
-                .cell(new TabCell(entry.displayName(), nameColor(entry)))
-                .cell(new TabCell(statusText(entry), statusColor(entry)))
-                .build();
-
-            int rankColor = nameColor(entry);
-            String respawnLabel = Component.translatable("maniacmod.tab.status.unconscious").getString();
-
-            style.drawRow(graphics, Minecraft.getInstance().font, rowX, rowY, ROW_WIDTH, TabListStyle.ROW_H,
-                row, COLUMNS, i + 1, rankColor, 0, respawnLabel, progress, rowAlpha);
+        if (c.lobby) {
+            drawOnline(c, cx, y + 1);
+            y += objH;
+        } else {
+            objectiveCard.draw(c, x0, y, innerW);
+            y += objH;
         }
 
-        graphics.pose().popPose();
-    }
-
-    // ── Порядок рядків ───────────────────────────────────────────────────
-
-    /**
-     * Маньяк згори, далі живі виживі за спаданням хп (щоб команда
-     * одразу бачила, кому найгірше), далі ті, хто вже вибув
-     * (втекли/загинули — не має значення хто раніше, стабільний
-     * порядок за іменем), далі глядачі.
-     */
-    private List<RosterSyncPacket.RosterEntry> orderedEntries() {
-        List<RosterSyncPacket.RosterEntry> all = new ArrayList<>(ClientMatchState.roster());
-        all.sort((a, b) -> {
-            int rankA = sortRank(a);
-            int rankB = sortRank(b);
-            if (rankA != rankB) return Integer.compare(rankA, rankB);
-            if (rankA == 1) return Integer.compare(b.hp(), a.hp()); // живі виживі: більше хп — вище
-            return a.displayName().compareToIgnoreCase(b.displayName());
-        });
-        return all;
-    }
-
-    private int sortRank(RosterSyncPacket.RosterEntry e) {
-        if (e.role() == RoleSyncPacket.Role.MANIAC) return 0;
-        if (e.role() == RoleSyncPacket.Role.SURVIVOR && !e.state().isTerminal()) return 1;
-        if (e.role() == RoleSyncPacket.Role.SURVIVOR) return 2; // вибув (втік/загинув)
-        return 3; // глядач
-    }
-
-    // ── Текст і колір ────────────────────────────────────────────────────
-
-    private int nameColor(RosterSyncPacket.RosterEntry e) {
-        return switch (e.role()) {
-            case MANIAC -> TabListStyle.COL_RED;
-            case SURVIVOR -> switch (e.state()) {
-                case HEALTHY -> TabListStyle.COL_GREEN;
-                case BROKEN_LEG, CRAWLING -> TabListStyle.COL_YELLOW;
-                case UNCONSCIOUS -> TabListStyle.RESPAWN_ORANGE;
-                case ELIMINATED, ESCAPED -> TabListStyle.COL_GRAY;
-            };
-            case SPECTATOR -> TabListStyle.COL_GRAY;
-        };
-    }
-
-    /**
-     * @return "42/100" для живого виживого; назва архетипу для маньяка;
-     *         "Втік"/"Вибув" (переклад) для термінального стану;
-     *         порожньо для глядача — там колонці статусу нема чого показати.
-     */
-    private String statusText(RosterSyncPacket.RosterEntry e) {
-        return switch (e.role()) {
-            case MANIAC -> maniacDisplayName(e.archetypeId());
-            case SURVIVOR -> switch (e.state()) {
-                case ESCAPED -> Component.translatable("maniacmod.tab.status.escaped").getString();
-                case ELIMINATED -> Component.translatable("maniacmod.tab.status.eliminated").getString();
-                case UNCONSCIOUS -> Component.translatable("maniacmod.tab.status.unconscious").getString();
-                default -> e.hp() + "/" + e.maxHp();
-            };
-            case SPECTATOR -> "";
-        };
-    }
-
-    private int statusColor(RosterSyncPacket.RosterEntry e) {
-        if (e.role() == RoleSyncPacket.Role.SURVIVOR && e.state() == SurvivorState.ESCAPED) return TabListStyle.COL_GREEN;
-        if (e.role() == RoleSyncPacket.Role.SURVIVOR && e.state() == SurvivorState.ELIMINATED) return TabListStyle.COL_RED;
-        return TabListStyle.COL_WHITE;
-    }
-
-    /**
-     * archetypeId → людська назва маньяка. {@code ManiacRegistry} —
-     * спільний реєстр (той самий клас-файл на клієнті й сервері,
-     * заповнюється однаковим static-блоком), тому читати
-     * {@code displayName()} напряму на клієнті безпечно. Порожній id
-     * (маньяк іще не обраний, лобі) чи невідомий id (реєстр порожній —
-     * жодного архетипу ще не додано в проєкт) не повинні валити рендер
-     * усього табу через один рядок.
-     */
-    private String maniacDisplayName(String archetypeId) {
-        if (archetypeId == null || archetypeId.isEmpty()) return "";
-        try {
-            ManiacArchetype archetype = ManiacRegistry.get(archetypeId);
-            return archetype.displayName();
-        } catch (IllegalArgumentException unknownArchetype) {
-            return archetypeId;
+        // ── ліва колонка ──
+        int leftX = x0;
+        int listX = x0 + LEFT_W + COL_GAP;
+        if (c.lobby) {
+            sideCards.drawSelf(c, leftX, y, LEFT_W, bodyH, true);
+        } else {
+            maniacCard.draw(c, leftX, y, LEFT_W, MANIAC_CARD_H);
+            int secondY = y + MANIAC_CARD_H + GAP - 2;
+            int secondH = bodyH - MANIAC_CARD_H - GAP + 2;
+            if (c.iAmSurvivor()) sideCards.drawSelf(c, leftX, secondY, LEFT_W, secondH, false);
+            else sideCards.drawStats(c, leftX, secondY, LEFT_W, secondH);
         }
+
+        // ── права колонка ──
+        survivorList.draw(c, listX, y, listW);
+
+        // ── футер ──
+        int fy = y + bodyH + GAP;
+        g.fill(x0, fy - 2, x0 + innerW, fy - 1, TabFx.a(ManiacTabTheme.CARD_EDGE, 1f));
+        TabFx.text(g, c.font, Component.translatable("maniacmod.tab.brand").getString(),
+            x0, fy + 2, 0.7f, TabFx.a(ManiacTabTheme.DIM, 0.8f));
+        String right = Component.translatable("maniacmod.tab.footer", c.all.size()).getString();
+        TabFx.textRight(g, c.font, right, x0 + innerW, fy + 2, 0.7f, TabFx.a(ManiacTabTheme.DIM, 0.8f));
+    }
+
+    private void drawOnline(TabContext c, int cx, int y) {
+        float p = TabFx.stageOut(c.t, 0.4f, 0.3f);
+        float pulse = TabFx.pulse(c.nowMs, 1400f);
+        String s = Component.translatable("maniacmod.tab.online", c.all.size()).getString();
+        int w = TabFx.width(c.font, s, 0.85f);
+        c.g.fill(cx - w / 2 - 9, y + 4, cx - w / 2 - 5, y + 8, TabFx.a(ManiacTabTheme.OK, p * (0.6f + 0.4f * pulse)));
+        TabFx.textCentered(c.g, c.font, s, cx + 2, y + 2, 0.85f, TabFx.a(ManiacTabTheme.OK, p));
+    }
+
+    /** Початкова «лінія вмикання»: розтягується від центру, світиться. */
+    private void drawLine(GuiGraphics g, float cx, float cy, float lineP, float progress) {
+        int half = Math.round(PANEL_W / 2f * UiAnim.easeOutCubic(lineP));
+        int a = Math.round(255 * Math.max(0.35f, UiAnim.clamp01(progress * 2f)));
+        int y = Math.round(cy);
+        g.fill(Math.round(cx) - half, y - 1, Math.round(cx) + half, y + 1, (a << 24) | 0xF2F4F8);
+        UiFx.glow(g, Math.round(cx) - half, y - 1, half * 2, 2, 0xC8232F, 0.7f, 4);
+    }
+
+    private void emitIntroSparks(int px, int py, int panelH, float fit, float cyScreen) {
+        float top = cyScreen - panelH * fit / 2f;
+        float left = px + 0f;
+        float right = px + PANEL_W * 1f;
+        sparks.burst(left, top, 14, 110f, -1f, 0.3f, 0.8f, 0xC2C9D6);
+        sparks.burst(right, top, 14, 110f, 1f, 0.3f, 0.8f, 0xC2C9D6);
+        sparks.burst(left, top, 8, 90f, -0.6f, -1f, 0.7f, 0xFF4B55);
+        sparks.burst(right, top, 8, 90f, 0.6f, -1f, 0.7f, 0xFF4B55);
     }
 
     // ── Скін гравця ──────────────────────────────────────────────────────
 
     /**
-     * Ванільний {@link PlayerInfo} з мережевого з'єднання — той самий
-     * шлях, яким ванільний tab-список бере голови гравців. {@code null},
-     * якщо гравця ще нема в трекері з'єднання (щойно приєднався, скін
-     * ще не завантажено) — {@link TabListStyle#drawHead} тихо пропускає
-     * {@code null}, тому рядок просто лишається без голови на цьому кадрі.
+     * Ванільний {@link PlayerInfo} з мережевого з'єднання — той самий шлях,
+     * яким ванільний tab-список бере голови. {@code null}, якщо гравця ще
+     * нема в трекері з'єднання: тема тоді малює темну заглушку.
      */
     private ResourceLocation resolveSkin(UUID uuid) {
         var connection = Minecraft.getInstance().getConnection();

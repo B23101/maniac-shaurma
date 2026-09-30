@@ -7,6 +7,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.sounds.SoundEvent;
+import com.log_to_kot.maniacmod.registry.ModSounds;
 
 /**
  * Базовий контракт для будь-якого типу пастки маньяка.
@@ -73,7 +75,15 @@ public abstract class TrapArchetype {
         /** Між точками є блок, крізь який дріт фізично не протягнути (ТЗ 2.1). */
         OBSTRUCTED,
         /** Точки збігаються — ставити дріт нульової довжини немає сенсу. */
-        TOO_SHORT;
+        TOO_SHORT,
+
+        // ── Причини відмови ЛИШЕ для мотузки (стеля 3–6 блоків) ─────────
+        /** Стеля нижче за мінімум (менше 3 вільних блоків над підлогою). */
+        CEILING_TOO_LOW,
+        /** Стеля вища за максимум (більше 6 вільних блоків). */
+        CEILING_TOO_HIGH,
+        /** Над блоком немає суцільної стелі (небо, слаб, паркан, вода...). */
+        NO_CEILING;
 
         public boolean ok() { return this == OK; }
     }
@@ -90,6 +100,11 @@ public abstract class TrapArchetype {
 
     /** Скільки точок треба вибрати. Клієнт за цим вирішує, який режим розміщення запускати. */
     public abstract PlacementShape placementShape();
+
+    /** Звук розміщення цієї пастки. Типи зі своїм звуком (мотузка) перевизначають. */
+    public SoundEvent placeSound() {
+        return ModSounds.TRAP_PLACE.get();
+    }
 
     /**
      * Перевірка МІСЦЯ, яка стосується САМЕ цього типу пастки (форма

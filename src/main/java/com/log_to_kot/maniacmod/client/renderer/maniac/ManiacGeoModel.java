@@ -8,7 +8,9 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
-import software.bernie.geckolib.core.animation.AnimationState;
+import software.bernie.geckolib.cache.GeckoLibCache;
+import software.bernie.geckolib.cache.object.BakedGeoModel;
+import software.bernie.geckolib.cache.object.GeoBone;
 import software.bernie.geckolib.model.GeoModel;
 
 /**
@@ -73,20 +75,46 @@ public class ManiacGeoModel extends GeoModel<ManiacAnimatable> {
      * підряд, а не змушуємо кожен .geo.json під один канон. */
     private static final String[] HEAD_BONE_NAMES = { "head", "Head", "HEAD" };
 
+    /** Кістки, які {@link #hideHeadIfFirstPerson()} сховав у ПОТОЧНОМУ рендері. */
+    private static final java.util.List<GeoBone> HIDDEN_NOW = new java.util.ArrayList<>();
+
     /**
-     * Хук GeckoLib «перед побудовою бон-структури цього кадру» — саме
-     * тут прийнято ставити {@code GeoBone#setHidden}, бо викликається
-     * щорендер, до малювання, і бачить того самого {@code animatable},
-     * для якого зараз рендериться модель.
+     * Ховає голову маньяка, якщо клієнт дивиться на нього від першої особи.
+     * Викликається з {@code ManiacRenderHandler} ПЕРЕД кожним малюванням.
+     *
+     * ── БАГ, який це виправляє (голова в першій особі не ховалась) ───────
+     * Раніше ховання жило в {@code setCustomAnimations}. Але GeckoLib 4.x
+     * викликає цей хук лише раз за «кадр анімації»: {@code getTick()} нашого
+     * аниматабла повертає ІГРОВИЙ тік (20 разів/с), а не кадр рендера, тож
+     * усі наступні кадри в межах того самого тіка рушій вважає повторним
+     * рендером ({@code isReRender}) і ПРОПУСКАЄ {@code setCustomAnimations}.
+     * Ми ж після кожного рендера повертали голову на місце (щоб не ламати
+     * Tab, який ділить ту саму baked-модель) — і голова ховалась лише в
+     * 1 кадрі з ~3–10, а в решті лишалась видимою.
+     *
+     * Тепер ховання/повернення відбувається НАВКОЛО кожного виклику
+     * рендера, і від внутрішнього кешу анімацій GeckoLib не залежить. Кістка
+     * ховається безпосередньо в baked-моделі, яку рушій зараз малюватиме,
+     * а {@link #restoreHiddenBones()} гарантовано повертає її після кадру —
+     * Tab (що малює ту саму модель із ассетів) голову бачить завжди.
      */
-    @Override
-    public void setCustomAnimations(ManiacAnimatable animatable, long instanceId,
-                                    AnimationState<ManiacAnimatable> state) {
-        super.setCustomAnimations(animatable, instanceId, state);
-        boolean hide = isOwnFirstPersonView();
+    public static void hideHeadIfFirstPerson() {
+        if (!isOwnFirstPersonView()) return;
+        BakedGeoModel baked = GeckoLibCache.getBakedModels().get(visuals().geoModel());
+        if (baked == null) return;
         for (String name : HEAD_BONE_NAMES) {
-            getBone(name).ifPresent(bone -> bone.setHidden(hide));
+            baked.getBone(name).ifPresent(bone -> {
+                bone.setHidden(true);
+                HIDDEN_NOW.add(bone);
+            });
         }
+    }
+
+    /** Повертає видимість кісткам, які {@link #hideHeadIfFirstPerson()} сховав у цьому рендері. */
+    public static void restoreHiddenBones() {
+        if (HIDDEN_NOW.isEmpty()) return;
+        for (GeoBone bone : HIDDEN_NOW) bone.setHidden(false);
+        HIDDEN_NOW.clear();
     }
 
     /**

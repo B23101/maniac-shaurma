@@ -40,25 +40,30 @@ public final class LowHpVignetteOverlay {
     private static final float VIGNETTE_THRESHOLD_FRACTION = 0.2f;
 
     /** Альфа (0..255) на самому краю екрана при 0 хп. Центр завжди лишається прозорим. */
-    private static final int MAX_ALPHA = 115;
+    private static final int MAX_ALPHA = 225;
 
     /**
      * Колір вінʼєтки — світліший, насичений червоний (раніше 0x660000,
      * майже чорний на вигляд). Це саме той тон, що й читається як
      * «кров/небезпека», а не темна пляма по краях екрана.
      */
-    private static final int RGB = 0xCC1414;
-
-    /** Ширина (у пікселях GUI-простору) градієнтної смуги від кожного краю до прозорого центру. */
-    private static final int EDGE_WIDTH = 90;
+    private static final int RGB = 0xD20F0F;
 
     /**
-     * Ширина однієї вертикальної колонки (пікселі), якими емулюється
-     * горизонтальний градієнт бічних смуг у {@link #renderHorizontalEdge}.
-     * 2px непомітно оку й достатньо дешево (45 колонок на смугу
-     * EDGE_WIDTH=90 замість 90 fill-викликів по пікселю).
+     * Глибина віньєтки як ЧАСТКА екрана (раніше фіксовані 90 px, на GUI-масштабі
+     * 2–3 це ледь помітна рамка). На порозі хп — {@link #DEPTH_MIN_SCALE} від
+     * максимуму, на нулі хп — повна глибина: віньєтка не лише темнішає, а й
+     * заповзає вглиб екрана.
      */
-    private static final int COLUMN_STEP = 2;
+    private static final float DEPTH_X_FRACTION = 0.34f;
+    private static final float DEPTH_Y_FRACTION = 0.46f;
+    private static final float DEPTH_MIN_SCALE = 0.55f;
+
+    /** Показник степеня спаду від краю: >1 — густо біля краю й плавно розчиняється вглиб. */
+    private static final float FALLOFF_POWER = 1.7f;
+
+    /** Крок смужки (px), якими емулюється градієнт. 2px непомітно оку й удвічі дешевше за піксель. */
+    private static final int STEP = 2;
 
     /**
      * Тривалість плавної появи вінʼєтки (мс) після перетину порогу.
@@ -139,7 +144,9 @@ public final class LowHpVignetteOverlay {
         // відсотки під порогом ледь відчувались, а останні перед 0 —
         // помітно.
         float t = 1f - (fraction / VIGNETTE_THRESHOLD_FRACTION);
-        float intensity = t * t;
+        // Було t² — на середині зони (10% хп) віньєтка давала лише чверть сили й майже не
+        // читалась. Степінь 1.35 нарощує її раніше, лишаючи різкий пік перед нулем.
+        float intensity = (float) Math.pow(t, 1.35);
 
         float base = MAX_ALPHA * intensity;
 
@@ -170,84 +177,51 @@ public final class LowHpVignetteOverlay {
             alphaF *= 1f - depth * wave;
         }
 
-        int alpha = Math.round(alphaF);
+        int alpha = Math.min(255, Math.round(alphaF));
         if (alpha <= 0) return;
 
         Minecraft mc = Minecraft.getInstance();
         int w = mc.getWindow().getGuiScaledWidth();
         int h = mc.getWindow().getGuiScaledHeight();
 
-        int edgeColor = (alpha << 24) | RGB;
-        int transparent = 0x00000000;
+        // Чим менше хп, тим глибше віньєтка заходить в екран.
+        float depthScale = DEPTH_MIN_SCALE + (1f - DEPTH_MIN_SCALE) * t;
+        int depthX = Math.round(w * DEPTH_X_FRACTION * depthScale);
+        int depthY = Math.round(h * DEPTH_Y_FRACTION * depthScale);
 
         graphics.pose().pushPose();
         graphics.pose().translate(0, 0, 1900); // під WorldTintOverlay (z=2000), над рештою HUD
 
-        // Верх і низ: GuiGraphics.fillGradient інтерполює по Y, тож тут
-        // це "з природи" саме той профіль, що треба — від краю екрана
-        // (edgeColor) до центру (transparent).
-        graphics.fillGradient(0, 0, w, EDGE_WIDTH, edgeColor, transparent);                 // згори
-        graphics.fillGradient(0, h - EDGE_WIDTH, w, h, transparent, edgeColor);             // знизу
-
-        // Ліво/право: fillGradient НЕ вміє інтерполювати по X (лише по
-        // Y, X — просто межі прямокутника), тому один виклик тут не дає
-        // "від краю до центру" — попередня версія малювала суцільний
-        // верт. градієнт на всю ширину EDGE_WIDTH, БЕЗ затухання вбік,
-        // що й виглядало як "зверху вниз" замість "від границі екрана".
-        // Правильний горизонтальний градієнт емулюємо смугою вузьких
-        // вертикальних колонок (fill, суцільний колір на кожну), у яких
-        // альфа спадає від alpha на самій границі екрана до 0 біля
-        // EDGE_WIDTH (центр смуги) — той самий профіль, що верх/низ,
-        // тільки вісь X замість Y.
-        renderHorizontalEdge(graphics, 0, h, alpha, edgeColor, true);   // зліва: сильно на x=0, згасає вправо
-        renderHorizontalEdge(graphics, w, h, alpha, edgeColor, false);  // справа: сильно на x=w, згасає вліво
+        // Усі чотири краї — однаковий профіль (fillGradient вміє лише по Y і лінійно,
+        // тому обходимось вузькими смужками): альфа від краю екрана до нуля за
+        // FALLOFF_POWER. Кути перекриваються й виходять темнішими — це і є віньєтка.
+        renderEdge(graphics, w, h, depthX, alpha, Edge.LEFT);
+        renderEdge(graphics, w, h, depthX, alpha, Edge.RIGHT);
+        renderEdge(graphics, w, h, depthY, alpha, Edge.TOP);
+        renderEdge(graphics, w, h, depthY, alpha, Edge.BOTTOM);
 
         graphics.pose().popPose();
     }
 
+    private enum Edge { LEFT, RIGHT, TOP, BOTTOM }
+
     /**
-     * Малює бічну смугу шириною {@link #EDGE_WIDTH}, що згасає ВІД
-     * границі екрана ДО центру (горизонтально) — ту саму роль для осі
-     * X, яку {@code fillGradient} безкоштовно дає для осі Y.
-     *
-     * <p>{@code GuiGraphics.fillGradient} завжди інтерполює колір по Y;
-     * замінити напрямок на X ним не можна, тому смуга розбивається на
-     * COLUMN_STEP-піксельні вертикальні колонки, кожна — суцільний
-     * {@code fill} із власною альфою. COLUMN_STEP=2 непомітний оку
-     * (звичайний градієнт теж дискретний по пікселях), але вдвічі
-     * дешевший за колонку на кожен піксель.</p>
-     *
-     * @param edgeX     координата X самої границі екрана (0 зліва, w справа)
-     * @param h         висота екрана — смуга на всю висоту
-     * @param baseAlpha альфа (0..255) рівно на границі екрана
-     * @param edgeColor колір смуги БЕЗ альфи в старших бітах (RGB-частина читається з нього)
-     * @param fromLeft  true — границя зліва (x зростає вглиб екрана); false — границя справа (x спадає)
+     * Смуга завглибшки {@code depth} від краю екрана; альфа {@code baseAlpha}
+     * на самому краї, далі спадає за {@code (1 - t)^FALLOFF_POWER} до 0.
      */
-    /** Гаусоподібний «горб» навколо {@code center} шириною {@code width} (цикл 0..1). */
-    private static float bump(float phase, float center, float width) {
-        float d = Math.abs(phase - center);
-        d = Math.min(d, 1f - d);
-        float k = d / width;
-        return (float) Math.exp(-k * k * 3.0);
-    }
-
-    private static void renderHorizontalEdge(GuiGraphics graphics, int edgeX, int h,
-                                             int baseAlpha, int edgeColor, boolean fromLeft) {
-        int rgb = edgeColor & 0x00FFFFFF;
-
-        for (int offset = 0; offset < EDGE_WIDTH; offset += COLUMN_STEP) {
-            // 0 на самій границі екрана, 1 біля центру (кінець смуги) —
-            // лінійне загасання, той самий профіль, що fillGradient дає
-            // верху/низу (лінійна інтерполяція colorFrom→colorTo по
-            // довжині смуги) — усі чотири краї тьмяніють однаково.
-            float t = (float) offset / EDGE_WIDTH;
-            int alpha = Math.round(baseAlpha * (1f - t));
-            if (alpha <= 0) break; // далі вглиб екрана — усе одно 0, решту колонок можна пропустити
-
-            int columnColor = (alpha << 24) | rgb;
-            int x0 = fromLeft ? offset : edgeX - offset - COLUMN_STEP;
-            int x1 = x0 + COLUMN_STEP;
-            graphics.fill(x0, 0, x1, h, columnColor);
+    private static void renderEdge(GuiGraphics g, int w, int h, int depth, int baseAlpha, Edge edge) {
+        for (int offset = 0; offset < depth; offset += STEP) {
+            float t = (float) offset / depth;
+            int a = Math.round(baseAlpha * (float) Math.pow(1f - t, FALLOFF_POWER));
+            if (a <= 0) break;
+            int color = (a << 24) | RGB;
+            int end = Math.min(offset + STEP, depth);
+            switch (edge) {
+                case LEFT   -> g.fill(offset, 0, end, h, color);
+                case RIGHT  -> g.fill(w - end, 0, w - offset, h, color);
+                case TOP    -> g.fill(0, offset, w, end, color);
+                case BOTTOM -> g.fill(0, h - end, w, h - offset, color);
+            }
         }
     }
 }

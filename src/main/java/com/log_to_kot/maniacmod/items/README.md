@@ -13,9 +13,9 @@
   але довше (`batStunDurationTicks`), знімає 50% міцності за удар і НЕ працює по капканах.
 - **OwnCooldowns** — ВЛАСНА перезарядка предметів (не ванільна `ItemCooldowns`): сервер
   рахує, клієнт отримує `AbilityCooldownPacket` з id `item:<ключ>` і малює бар під іконкою
-  (`client/renderer/ItemCooldownBarDecorator`, реєстрація в `ClientSetup`). Щоб підключити
+  (`client/renderer/ItemHudDecorator`, реєстрація в `ClientSetup`). Щоб підключити
   інший предмет: `OwnCooldowns.start(player, "ключ", ticks)` на сервері +
-  `event.register(item, new ItemCooldownBarDecorator("ключ"))` на клієнті.
+  `event.register(item, new ItemHudDecorator(відсотки_або_null, "ключ"))` на клієнті.
 
 ## Спільна логіка (в ItemArchetype, не в кожному предметі)
 

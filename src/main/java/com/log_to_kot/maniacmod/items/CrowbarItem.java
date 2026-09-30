@@ -49,8 +49,9 @@ import java.util.function.Consumer;
  * 100% на старті; кожен удар по капкану знімає
  * {@code crowbarHitWearPercent} (33): три удари поспіль — і лом
  * ламається. Між ударами — перезарядка {@code crowbarCooldownTicks}
- * (20 с), яку ставить {@code TrapModule} через ванільний
- * {@code ItemCooldowns}: HUD ванілі малює її сам, окремого коду не треба.
+ * (20 с), яку ставить {@code TrapModule} через
+ * власну {@link OwnCooldowns} (ключ {@link #COOLDOWN_KEY}): бар малює
+ * {@code ItemHudDecorator}, ванільна біла шторка {@code ItemCooldowns} не використовується.
  *
  * ── Чому НЕ ванільна міцність (Damageable) ───────────────────────────
  * Ванільна смужка міцності не показує відсотків і ламає предмет
@@ -59,6 +60,10 @@ import java.util.function.Consumer;
  * приймає TrapModule, а не ванільна механіка.
  */
 public class CrowbarItem extends Item implements GeoItem {
+
+    /** Ключ власної перезарядки: {@code OwnCooldowns} на сервері, {@code AbilityCooldownPacket.itemId} на клієнті. */
+    public static final String COOLDOWN_KEY = "crowbar";
+
 
     /** Ключ NBT: залишок міцності, 0..100. */
     public static final String DURABILITY_TAG = "CrowbarDurability";

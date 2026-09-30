@@ -6,6 +6,7 @@ import com.log_to_kot.maniacmod.map.zones.GeneratorPoi;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.GeneratorHighlightPacket;
 import com.log_to_kot.maniacmod.net.s2c.identity.RoleSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
+import com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import net.minecraft.core.BlockPos;
@@ -161,6 +162,11 @@ public final class ClientMatchState {
     // ── Ростер (tab-екран) ───────────────────────────────────────────────
     private static List<RosterSyncPacket.RosterEntry> roster = List.of();
 
+    // ── Ціль матчу (tab-екран): «N з M генераторів» + віхи ───────────────
+    // Повний стан з сервера (ObjectiveSyncPacket), а не подія: Tab, відкритий
+    // будь-коли, показує правду. Скидається в reset() разом з рештою матчу.
+    private static ObjectiveSyncPacket objectives = ObjectiveSyncPacket.empty();
+
     // ── Візуальні налаштування предметів на землі (loot.sparkleEnabled,
     // loot.pickupRangeBlocks) ──────────────────────────────────────────
     // НАВМИСНО поза reset(): це конфіг сервера, а не прогрес матчу; вихід
@@ -305,6 +311,10 @@ public final class ClientMatchState {
         roster = List.copyOf(entries);
     }
 
+    static void setObjectives(ObjectiveSyncPacket packet) {
+        objectives = packet;
+    }
+
     static void setGroundItemSparkleEnabled(boolean enabled) {
         groundItemSparkleEnabled = enabled;
     }
@@ -352,6 +362,7 @@ public final class ClientMatchState {
         highlight = List.of();
         highlightUntilTick = 0;
         roster = List.of();
+        objectives = ObjectiveSyncPacket.empty();
         trapIds = List.of();
         trapPlaceRange = 0.0;
         activeTrapSlot = -1;
@@ -360,6 +371,8 @@ public final class ClientMatchState {
         generatorInteraction.clear();
         com.log_to_kot.maniacmod.client.ItemPickupPose.reset();
         com.log_to_kot.maniacmod.client.WoundedPose.reset();
+        com.log_to_kot.maniacmod.client.rope.RopeHangClient.reset();
+        com.log_to_kot.maniacmod.client.rope.RopeHangPoseAnimation.reset();
         com.log_to_kot.maniacmod.client.DownedPoseAnimation.reset();
         com.log_to_kot.maniacmod.client.ManiacHitEffect.reset();
         rescueRequired = 0;
@@ -587,6 +600,11 @@ public final class ClientMatchState {
     /** Ростер усіх гравців матчу для tab-екрана — читається лише поки Tab утримується. */
     public static List<RosterSyncPacket.RosterEntry> roster() {
         return roster;
+    }
+
+    /** Поточна ціль матчу для tab-екрана (генератори, віхи). Ніколи не {@code null}. */
+    public static ObjectiveSyncPacket objectives() {
+        return objectives;
     }
 
     /** id обраних пасток у порядку клавіш 5/6/7. */

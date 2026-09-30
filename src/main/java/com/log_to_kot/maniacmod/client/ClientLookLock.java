@@ -20,6 +20,7 @@ import net.minecraftforge.api.distmarker.OnlyIn;
  * ── Що тут зведено ───────────────────────────────────────────────────
  *   • оглушення маньяка ударом лома (рух, удар і огляд — «нічого не може»);
  *   • удар струмом від електричного дроту (ТЗ 5: «не може обертати камеру»);
+ *   • підвіс на мотузці ({@code RopeHangClient}): камера заблокована, доки висить;
  *   • робота з генератором — ремонт або залив (ТЗ 12: «він не може
  *     обертати камеру», поки тримає кнопку);
  *   • падіння виживого ({@code CRAWLING}): лежить, доки не встане
@@ -54,6 +55,7 @@ public final class ClientLookLock {
     public static boolean isLocked() {
         return ClientMatchState.isManiacStunned()
             || ClientMatchState.isWireShocked()
+            || com.log_to_kot.maniacmod.client.rope.RopeHangClient.isLocalHung()
             || ClientInputHandler.isRepairHeld()
             || isFallenSurvivor()
             || WakeUpAnimation.isPlaying()

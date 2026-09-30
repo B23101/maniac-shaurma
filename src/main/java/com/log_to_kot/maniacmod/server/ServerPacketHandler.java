@@ -174,6 +174,13 @@ public final class ServerPacketHandler {
         match.traps().onEscapeStart(player);
     }
 
+    /** A/D підвішеної жертви мотузки: див. {@code TrapModule#onRopeSwing}. */
+    public static void onRopeSwing(ServerPlayer player, int dir) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null || player == null) return;
+        match.traps().onRopeSwing(player, dir);
+    }
+
     /**
      * ПКМ по предмету на землі, коли ванільний приціл клієнта цілив у траву
      * перед ним. Сервер НЕ довіряє клієнту: сам перевіряє, що промінь

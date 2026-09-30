@@ -42,7 +42,7 @@ import java.util.function.Consumer;
  *
  * ── Число заряду на іконці ───────────────────────────────────────────
  * Малюється клієнтським {@code IItemDecorator}
- * ({@link com.log_to_kot.maniacmod.client.renderer.FuelCanisterChargeDecorator}),
+ * ({@link com.log_to_kot.maniacmod.client.renderer.ItemHudDecorator}),
  * який реєструється в {@code ClientSetup} і викликається з
  * {@code GuiGraphics.renderItemDecorations} — тобто працює і у ванільних
  * слотах, і в кастомному хотбарі мода.

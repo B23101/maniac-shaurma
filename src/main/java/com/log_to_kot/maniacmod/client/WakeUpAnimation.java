@@ -120,8 +120,17 @@ public final class WakeUpAnimation {
         if (ClientMatchState.phase() == GamePhase.ROLE_REVEAL) start();
     }
 
+    /**
+     * Анімацію вставання в матчі ВИМКНЕНО (запит: гравці не лежать на старті).
+     * Код і {@code wake_up.json} лишені — щоб повернути, достатньо {@code true}.
+     * Поки {@code false}, {@link #isPlaying()} завжди {@code false}: камера, рух,
+     * руки й модель гравця лишаються ванільними.
+     */
+    private static final boolean ENABLED = false;
+
     private static void start() {
         stop();
+        if (!ENABLED) return;
         pendingFinish = false;
         hasLastAngles = false;
         ClientLevel level = Minecraft.getInstance().level;

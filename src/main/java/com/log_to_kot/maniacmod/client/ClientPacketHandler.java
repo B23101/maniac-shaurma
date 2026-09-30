@@ -34,6 +34,16 @@ public final class ClientPacketHandler {
 
     public static void onPhase(GamePhase phase) {
         ClientMatchState.setPhase(phase);
+        if (!phase.allows(com.log_to_kot.maniacmod.core.phase.PhaseRule.TRAPS)) {
+            // Гра скінчилась / не почалась: жодної підсвітки жертв, підказки F,
+            // удару струмом чи підвісу — незалежно від того, чи дійшли пакети.
+            com.log_to_kot.maniacmod.client.glow.TrapVictimGlow.reset();
+            ClientMatchState.setTrapEscapePrompt(false);
+            ClientMatchState.setWireShocked(false);
+            com.log_to_kot.maniacmod.client.WireShockCameraShake.configure(false, 0.0, 1.0);
+            com.log_to_kot.maniacmod.client.rope.RopeHangClient.reset();
+            com.log_to_kot.maniacmod.client.rope.RopeHangPoseAnimation.reset();
+        }
         // Голос маньяка прив'язаний до фази й ролі — перераховуємо одразу
         // після оновлення стану (див. voice/VoiceActivation).
         com.log_to_kot.maniacmod.voice.VoiceActivation.refresh();
@@ -203,6 +213,11 @@ public final class ClientPacketHandler {
         ClientMatchState.setRoster(entries);
     }
 
+    /** Ціль матчу («N з M генераторів», віхи) — джерело для верхньої картки tab-екрана. */
+    public static void onObjectives(com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket packet) {
+        ClientMatchState.setObjectives(packet);
+    }
+
     public static void onCountdown(int digit, int accentArgb) {
         if (digit <= 0) {
             dev.shaurmalib.forge.overlay.AnimatedCountdownSystem.clear();
@@ -231,6 +246,11 @@ public final class ClientPacketHandler {
      */
     public static void onManiacStun(java.util.UUID maniacId, boolean stunned, int totalTicks) {
         ClientMatchState.setManiacStun(maniacId, stunned, totalTicks);
+    }
+
+    /** Відкрити екран міні-гри розкачування (див. {@code RopeMinigameOpenPacket}). */
+    public static void onRopeMinigameOpen() {
+        com.log_to_kot.maniacmod.client.screen.minigame.RopeSwingScreen.open();
     }
 
     /** Показати/сховати підказку "Натисни F" (див. {@code TrapEscapePromptPacket}). */

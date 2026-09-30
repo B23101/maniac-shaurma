@@ -88,6 +88,9 @@ public final class ModSoundCues {
         cue(ModSounds.WIRE_ZAP_3,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.WIRE_PLACE,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
         cue(ModSounds.WIRE_CUT,         SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.ROPE_PLACE,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.ROPE_CATCH,       SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.ROPE_ESCAPE,      SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
 
         // Фідбек міні-гри "ціль" — це ЗВУК ІНТЕРФЕЙСУ (гравець чує його
         // лише у себе, екран відкритий тільки в нього), тому UI, а не

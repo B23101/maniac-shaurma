@@ -76,11 +76,14 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
      *                    саме null, а не три нулі: відсутність габаритів
      *                    і нульовий хітбокс — різні речі, і клієнт не має
      *                    випадково застосувати другий
+     * @param killerId    лише для ELIMINATED: маньяк, що останнім бив жертву.
+     *                    null — невідомо (смерть без удару) або не вибулий.
+     *                    Tab показує маньяку тільки ЙОГО жертв
      */
     public record RosterEntry(UUID playerId, String displayName,
                                RoleSyncPacket.Role role, String archetypeId,
                                SurvivorState state, int hp, int maxHp,
-                               ManiacBody maniacBody) {}
+                               ManiacBody maniacBody, UUID killerId) {}
 
     public RosterSyncPacket(FriendlyByteBuf buf) {
         this(readEntries(buf));
@@ -100,7 +103,8 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
                 buf.readVarInt(),
                 buf.readBoolean()
                     ? new ManiacBody(buf.readFloat(), buf.readFloat(), buf.readFloat())
-                    : null);
+                    : null,
+                buf.readBoolean() ? buf.readUUID() : null);
             list.add(entry);
         }
         return list;
@@ -123,6 +127,8 @@ public record RosterSyncPacket(List<RosterEntry> entries) implements S2CPacket {
                 buf.writeFloat(e.maniacBody().height());
                 buf.writeFloat(e.maniacBody().eyeHeight());
             }
+            buf.writeBoolean(e.killerId() != null);
+            if (e.killerId() != null) buf.writeUUID(e.killerId());
         }
     }
 

@@ -45,7 +45,8 @@ public final class TrapEscapeHintOverlay {
     public static void render(GuiGraphics graphics) {
         Minecraft mc = Minecraft.getInstance();
 
-        boolean visible = ClientMatchState.isTrapEscapePrompt() && mc.screen == null;
+        boolean hungOnRope = com.log_to_kot.maniacmod.client.rope.RopeHangClient.isLocalHung();
+        boolean visible = (ClientMatchState.isTrapEscapePrompt() || hungOnRope) && mc.screen == null;
 
         if (!visible) {
             appear = 0f;
@@ -57,7 +58,8 @@ public final class TrapEscapeHintOverlay {
         appear = UiAnim.approach(appear, 1f, 11f, dt);
         float ease = UiAnim.easeOutCubic(UiAnim.clamp01(appear));
 
-        String text = Component.translatable("maniacmod.trap.escape_press_f_hint").getString();
+        String text = Component.translatable(com.log_to_kot.maniacmod.client.rope.RopeHangClient.isLocalHung()
+            ? "maniacmod.rope.escape_hint" : "maniacmod.trap.escape_press_f_hint").getString();
         drawHint(graphics, mc.font, text, ease);
     }
 

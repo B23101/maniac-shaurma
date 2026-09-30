@@ -93,6 +93,13 @@ final class MatchContext {
     private final Map<UUID, String> terminalDisplayNames = new LinkedHashMap<>();
     private final Map<UUID, SurvivorState> terminalStates = new HashMap<>();
 
+    /**
+     * Жертва → маньяк, що влучив по ній останнім. Потрібно табу: маньяк бачить
+     * лише СВОЇ жертви, а не всіх вибулих. Лише запис «хто вдарив» — рішення,
+     * кого показувати, ухвалює клієнт за {@code RosterEntry.killerId()}.
+     */
+    private final Map<UUID, UUID> lastHitBy = new HashMap<>();
+
     // ── Карта ────────────────────────────────────────────────────────────
 
     private final MapManager map = new MapManager();
@@ -156,6 +163,14 @@ final class MatchContext {
             terminalStates.put(uuid, SurvivorState.ELIMINATED);
         }
     }
+
+    /** Запам'ятати, що {@code attacker} влучив по {@code victim} (перезаписує попереднього). */
+    public void recordManiacHit(UUID victim, UUID attacker) {
+        if (victim != null && attacker != null) lastHitBy.put(victim, attacker);
+    }
+
+    /** Маньяк, що останнім бив цього гравця; {@code null}, якщо ніхто (смерть без удару). */
+    public UUID killerOf(UUID victim) { return lastHitBy.get(victim); }
 
     public void removeSurvivor(UUID uuid) {
         survivorRoles.remove(uuid);

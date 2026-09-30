@@ -477,6 +477,16 @@ public final class MatchOrchestrator {
     }
 
     /** Ім'я гравця, що вже вибув (втік/загинув) цього матчу. null, якщо такого немає. */
+    /** Зафіксувати влучання маньяка по виживому (для підрахунку «своїх жертв» у табі). */
+    public void recordManiacHit(UUID victim, UUID attacker) {
+        context.recordManiacHit(victim, attacker);
+    }
+
+    /** Маньяк, що останнім бив гравця; {@code null}, якщо невідомо. */
+    public UUID killerOf(UUID playerId) {
+        return context.killerOf(playerId);
+    }
+
     public String terminalDisplayNameOf(UUID playerId) {
         return context.terminalDisplayNameOf(playerId);
     }
@@ -494,6 +504,46 @@ public final class MatchOrchestrator {
     /** Позначає ціль матчу досягнутою. Викликають лише зони/генератори. */
     public void completeObjective(MatchObjectives.Objective objective) {
         context.objectives().complete(objective);
+    }
+
+    /**
+     * Знімок поточної ЦІЛІ матчу для tab-екрана клієнтів: «N з M»
+     * генераторів, прогрес кожного й досягнуті віхи. Лише читання —
+     * стан не змінює.
+     *
+     * ── Прогрес одного генератора ──────────────────────────────────
+     * Дві стадії зводяться до ОДНІЄЇ шкали 0..100: кожна дає по 50.
+     * Яка стадія перша — вирішує сам генератор
+     * ({@code GeneratorPoi.stagesDone()}, порядок із
+     * {@code generators.stageOrder}), тому шкала росте безперервно за
+     * будь-якого порядку, а не «повний → знову порожній» на зміні стадії.
+     * Порядок записів — за спаданням прогресу: перші M — ті, що реально
+     * наближають вихід (M = GENERATORS_REQUIRED).
+     */
+    public com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket objectiveSnapshot() {
+        int required = ManiacConfigs.get(ConfigSchema.GENERATORS_REQUIRED);
+        int fuelRequired = Math.max(1, com.log_to_kot.maniacmod.map.zones.GeneratorPoi.fuelRequiredPercent());
+
+        var slots = new ArrayList<com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket.GeneratorSlot>();
+        int done = 0;
+        for (var generator : generators()) {
+            int percent;
+            if (generator.isCompleted()) {
+                percent = 100;
+                done++;
+            } else {
+                int current = generator.stage() == com.log_to_kot.maniacmod.map.zones.GeneratorPoi.Stage.REPAIR
+                    ? generator.repairPercent()
+                    : Math.min(100, generator.fuelPercent() * 100 / fuelRequired);
+                percent = generator.stagesDone() * 50 + current / 2;
+            }
+            slots.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket.GeneratorSlot(
+                generator.stage(), generator.visualState(), Math.max(0, Math.min(100, percent))));
+        }
+        slots.sort((a, b) -> Integer.compare(b.percent(), a.percent()));
+
+        return new com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket(
+            Math.min(done, required), required, slots, completedObjectives());
     }
 
     /** Генератор за позицією. null, якщо на цій позиції генератора немає. */
@@ -571,14 +621,14 @@ public final class MatchOrchestrator {
                         maniac.hitboxWidth(), maniac.hitboxHeight(), maniac.eyeHeight());
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
                     id, name, RoleSyncPacket.Role.MANIAC,
-                    maniac == null ? "" : maniac.id(), SurvivorState.HEALTHY, 0, 0, body));
+                    maniac == null ? "" : maniac.id(), SurvivorState.HEALTHY, 0, 0, body, null));
             } else if (isSurvivor(id)) {
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
                     id, name, RoleSyncPacket.Role.SURVIVOR, "",
-                    survivorStateOf(id), hpOf(id), maxHpOf(id), null));
+                    survivorStateOf(id), hpOf(id), maxHpOf(id), null, null));
             } else {
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
-                    id, name, RoleSyncPacket.Role.SPECTATOR, "", SurvivorState.HEALTHY, 0, 0, null));
+                    id, name, RoleSyncPacket.Role.SPECTATOR, "", SurvivorState.HEALTHY, 0, 0, null, null));
             }
         }
 
@@ -589,7 +639,8 @@ public final class MatchOrchestrator {
             String name = terminalDisplayNameOf(id);
             if (name == null) continue;
             entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
-                id, name, RoleSyncPacket.Role.SURVIVOR, "", terminalStateOf(id), 0, 0, null));
+                id, name, RoleSyncPacket.Role.SURVIVOR, "", terminalStateOf(id), 0, 0, null,
+                terminalStateOf(id) == SurvivorState.ELIMINATED ? killerOf(id) : null));
         }
 
         return entries;
@@ -642,8 +693,10 @@ public final class MatchOrchestrator {
         // може показувати обраного маньяка з його пастками заздалегідь.
         // Каталог пропонуємо теж: дебаг-тестувальник має бачити той
         // самий екран вибору, що й звичайний маньяк у грі.
-        if (archetype != null) traps.syncCatalogIfChoiceNeeded(player, archetype);
-        traps.syncLoadout(player);
+        if (archetype != null && !traps.autoPickIfNoChoice(player, archetype)) {
+            traps.syncCatalogIfChoiceNeeded(player, archetype);
+            traps.syncLoadout(player);
+        }
     }
 
     /**
@@ -1035,8 +1088,14 @@ public final class MatchOrchestrator {
         }
 
         if (phases.is(GamePhase.ROLE_REVEAL)) {
-            if (phases.ticksInPhase() >= roleRevealTicks()) {
-                advanceTo(GamePhase.HUNT, players);
+            long held = phases.ticksInPhase();
+            if (held >= roleRevealTicks()) {
+                // Маньяк ще вибирає пастки — чекаємо, але не довше запасу:
+                // без цього екран вибору закривався б посеред кліку, а вибір
+                // підміняв автовибір. Якщо встиг — фаза закривається одразу.
+                boolean waitForPick = traps().choicePending(maniacArchetype())
+                    && held < roleRevealTicks() + TRAP_PICK_GRACE_TICKS;
+                if (!waitForPick) advanceTo(GamePhase.HUNT, players);
             }
             return;
         }
@@ -1098,6 +1157,9 @@ public final class MatchOrchestrator {
      * кінематики немає; коли з'явиться — достатньо підняти
      * {@code cinematicSeconds} у maniac.yml, код міняти не треба.
      */
+    /** Запас часу понад ROLE_REVEAL на вибір пасток маньяком (10 с). */
+    private static final int TRAP_PICK_GRACE_TICKS = 200;
+
     private int roleRevealTicks() {
         // + повільне розтемнення після вступу: пробудження й роль не мають обрізатись.
         return ManiacConfigs.get(ConfigSchema.ROLE_REVEAL_SECONDS) * 20

@@ -82,10 +82,14 @@ public final class ManiacRenderHandler {
         // відповідає тому, кого малюють цю мить.
         ManiacAnimatable.begin(player, archetype, gameTick);
         try {
+            // Голова від першої особи — прямо перед малюванням (див. javadoc методу).
+            ManiacGeoModel.hideHeadIfFirstPerson();
             renderer.render(player, player.getViewYRot(partialTick), partialTick,
                 event.getPoseStack(), event.getMultiBufferSource(), event.getPackedLight());
         } finally {
             ManiacAnimatable.end();
+            // Baked-модель спільна з Tab — голова ЗАВЖДИ повертається після кадру.
+            ManiacGeoModel.restoreHiddenBones();
         }
     }
 }

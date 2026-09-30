@@ -26,7 +26,7 @@ import net.minecraft.world.item.ItemStack;
  * </ul>
  *
  * Не ванільна Damageable — з тієї ж причини, що в лома: потрібне число
- * відсотків на іконці ({@code CrowbarDurabilityDecorator}).
+ * відсотків на іконці ({@code ItemHudDecorator}).
  */
 public class ScrewdriverItem extends Item {
 

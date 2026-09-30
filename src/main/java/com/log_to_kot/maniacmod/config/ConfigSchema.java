@@ -583,9 +583,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> TRAP_PLACE_COOLDOWN_TICKS =
         ConfigKey.integer("maniac", "trapPlaceCooldownTicks", 500, 20, 6000);
 
-    public static final ConfigKey<Integer> TRAP_MIN_DISTANCE_TO_PLAYER =
-        ConfigKey.integer("maniac", "trapMinDistanceToPlayerBlocks", 3, 0, 32);
-
     /**
      * Перезарядка ПІСЛЯ встановлення капкана, у тіках. 800 = 40 с.
      *
@@ -725,6 +722,45 @@ public final class ConfigSchema {
     /** Частота тряски камери, Гц (ТЗ 5.2). */
     public static final ConfigKey<Double> ELECTRIC_WIRE_SHAKE_HZ =
         ConfigKey.decimal("maniac", "electricWireShakeHz", 9.0, 0.5, 30.0);
+
+    // ── rope bind (мотузка-підвіс) ──────────────────────────────────────
+    // Одноразова пастка зі стелею 3–6 блоків: жертва висить догори дригом,
+    // вибратися можна ножицями або розкачавшись (A/D) до розриву нитки.
+
+    /** Перезарядка після встановлення мотузки, у тіках. 1000 = 50 с. */
+    public static final ConfigKey<Integer> ROPE_TRAP_PLACE_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "ropeTrapPlaceCooldownTicks", 1000, 20, 12000);
+
+    /** Мінімум вільних блоків між підлогою й стелею. */
+    public static final ConfigKey<Integer> ROPE_TRAP_MIN_CEILING_BLOCKS =
+        ConfigKey.integer("maniac", "ropeTrapMinCeilingBlocks", 3, 2, 8);
+
+    /** Максимум вільних блоків між підлогою й стелею. */
+    public static final ConfigKey<Integer> ROPE_TRAP_MAX_CEILING_BLOCKS =
+        ConfigKey.integer("maniac", "ropeTrapMaxCeilingBlocks", 6, 3, 12);
+
+    /** Сила одного вдалого натискання A/D (приріст кутової швидкості за натискання). */
+    public static final ConfigKey<Double> ROPE_SWING_KICK =
+        ConfigKey.decimal("maniac", "ropeSwingKick", 0.032, 0.005, 0.2);
+
+    /** Згасання розгойдування за тік (0.020 = 2%): енергія спадає сама, тому це довго й муторно. */
+    public static final ConfigKey<Double> ROPE_SWING_DAMPING =
+        ConfigKey.decimal("maniac", "ropeSwingDamping", 0.020, 0.001, 0.2);
+
+    /** «Жорсткість» маятника: більше — швидше гойдається (період ~ 2π/√k тіків). */
+    public static final ConfigKey<Double> ROPE_SWING_FREQUENCY =
+        ConfigKey.decimal("maniac", "ropeSwingFrequency", 0.05, 0.01, 0.2);
+
+    /** Кут відхилення (градуси), за якого нитка рветься. */
+    public static final ConfigKey<Double> ROPE_SWING_BREAK_DEGREES =
+        ConfigKey.decimal("maniac", "ropeSwingBreakDegrees", 45.0, 10.0, 80.0);
+
+    /**
+     * Мінімальний інтервал між зарахованими натисканнями (тіків). Швидше —
+     * промах: це і робить спам A/D марним, треба влучати в такт.
+     */
+    public static final ConfigKey<Integer> ROPE_SWING_PRESS_INTERVAL_TICKS =
+        ConfigKey.integer("maniac", "ropeSwingPressIntervalTicks", 8, 2, 30);
 
     /** Дальність, з якої Geo-ножиці перерізають дріт (блоків від очей). */
     public static final ConfigKey<Double> GEO_SCISSORS_RANGE_BLOCKS =
@@ -972,7 +1008,7 @@ public final class ConfigSchema {
 
     public static final ConfigBlock MANIAC = ConfigBlock.settings("maniac", "maniacs.yml",
         "Спільні для всіх маньяків правила полювання.",
-        TRAP_PLACE_COOLDOWN_TICKS, TRAP_MIN_DISTANCE_TO_PLAYER,
+        TRAP_PLACE_COOLDOWN_TICKS,
         BEAR_TRAP_PLACE_COOLDOWN_TICKS,
         TRAP_PLACE_RANGE_BLOCKS, TRAPS_PER_MATCH,
         CROWBAR_HIT_WEAR_PERCENT, CROWBAR_COOLDOWN_TICKS, CROWBAR_RANGE_BLOCKS,
@@ -983,6 +1019,9 @@ public final class ConfigSchema {
         ELECTRIC_WIRE_PLACE_COOLDOWN_TICKS, ELECTRIC_WIRE_MAX_LENGTH_BLOCKS,
         ELECTRIC_WIRE_SHOCK_TICKS, ELECTRIC_WIRE_DAMAGE_PER_SECOND,
         ELECTRIC_WIRE_SHAKE_DEGREES, ELECTRIC_WIRE_SHAKE_HZ,
+        ROPE_TRAP_PLACE_COOLDOWN_TICKS, ROPE_TRAP_MIN_CEILING_BLOCKS, ROPE_TRAP_MAX_CEILING_BLOCKS,
+        ROPE_SWING_KICK, ROPE_SWING_DAMPING, ROPE_SWING_FREQUENCY,
+        ROPE_SWING_BREAK_DEGREES, ROPE_SWING_PRESS_INTERVAL_TICKS,
         GEO_SCISSORS_RANGE_BLOCKS,
         CROWBAR_STUN_DURATION_TICKS, CROWBAR_STUN_COOLDOWN_TICKS, CROWBAR_STUN_RANGE_BLOCKS,
         CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER,

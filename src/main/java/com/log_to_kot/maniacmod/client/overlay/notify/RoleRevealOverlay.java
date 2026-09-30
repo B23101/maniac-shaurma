@@ -37,8 +37,8 @@ import java.util.Locale;
  *
  * ── Хто що бачить ────────────────────────────────────────────────────
  *   • ВИЖИВШИЙ — «ВАША РОЛЬ / ВИЖИВШИЙ» угорі й «ВАШЕ ЗАВДАННЯ / ВТЕКТИ»
- *     внизу. Стартує, щойно закінчилась анімація пробудження
- *     ({@link WakeUpAnimation#isPlaying()} перейшов true → false).
+ *     внизу. Стартує одразу на вході в ROLE_REVEAL (анімацію
+ *     вставання прибрано), після кіно-вступу.
  *   • МАНЬЯК — «ВАША РОЛЬ» + назва його архетипу й іконки пасток, які він
  *     взяв у матч. Стартує, коли прийшов набір пасток
  *     ({@link #onTrapLoadout}) — тобто після вибору в
@@ -130,8 +130,11 @@ public final class RoleRevealOverlay {
 
     // ── Стан ─────────────────────────────────────────────────────────────
     private static boolean armed = false;
-    private static boolean sawWakeUp = false;
+    /** Показ виживого вже поставлено в чергу (щоб не планувати щотіка). */
+    private static boolean survivorQueued = false;
     private static boolean active = false;
+    /** Набір пасток, що прийшов РАНІШЕ за фазу ROLE_REVEAL (порядок пакетів не гарантований). */
+    private static List<String> earlyLoadout = null;
 
     private static Mode mode = Mode.SURVIVOR;
     private static long startedAtMs = 0L;
@@ -161,16 +164,24 @@ public final class RoleRevealOverlay {
     public static void onPhaseChanged(GamePhase prev, GamePhase next) {
         if (next == GamePhase.ROLE_REVEAL && prev != GamePhase.ROLE_REVEAL) {
             armed = true;
-            sawWakeUp = false;
+            survivorQueued = false;
             active = false;
             sparks.clear();
             blood.clear();
+            List<String> early = earlyLoadout;
+            earlyLoadout = null;
+            if (early != null) onTrapLoadout(early);
         }
     }
 
     /** З {@code ClientPacketHandler.onTrapLoadout}: набір пасток маньяка прийшов. */
     public static void onTrapLoadout(List<String> trapIds) {
-        if (!armed || trapIds.isEmpty() || !ClientMatchState.isManiac()) return;
+        if (trapIds.isEmpty() || !ClientMatchState.isManiac()) return;
+        if (!armed) {
+            GamePhase ph = ClientMatchState.phase();
+            if (ph == GamePhase.CINEMATIC || ph == GamePhase.SCATTER) earlyLoadout = List.copyOf(trapIds);
+            return;
+        }
 
         List<TrapEntry> entries = new ArrayList<>();
         for (String id : trapIds) {
@@ -183,30 +194,31 @@ public final class RoleRevealOverlay {
         roleName = upper(maniacName(ClientMatchState.archetypeId()));
         taskText = "";
         labelBottom = upper(I18n.get("maniacmod.reveal.label.traps"));
-        begin(Mode.MANIAC);
+        // Не перекриваємо фінальне розтемнення вступу: стартуємо, щойно воно скінчиться.
+        com.log_to_kot.maniacmod.client.intro.IntroClient.runWhenUnblocked(() -> {
+            if (armed) begin(Mode.MANIAC);
+        });
     }
 
-    /** Момент, коли виживий закінчив прокидатись — оголошуємо роль. */
+    /**
+     * Виживий: оголошення ролі стартує одразу на вході в ROLE_REVEAL (анімації
+     * вставання більше немає), але не раніше, ніж закінчиться кіно-вступ.
+     */
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-        if (!armed) return;
-
-        boolean playing = WakeUpAnimation.isPlaying();
-        if (playing) sawWakeUp = true;
+        if (!armed || survivorQueued) return;
         if (!ClientMatchState.isSurvivor()) return;
 
-        // Кінець пробудження — або кліпу немає взагалі, і тоді стартуємо
-        // на виході з ROLE_REVEAL, щоб виживий не лишився без оголошення.
-        boolean wakeUpDone = sawWakeUp && !playing;
-        boolean phaseLeft = ClientMatchState.phase() != GamePhase.ROLE_REVEAL;
-        if (!wakeUpDone && !phaseLeft) return;
-
-        roleName = upper(I18n.get("maniacmod.reveal.role.survivor"));
-        taskText = upper(I18n.get("maniacmod.reveal.task.survivor"));
-        labelBottom = upper(I18n.get("maniacmod.reveal.label.task"));
-        traps = List.of();
-        begin(Mode.SURVIVOR);
+        survivorQueued = true;
+        com.log_to_kot.maniacmod.client.intro.IntroClient.runWhenUnblocked(() -> {
+            if (!armed) return;
+            roleName = upper(I18n.get("maniacmod.reveal.role.survivor"));
+            taskText = upper(I18n.get("maniacmod.reveal.task.survivor"));
+            labelBottom = upper(I18n.get("maniacmod.reveal.label.task"));
+            traps = List.of();
+            begin(Mode.SURVIVOR);
+        });
     }
 
     private static void begin(Mode newMode) {
@@ -230,8 +242,9 @@ public final class RoleRevealOverlay {
     /** Викликається з {@code ClientMatchState.reset()}. */
     public static void reset() {
         armed = false;
-        sawWakeUp = false;
+        survivorQueued = false;
         active = false;
+        earlyLoadout = null;
         traps = List.of();
         sparks.clear();
         blood.clear();
