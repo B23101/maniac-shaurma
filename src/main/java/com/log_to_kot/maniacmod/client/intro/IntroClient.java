@@ -102,14 +102,23 @@ public final class IntroClient {
     public static void onPhaseChanged(GamePhase next) {
         if (stage == Stage.IDLE) return;
         switch (next) {
-            case LOBBY, RESET, HUNT, POWERED, FINALE, ENDING -> abortInternal(true);
+            case LOBBY, RESET, HUNT, POWERED, HELI_WAIT, FINALE, ENDING -> abortInternal(true);
             default -> {}
         }
     }
 
+    /** Габарити/очі гравців залежать від ClientManiacs, який під час вступу ховає маньяків. */
+    private static void refreshAllDimensions() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return;
+        for (var pl : mc.level.players()) pl.refreshDimensions();
+    }
+
     private static void abortInternal(boolean stopReplay) {
         if (stage == Stage.IDLE) return;
+        boolean wasHidden = isHoldingBlack();
         stage = Stage.IDLE;
+        if (wasHidden) refreshAllDimensions();
         revealRequested = false;
         AUDIO.stopMusic();
         if (stopReplay) ReplayPlayer.stop();
@@ -256,6 +265,9 @@ public final class IntroClient {
     private static void beginFadeIn() {
         stage = Stage.FADE_IN;
         fadeInNanos = System.nanoTime();
+        // Поки вступ ховав маньяка (ClientManiacs.archetypeOf), габарити/очі були ванільні.
+        // Перераховуємо їх тепер — екран у цей момент ще повністю чорний.
+        refreshAllDimensions();
         // Музика гасне, коли все вже завантажено — разом із розтемненням.
         AUDIO.beginMusicFadeOut(IntroTimeline.FADE_IN_MS / 1000f + 0.8f);
         AUDIO.cue(IntroAudio.GAME_START, 1f, 1f);

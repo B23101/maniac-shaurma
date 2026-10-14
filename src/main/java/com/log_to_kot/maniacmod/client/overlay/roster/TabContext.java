@@ -73,6 +73,12 @@ final class TabContext {
     // ── Гравці ───────────────────────────────────────────────────────
     /** Перший маньяк (для місць, де потрібен один); усі — у {@link #maniacs}. */
     RosterEntry maniac;
+    /**
+     * Особу маньяка в Tab приховано: бачить її лише сам маньяк. Для всіх інших (виживі, глядачі)
+     * {@link #maniacs} лишається порожнім — ні ім'я, ні архетип, ні 3D-модель не показуються.
+     * Лобі не рахується: ролей там ще немає.
+     */
+    boolean maniacHidden;
     /** Усі маньяки матчу: картка перемикається між ними, якщо їх 2+. */
     final List<RosterEntry> maniacs = new ArrayList<>();
     RosterEntry myEntry;
@@ -113,6 +119,7 @@ final class TabContext {
     /** Розкладає ростер по групах. Викликати після встановлення {@link #me} і {@link #lobby}. */
     void partition(List<RosterEntry> roster) {
         reset();
+        maniacHidden = !lobby && !iAmManiac();
         all.addAll(roster);
         all.sort(BY_NAME);
 
@@ -121,7 +128,11 @@ final class TabContext {
             if (e.playerId().equals(me)) myEntry = e;
             if (lobby) continue;
             switch (e.role()) {
-                case MANIAC -> { maniacs.add(e); if (maniac == null) maniac = e; }
+                case MANIAC -> {
+                    // Секрет: хто саме маньяк і який він — знає лише він сам. Запис у ростері
+                    // потрібен світу (модель, хітбокс), але Tab його не показує.
+                    if (!maniacHidden) { maniacs.add(e); if (maniac == null) maniac = e; }
+                }
                 case SURVIVOR -> { if (e.state().isTerminal()) terminal.add(e); else alive.add(e); }
                 case SPECTATOR -> spectators.add(e);
             }

@@ -23,15 +23,37 @@ public final class SpawnPoint {
     /** Для MANIAC — id архетипу ("test_maniac"); для решти null. */
     private final String ownerId;
 
+    /** Нахил погляду (лише камера сцени перемоги; решта точок — 0). */
+    private final float pitch;
+
+    /** Точна позиція (для більшості видів — центр блока; для точок сцени — як стояв адмін). */
+    private final double exactX;
+    private final double exactY;
+    private final double exactZ;
+
     /** Чи точка задіяна в поточному матчі (для ITEM частина навмисно порожня). */
     private boolean engaged = false;
 
     public SpawnPoint(BlockPos pos, float yaw, SpawnPointKind kind, String ownerId) {
+        this(pos, yaw, kind, ownerId, 0f, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+    }
+
+    public SpawnPoint(BlockPos pos, float yaw, SpawnPointKind kind, String ownerId,
+                      float pitch, double exactX, double exactY, double exactZ) {
         this.pos = pos;
         this.yaw = yaw;
         this.kind = kind;
         this.ownerId = ownerId;
+        this.pitch = pitch;
+        this.exactX = exactX;
+        this.exactY = exactY;
+        this.exactZ = exactZ;
     }
+
+    public float pitch()           { return pitch; }
+    public double exactX()         { return exactX; }
+    public double exactY()         { return exactY; }
+    public double exactZ()         { return exactZ; }
 
     public BlockPos pos()          { return pos; }
     public float yaw()             { return yaw; }

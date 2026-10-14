@@ -84,15 +84,19 @@ public final class ServerPacketHandler {
     /**
      * Маньяк обрав пастки в меню. Уся валідація (реальні індекси, без
      * дублів, не більше ліміту) — у {@code TrapModule#onTrapsChosen}; тут
-     * лише перевірка ролі й фази. Обирати можна тільки до початку
-     * полювання: посеред матчу міняти набір пасток не можна.
+     * лише перевірка ролі й фази. Обирати можна до початку полювання АБО під
+     * час нього, але лише ОДИН раз: гра не чекає на вибір, а підтверджений
+     * набір посеред матчу вже не міняється.
      */
     public static void onTrapsChosen(ServerPlayer player, java.util.List<Integer> indices) {
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return;
         if (!match.isManiac(player.getUUID())) return;
-        if (!match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.ROLE_REVEAL)
-            && !match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY)) return;
+        boolean preGame = match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.ROLE_REVEAL)
+            || match.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY);
+        boolean lateFirstPick = match.phases().allows(com.log_to_kot.maniacmod.core.phase.PhaseRule.TRAPS)
+            && !match.traps().hasChosen();
+        if (!preGame && !lateFirstPick) return;
 
         match.traps().onTrapsChosen(player, indices);
         match.traps().syncLoadout(player);
@@ -197,6 +201,13 @@ public final class ServerPacketHandler {
         item.interact(player, InteractionHand.MAIN_HAND);
     }
 
+    /** Кнопка «Викликати вертоліт» у меню приймача. Усі перевірки — в EvacModule. */
+    public static void onReceiverCall(ServerPlayer player) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        match.evac().onReceiverCall(player);
+    }
+
     public static void onRescueHold(ServerPlayer player, boolean holding) {
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return;
@@ -204,6 +215,20 @@ public final class ServerPacketHandler {
         if (!match.phases().allows(PhaseRule.RESCUE)) return;
 
         match.survivors().onRescueHold(player, holding);
+    }
+
+    /** Міні-гра барикади: гравець затиснув цвях {@code nail} або відпустив ({@code -1}). Усі перевірки — в BarricadeModule. */
+    public static void onBarricadeNailHold(ServerPlayer player, int nail) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        match.barricades().onNailHold(player, nail);
+    }
+
+    /** Міні-гра барикади: гравець закрив екран. */
+    public static void onBarricadeGameExit(ServerPlayer player) {
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        match.barricades().onGameExit(player);
     }
 
     /**
@@ -293,6 +318,19 @@ public final class ServerPacketHandler {
         com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
             new com.log_to_kot.maniacmod.net.s2c.settings.OpenSettingsMenuPacket(
                 com.log_to_kot.maniacmod.config.SettingsSnapshot.collect()));
+    }
+
+    /**
+     * Адмін-екран відгуків ({@code AdminReviewsScreen}): хто що поставив і
+     * з яким коментарем. Викликається командою {@code /maniac reviews}.
+     * Права ({@code hasPermissions(2)}) перевіряються тут, а не лише в
+     * корені команди — одна межа в одному місці, як у налаштувань.
+     */
+    public static void onAdminReviewsRequest(ServerPlayer player) {
+        if (!player.hasPermissions(2)) return;
+
+        com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player,
+            com.log_to_kot.maniacmod.server.rating.ManiacRatingService.buildAdminPacket());
     }
 
     /**

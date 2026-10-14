@@ -79,6 +79,8 @@ final class MatchContext {
 
     /** Хто вже втік — щоб не рахувати їх ні живими, ні мертвими. */
     private final List<UUID> escaped = new ArrayList<>();
+    /** Примусовий результат (див. {@link #forcedSurvivorsWin()}); null — за правилом. */
+    private Boolean forcedSurvivorsWin = null;
 
     /** Хто вибув остаточно (непритомний не дочекався підняття). */
     private final List<UUID> eliminated = new ArrayList<>();
@@ -119,6 +121,14 @@ final class MatchContext {
 
     private long matchTick = 0;
 
+    /** Особиста статистика матчу (для екрана підсумків). */
+    private final MatchStats stats = new MatchStats();
+    MatchStats stats() { return stats; }
+
+    /** Хронологія матчу для історії (див. {@link MatchTimeline}). Нова разом із новим матчем. */
+    private final MatchTimeline timeline = new MatchTimeline();
+    MatchTimeline timeline() { return timeline; }
+
     // ── Ролі: запис ──────────────────────────────────────────────────────
 
     public void assignManiac(UUID uuid, ManiacArchetype archetype) {
@@ -144,6 +154,7 @@ final class MatchContext {
             escaped.add(uuid);
             terminalDisplayNames.put(uuid, displayName);
             terminalStates.put(uuid, SurvivorState.ESCAPED);
+            stats.stampEnd(uuid, matchTick);
         }
     }
 
@@ -161,6 +172,7 @@ final class MatchContext {
             eliminated.add(uuid);
             terminalDisplayNames.put(uuid, displayName);
             terminalStates.put(uuid, SurvivorState.ELIMINATED);
+            stats.stampEnd(uuid, matchTick);
         }
     }
 
@@ -267,6 +279,13 @@ final class MatchContext {
 
     public List<UUID> survivorIds()       { return List.copyOf(survivorRoles.keySet()); }
     public List<UUID> escapedIds()        { return List.copyOf(escaped); }
+    /**
+     * Примусовий результат матчу (команда {@code /maniac win}). {@code null} — результат
+     * рахується за правилом {@code MatchOrchestrator.survivorsWon()} (втік хоч один). Живе в контексті,
+     * тож новий матч (новий MatchContext) його не успадковує.
+     */
+    public Boolean forcedSurvivorsWin()   { return forcedSurvivorsWin; }
+    public void forceOutcome(boolean survivorsWin) { this.forcedSurvivorsWin = survivorsWin; }
     public List<UUID> eliminatedIds()     { return List.copyOf(eliminated); }
     public int aliveSurvivorCount()       { return survivorRoles.size(); }
 

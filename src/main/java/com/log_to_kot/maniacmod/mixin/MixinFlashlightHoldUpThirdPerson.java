@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.items.FlashlightItem;
 import net.minecraft.client.model.PlayerModel;
 import net.minecraft.util.Mth;
@@ -52,6 +54,7 @@ public abstract class MixinFlashlightHoldUpThirdPerson {
     private void maniacmod$holdUpFlashlight(LivingEntity entity, float limbSwing, float limbSwingAmount,
                                              float ageInTicks, float netHeadYaw, float headPitch, CallbackInfo ci) {
         if (!(entity instanceof Player player)) return;
+        if (VrServerCompat.isVrPlayer(player)) return; // VR: руки = контролери
         // Впалий лежить у повнотіловій PAL-позі — руки не чіпаємо.
         if (com.log_to_kot.maniacmod.client.ClientMatchState.isFallen(player.getUUID())) return;
         PlayerModel<?> self = (PlayerModel<?>) (Object) this;

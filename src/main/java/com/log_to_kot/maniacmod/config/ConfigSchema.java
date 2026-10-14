@@ -101,6 +101,89 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> ENDING_SECONDS =
         ConfigKey.integer("game", "endingSeconds", 10, 1, 120);
 
+    // ── Сцена перемоги маніяка (VICTORY_SCENE) ────────────────────────────
+
+    /**
+     * Вимкнути — перемога маніяка одразу веде в ENDING (як до сцени). Сцена також пропускається,
+     * якщо не розмічено 2 точки камери.
+     */
+    public static final ConfigKey<Boolean> VICTORY_SCENE_ENABLED =
+        ConfigKey.bool("game", "victorySceneEnabled", true);
+
+    /** Скільки секунд камера їде від першої точки до другої. */
+    public static final ConfigKey<Integer> VICTORY_SCENE_CAMERA_SECONDS =
+        ConfigKey.integer("game", "victorySceneCameraSeconds", 10, 3, 60);
+
+    /** Мінімум секунд під чорним екраном: сцена збирається, чанки прогружаються. */
+    public static final ConfigKey<Integer> VICTORY_SCENE_LOAD_SECONDS =
+        ConfigKey.integer("game", "victorySceneLoadSeconds", 1, 1, 20);
+
+    /** Скільки секунд тримається напис «МАНІЯК ПЕРЕМІГ» після зупинки камери. */
+    public static final ConfigKey<Integer> VICTORY_SCENE_TITLE_SECONDS =
+        ConfigKey.integer("game", "victorySceneTitleSeconds", 4, 1, 15);
+
+    /** На скільки блоків над точкою 1 піднімаються ТІЛА гравців (щоб не заважали камері й чанкам). */
+    public static final ConfigKey<Integer> VICTORY_SCENE_LIFT_BLOCKS =
+        ConfigKey.integer("game", "victorySceneLiftBlocks", 20, 0, 200);
+
+    /** Сила легкої тряски камери під час руху, 0..100 (0 — рівний кадр). */
+    public static final ConfigKey<Integer> VICTORY_SCENE_SHAKE_PERCENT =
+        ConfigKey.integer("game", "victorySceneShakePercent", 30, 0, 100);
+
+    /** Чи лишати порожні гачки (без тіл), якщо гачків розмічено більше, ніж жертв. */
+    public static final ConfigKey<Boolean> VICTORY_SCENE_EMPTY_HOOKS =
+        ConfigKey.bool("game", "victorySceneEmptyHooks", true);
+
+    // ── Досвід (XP) за матч — екран підсумків ─────────────────────────────
+
+    /** XP за те, що матч дограно (усім учасникам). */
+    public static final ConfigKey<Integer> XP_COMPLETE =
+        ConfigKey.integer("game", "xpMatchComplete", 2, 0, 1000);
+
+    /** XP за перемогу своєї сторони (втік хоч один виживий — перемога виживих, інакше маніяка). */
+    public static final ConfigKey<Integer> XP_WIN =
+        ConfigKey.integer("game", "xpWin", 2, 0, 1000);
+
+    /** XP виживому за власну втечу. */
+    public static final ConfigKey<Integer> XP_ESCAPE =
+        ConfigKey.integer("game", "xpEscape", 1, 0, 1000);
+
+    /** XP виживому за участь у ремонті генераторів (див. {@code xpGeneratorsMinSeconds}). */
+    public static final ConfigKey<Integer> XP_GENERATORS =
+        ConfigKey.integer("game", "xpGenerators", 1, 0, 1000);
+
+    /** Скільки секунд ремонту треба вкласти, щоб отримати {@code xpGenerators}. */
+    public static final ConfigKey<Integer> XP_GENERATORS_MIN_SECONDS =
+        ConfigKey.integer("game", "xpGeneratorsMinSeconds", 30, 1, 3600);
+
+    /** XP виживому, який підняв хоч одного товариша (одноразово за матч — ліміт нагороди). */
+    public static final ConfigKey<Integer> XP_RESCUE =
+        ConfigKey.integer("game", "xpRescue", 1, 0, 1000);
+
+    /** XP маніяку, якщо він повісив хоч одну жертву (одноразово за матч). */
+    public static final ConfigKey<Integer> XP_MANIAC_HOOKS =
+        ConfigKey.integer("game", "xpManiacHooks", 1, 0, 1000);
+
+    /** XP маніяку, якщо він повалив щонайменше 3 жертв (одноразово за матч). */
+    public static final ConfigKey<Integer> XP_MANIAC_DOWNS =
+        ConfigKey.integer("game", "xpManiacDowns", 1, 0, 1000);
+
+    // ── Історія матчів ────────────────────────────────────────────────────
+
+    /**
+     * Чи записувати завершені матчі в історію ({@code history/}). У дебаг-режимі матч НЕ записується
+     * незалежно від цього ключа: одиночні перевірки не мають засмічувати історію справжніх ігор.
+     */
+    public static final ConfigKey<Boolean> HISTORY_ENABLED =
+        ConfigKey.bool("game", "historyEnabled", true);
+
+    /**
+     * Скільки подій максимум потрапляє в хронологію одного матчу. Коли ліміт вичерпано, відкидаються
+     * лише другорядні події (удари, пастки); ключові — вибуття, втечі, генератори, фази — пишуться завжди.
+     */
+    public static final ConfigKey<Integer> HISTORY_MAX_EVENTS =
+        ConfigKey.integer("game", "historyMaxEvents", 1500, 100, 5000);
+
     // ── world ─────────────────────────────────────────────────────────────
 
     /** Час доби у тіках Minecraft, який утримується під час активної гри. */
@@ -491,19 +574,16 @@ public final class ConfigSchema {
         ConfigKey.decimal("survivors", "legBreakChanceAtMaxHeight", 0.90, 0.0, 1.0);
 
     /**
-     * Мінімальна висота падіння (блоки), з якої ноги вже зношуються.
-     * Навіть падіння НИЖЧЕ порога нокдауну ({@link #FALL_KNOCKDOWN_HEIGHT})
-     * не безкарне: воно зменшує приховану міцність ніг. Було: нижче порога
-     * не траплялось нічого взагалі. 0 блоків не має сенсу (кожен стрибок
-     * був би падінням), тому мінімум 1.
+     * Мінімальна висота падіння (блоки), з якої ноги зношуються. Фактично не нижча за
+     * {@link #FALL_KNOCKDOWN_HEIGHT}: знос дає лише справжнє падіння (гравець лягає й
+     * піднімається пробілом), а не будь-яке приземлення з 1–2 блоків.
      */
     public static final ConfigKey<Integer> FALL_LEG_WEAR_MIN_HEIGHT =
         ConfigKey.integer("survivors", "fallLegWearMinHeightBlocks", 2, 1, 64);
 
     /**
      * Скільки ПРИХОВАНОЇ міцності ніг (0–100) знімає кожен повний блок
-     * висоти падіння. Діє на будь-яке падіння від
-     * {@link #FALL_LEG_WEAR_MIN_HEIGHT}, а не лише на нокдаун. Коли шкала
+     * висоти падіння. Діє на справжнє падіння (від порога нокдауну). Коли шкала
      * доходить до нуля — нога ламається. Міцність повільно відновлюється
      * ({@code legIntegrityRegenPerSecond}). 0 — падіння не зношує ноги.
      */
@@ -762,6 +842,114 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> ROPE_SWING_PRESS_INTERVAL_TICKS =
         ConfigKey.integer("maniac", "ropeSwingPressIntervalTicks", 8, 2, 30);
 
+    // ── smoke mine (димова міна) ────────────────────────────────────────
+    // Одноразова пастка-«заборона зони»: хто наступив — випускає хмару газу.
+    // Усередині хмари виживі сліпнуть, глухнуть, задихаються (стаміна на нулі),
+    // світяться контуром для всіх і щосекунди втрачають хп. Знешкодити до спрацювання можна ломом.
+
+    /** Перезарядка після встановлення димової міни, у тіках. 900 = 45 с. */
+    public static final ConfigKey<Integer> SMOKE_MINE_PLACE_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "smokeMinePlaceCooldownTicks", 900, 20, 12000);
+
+    /**
+     * Половина сторони квадратної зони газу в блоках (зона — квадрат
+     * навколо міни, а не коло): 4.0 = 8×8 блоків.
+     */
+    public static final ConfigKey<Double> SMOKE_MINE_RADIUS_BLOCKS =
+        ConfigKey.decimal("maniac", "smokeMineRadiusBlocks", 4.0, 0.5, 10.0);
+
+    /** Висота зони газу над підлогою, у блоках. */
+    public static final ConfigKey<Double> SMOKE_MINE_HEIGHT_BLOCKS =
+        ConfigKey.decimal("maniac", "smokeMineHeightBlocks", 4.0, 1.0, 8.0);
+
+    /** Скільки тіків хмара тримається після спрацювання. 200 = 10 с. */
+    public static final ConfigKey<Integer> SMOKE_MINE_CLOUD_TICKS =
+        ConfigKey.integer("maniac", "smokeMineCloudTicks", 200, 20, 1200);
+
+    /**
+     * Тривалість сліпоти (ванільний BLINDNESS), у тіках. Поки гравець у
+     * хмарі, сліпота щосекунди поновлюється, тож після виходу з хмари
+     * вона триває ще стільки. 100 = 5 с.
+     */
+    public static final ConfigKey<Integer> SMOKE_MINE_BLINDNESS_TICKS =
+        ConfigKey.integer("maniac", "smokeMineBlindnessTicks", 100, 20, 600);
+
+    /**
+     * Скільки тіків після останнього перебування в хмарі гравець світиться
+     * контуром для всіх (так само, як жертва капкана). 40 = 2 с; 0 — не світити.
+     * Усередині хмари контур горить увесь час, це лише «хвіст» після виходу.
+     */
+    public static final ConfigKey<Integer> SMOKE_MINE_GLOW_TICKS =
+        ConfigKey.integer("maniac", "smokeMineGlowTicks", 40, 0, 1200);
+
+    /** Шкода від газу за КОЖНУ секунду перебування в хмарі, хп. */
+    public static final ConfigKey<Integer> SMOKE_MINE_DAMAGE_PER_SECOND =
+        ConfigKey.integer("maniac", "smokeMineDamagePerSecond", 1, 0, 20);
+
+    /**
+     * На скільки відсотків газ глушить звуки в того, хто в хмарі
+     * (клієнт зменшує загальну гучність). 0 — не глушити.
+     */
+    public static final ConfigKey<Integer> SMOKE_MINE_MUFFLE_PERCENT =
+        ConfigKey.integer("maniac", "smokeMineMufflePercent", 85, 0, 100);
+
+    /**
+     * Скільки тіків після останнього перебування в газі стаміна НЕ відновлюється
+     * (шкала тримається на нулі, бігти не можна). Усередині хмари стаміна на
+     * нулі весь час — це лише «хвіст» після виходу. 200 = 10 с; 0 — без хвоста.
+     */
+    public static final ConfigKey<Integer> SMOKE_MINE_STAMINA_LOCK_TICKS =
+        ConfigKey.integer("maniac", "smokeMineStaminaLockTicks", 200, 0, 1200);
+
+    // ── spike trap (шипи) ───────────────────────────────────────────────
+    // Одноразова пастка «боляче й видно»: хто наступив — втрачає хп, всю стаміну
+    // і світиться контуром для всіх. Жертву НЕ тримає, знешкодити до спрацювання
+    // не можна. Екран жертви показує «потрапив на шипи».
+
+    /** Перезарядка після встановлення шипів, у тіках. 600 = 30 с. */
+    public static final ConfigKey<Integer> SPIKE_TRAP_PLACE_COOLDOWN_TICKS =
+        ConfigKey.integer("maniac", "spikeTrapPlaceCooldownTicks", 600, 20, 12000);
+
+    /** Шкода від шипів, хп (разова, при наступанні). */
+    public static final ConfigKey<Integer> SPIKE_TRAP_DAMAGE =
+        ConfigKey.integer("maniac", "spikeTrapDamage", 10, 0, 100);
+
+    /** Скільки тіків жертва світиться контуром для всіх після удару. 100 = 5 с; 0 — не світити. */
+    public static final ConfigKey<Integer> SPIKE_TRAP_GLOW_TICKS =
+        ConfigKey.integer("maniac", "spikeTrapGlowTicks", 100, 0, 1200);
+
+    /**
+     * Скільки тіків після удару стаміна НЕ відновлюється (на нулі). Сам удар
+     * обнуляє її миттєво; цей «хвіст» лише не дає їй одразу повернутись.
+     * 40 = 2 с; 0 — лише разове обнулення.
+     */
+    public static final ConfigKey<Integer> SPIKE_TRAP_STAMINA_LOCK_TICKS =
+        ConfigKey.integer("maniac", "spikeTrapStaminaLockTicks", 40, 0, 1200);
+
+    /** Скільки тіків шипи стирчать після спрацювання, перш ніж сховаються. 80 = 4 с. */
+    public static final ConfigKey<Integer> SPIKE_TRAP_LINGER_TICKS =
+        ConfigKey.integer("maniac", "spikeTrapLingerTicks", 80, 10, 600);
+
+    /** Підкидання жертви вгору від удару знизу (швидкість по Y, блоків/тік). 0 — не підкидає. */
+    public static final ConfigKey<Double> SPIKE_TRAP_KNOCK_UP =
+        ConfigKey.decimal("maniac", "spikeTrapKnockUp", 0.32, 0.0, 1.0);
+
+    // ── blood (кров від ударів маньяка) ─────────────────────────────────
+    // Суто візуальний ефект: при влучанні маньяка з жертви бризкає кров, яка
+    // лишається плямами на підлозі й стінах до кінця матчу. Конфіг живе на
+    // СЕРВЕРІ, тому клієнт отримує вже готові числа в BloodSplatterPacket.
+
+    /** Чи бризкає кров при ударі маньяка (false — ефекту немає зовсім). */
+    public static final ConfigKey<Boolean> BLOOD_ENABLED =
+        ConfigKey.bool("maniac", "bloodEnabled", true);
+
+    /**
+     * Скільки крапель вилітає за ОДИН удар (збиття з ніг дає ×1.5 і калюжу).
+     * 0 — без бризок. Більше — густіше, але й важче для слабких ПК.
+     */
+    public static final ConfigKey<Integer> BLOOD_DROPLETS =
+        ConfigKey.integer("maniac", "bloodDroplets", 18, 0, 60);
+
     /** Дальність, з якої Geo-ножиці перерізають дріт (блоків від очей). */
     public static final ConfigKey<Double> GEO_SCISSORS_RANGE_BLOCKS =
         ConfigKey.decimal("maniac", "geoScissorsRangeBlocks", 3.5, 1.0, 8.0);
@@ -965,7 +1153,13 @@ public final class ConfigSchema {
         "Головні правила матчу: мінімум гравців, тривалості технічних фаз "
         + "і дебаг-режим для одиночних перевірок.",
         MIN_PLAYERS, INTRO_ENABLED, INTRO_REPLAY_SECONDS, INTRO_TIP_SECONDS,
-        ROLE_REVEAL_SECONDS, ENDING_SECONDS, DEBUG_MODE, DEBUG_ROLE);
+        ROLE_REVEAL_SECONDS, ENDING_SECONDS,
+        VICTORY_SCENE_ENABLED, VICTORY_SCENE_CAMERA_SECONDS, VICTORY_SCENE_LOAD_SECONDS,
+        VICTORY_SCENE_TITLE_SECONDS, VICTORY_SCENE_LIFT_BLOCKS, VICTORY_SCENE_SHAKE_PERCENT,
+        VICTORY_SCENE_EMPTY_HOOKS,
+        XP_COMPLETE, XP_WIN, XP_ESCAPE, XP_GENERATORS, XP_GENERATORS_MIN_SECONDS, XP_RESCUE,
+        XP_MANIAC_HOOKS, XP_MANIAC_DOWNS, HISTORY_ENABLED, HISTORY_MAX_EVENTS,
+        DEBUG_MODE, DEBUG_ROLE);
 
     public static final ConfigBlock WORLD = ConfigBlock.settings("world", "world.yml",
         "Час доби (в усіх фазах) і керовані погодні події під час гри. "
@@ -1022,6 +1216,12 @@ public final class ConfigSchema {
         ROPE_TRAP_PLACE_COOLDOWN_TICKS, ROPE_TRAP_MIN_CEILING_BLOCKS, ROPE_TRAP_MAX_CEILING_BLOCKS,
         ROPE_SWING_KICK, ROPE_SWING_DAMPING, ROPE_SWING_FREQUENCY,
         ROPE_SWING_BREAK_DEGREES, ROPE_SWING_PRESS_INTERVAL_TICKS,
+        SMOKE_MINE_PLACE_COOLDOWN_TICKS, SMOKE_MINE_RADIUS_BLOCKS, SMOKE_MINE_HEIGHT_BLOCKS,
+        SMOKE_MINE_CLOUD_TICKS, SMOKE_MINE_BLINDNESS_TICKS, SMOKE_MINE_GLOW_TICKS,
+        SMOKE_MINE_DAMAGE_PER_SECOND, SMOKE_MINE_MUFFLE_PERCENT, SMOKE_MINE_STAMINA_LOCK_TICKS,
+        SPIKE_TRAP_PLACE_COOLDOWN_TICKS, SPIKE_TRAP_DAMAGE, SPIKE_TRAP_GLOW_TICKS,
+        SPIKE_TRAP_STAMINA_LOCK_TICKS, SPIKE_TRAP_LINGER_TICKS, SPIKE_TRAP_KNOCK_UP,
+        BLOOD_ENABLED, BLOOD_DROPLETS,
         GEO_SCISSORS_RANGE_BLOCKS,
         CROWBAR_STUN_DURATION_TICKS, CROWBAR_STUN_COOLDOWN_TICKS, CROWBAR_STUN_RANGE_BLOCKS,
         CROWBAR_STUN_HIT_WEAR_PERCENT, CROWBAR_STUN_NAUSEA_AMPLIFIER,
@@ -1088,6 +1288,255 @@ public final class ConfigSchema {
         + "у темних зонах, розмічених /maniac darkzone.",
         DARKZONE_INTENSITY, DARKZONE_TRANSITION_TICKS);
 
+    // ── evacuation ───────────────────────────────────────────────────────
+    //
+    // Після генераторів: приймач → виклик вертольота → сигнальна ракета на галявині →
+    // політ → мотузка → лазіння. Розмітку (точки приймача, галявини) наповнюють команди
+    // /maniac point add receiver і /maniac clearing ...; тут лише числа.
+
+    /** Макс. відстань від гравця до приймача, щоб ПКМ відкрив меню. */
+    public static final ConfigKey<Double> EVAC_RECEIVER_USE_DISTANCE =
+        ConfigKey.decimal("evacuation", "receiverUseDistanceBlocks", 4.0, 1.0, 16.0);
+
+    /** Мін. відстань від обраного приймача до старту маньяка (послаблюється як для генераторів). */
+    public static final ConfigKey<Integer> EVAC_RECEIVER_MIN_MANIAC_BLOCKS =
+        ConfigKey.integer("evacuation", "receiverMinManiacBlocks", 50, 0, 1024);
+
+    /**
+     * Скільки сигнальних ракет гарантовано лежить на карті на старті (на різних ITEM-точках,
+     * понад звичайний лут). Одна ракета = одна спроба; запас захищає від ситуації «єдину
+     * ракету втрачено» — без неї евакуація неможлива взагалі.
+     */
+    public static final ConfigKey<Integer> EVAC_FLARE_COUNT =
+        ConfigKey.integer("evacuation", "flareCount", 2, 1, 8);
+
+    /**
+     * Якщо на карті (у світі й в інвентарях) не лишилось жодної ракети, а вертоліт ще не
+     * летить, через стільки секунд біля приймача з'являється нова. 0 — вимкнено.
+     * Захист від soft-lock: ракету не можна зламати, але можна кинути в безодню чи
+     * загубити разом із вибулим власником.
+     */
+    public static final ConfigKey<Integer> EVAC_FLARE_WATCHDOG_SECONDS =
+        ConfigKey.integer("evacuation", "flareWatchdogSeconds", 20, 0, 600);
+
+    /** Скільки секунд палає ракета (партикли видно здалеку — це і є «сигнал», і ризик). */
+    public static final ConfigKey<Integer> EVAC_FLARE_BURN_SECONDS =
+        ConfigKey.integer("evacuation", "flareBurnSeconds", 30, 5, 300);
+
+    /**
+     * Затримка між запуском ракети й початком польоту («екіпаж реагує»). За цей час сервер
+     * підвантажує коридор польоту й зчитує висоти блоків. Далі вертоліт летить зі швидкістю
+     * {@link #EVAC_HELI_SPEED}: повний час очікування = ця затримка + відстань появи / швидкість.
+     */
+    public static final ConfigKey<Integer> EVAC_HELI_DISPATCH_SECONDS =
+        ConfigKey.integer("evacuation", "heliDispatchDelaySeconds", 15, 0, 300);
+
+    /**
+     * Як далеко від точки зависання (по прямій) вертоліт з'являється. Він ніколи не падає
+     * «з неба» над галявиною: з'являється тут і летить до неї. Напрям — у бік
+     * {@code /maniac heli entry}, а якщо точки немає — найвільніший із 8 напрямків.
+     */
+    public static final ConfigKey<Integer> EVAC_HELI_SPAWN_DISTANCE =
+        ConfigKey.integer("evacuation", "heliSpawnDistanceBlocks", 400, 100, 1500);
+
+    /**
+     * Запас висоти над найвищим блоком у польоті. Вертоліт ПОВТОРЮЄ рельєф: далеко від
+     * галявини тримає цей запас, а біля неї плавно знижується (мінімальний запас там менший,
+     * див. EvacModule). Висота рахується по реальних блоках шляху, зокрема дерева й будівлі.
+     */
+    public static final ConfigKey<Integer> EVAC_HELI_CRUISE_CLEARANCE =
+        ConfigKey.integer("evacuation", "heliCruiseClearanceBlocks", 25, 5, 100);
+
+    /** Швидкість польоту по прямій, блоків за секунду (біля точки вертоліт плавно гальмує). */
+    public static final ConfigKey<Double> EVAC_HELI_SPEED =
+        ConfigKey.decimal("evacuation", "heliSpeedBlocksPerSecond", 28.0, 4.0, 120.0);
+
+    /**
+     * Швидкість вертикальних маневрів, блоків за секунду: з неї виходить крутизна НАБОРУ висоти
+     * над перешкодою ({@code ця / швидкість польоту}) і швидкість короткого вертикального
+     * доспуску над галявиною, якщо профіль закінчився вище за висоту зависання. Зниження
+     * до галявини за перешкодою йде крутіше (до ~24°), щоб вертоліт не «падав з неба».
+     */
+    public static final ConfigKey<Double> EVAC_HELI_DESCEND_SPEED =
+        ConfigKey.decimal("evacuation", "heliDescendBlocksPerSecond", 6.0, 1.0, 30.0);
+
+    /** Довжина мотузки = висота висіння над землею в точці. Це ж довжина лазіння. */
+    public static final ConfigKey<Integer> EVAC_ROPE_LENGTH =
+        ConfigKey.integer("evacuation", "ropeLengthBlocks", 14, 6, 40);
+
+    /** За скільки секунд мотузка «розмотується» донизу (і стільки ж підтягується при відльоті). */
+    public static final ConfigKey<Double> EVAC_ROPE_DROP_SECONDS =
+        ConfigKey.decimal("evacuation", "ropeDropSeconds", 3.0, 0.5, 20.0);
+
+    /** Швидкість автоматичного лазіння, блоків за секунду. */
+    public static final ConfigKey<Double> EVAC_CLIMB_SPEED =
+        ConfigKey.decimal("evacuation", "climbBlocksPerSecond", 1.6, 0.3, 8.0);
+
+    /**
+     * Скільки тіків лазіння стоїть на місці після удару маньяка, якщо гравець ВИЖИВ.
+     * 0 (дефолт) — по дизайну: удар без нокауту лазіння не зупиняє. Ручка баласу для
+     * тестів: невелика пауза дає маньяку шанс добити того, хто лізе низько.
+     */
+    public static final ConfigKey<Integer> EVAC_CLIMB_HIT_STAGGER_TICKS =
+        ConfigKey.integer("evacuation", "climbHitStaggerTicks", 0, 0, 100);
+
+    /** Скільки секунд вертоліт висить зі спущеною мотузкою, поки не почне відліт. */
+    public static final ConfigKey<Integer> EVAC_HELI_STAY_SECONDS =
+        ConfigKey.integer("evacuation", "heliStaySeconds", 90, 10, 600);
+
+    /**
+     * Скільки секунд вертоліт чекає тих, хто ВЖЕ лізе, коли час висіння вийшов. Після цього
+     * відлітає, навіть якщо хтось ще на мотузці (той падає). 0 — не чекає взагалі.
+     */
+    public static final ConfigKey<Integer> EVAC_DEPART_GRACE_SECONDS =
+        ConfigKey.integer("evacuation", "departGraceSeconds", 0, 0, 120);
+
+    /** Чи маньяк чує оголошення «вертоліт викликано / ракету запущено / мотузка спущена». */
+    public static final ConfigKey<Boolean> EVAC_ANNOUNCE_TO_MANIAC =
+        ConfigKey.bool("evacuation", "announceToManiac", true);
+
+    public static final ConfigBlock EVACUATION = ConfigBlock.settings("evacuation", "evacuation.yml",
+        "Евакуація: приймач, сигнальна ракета, вертоліт і мотузка.",
+        EVAC_RECEIVER_USE_DISTANCE, EVAC_RECEIVER_MIN_MANIAC_BLOCKS,
+        EVAC_FLARE_COUNT, EVAC_FLARE_WATCHDOG_SECONDS, EVAC_FLARE_BURN_SECONDS,
+        EVAC_HELI_DISPATCH_SECONDS, EVAC_HELI_SPAWN_DISTANCE, EVAC_HELI_CRUISE_CLEARANCE,
+        EVAC_HELI_SPEED, EVAC_HELI_DESCEND_SPEED,
+        EVAC_ROPE_LENGTH, EVAC_ROPE_DROP_SECONDS, EVAC_CLIMB_SPEED, EVAC_CLIMB_HIT_STAGGER_TICKS,
+        EVAC_HELI_STAY_SECONDS, EVAC_DEPART_GRACE_SECONDS, EVAC_ANNOUNCE_TO_MANIAC);
+
+    // ── Гаки (hooks/): лежить → несуть на плечі → висить на гаку ─────────
+
+    /** Скільки секунд виживий висить на гаку, перш ніж помре. Таймер іде лише поки маньяк далеко. */
+    public static final ConfigKey<Integer> HOOK_HANG_SECONDS =
+        ConfigKey.integer("hooks", "hangSeconds", 60, 5, 600);
+
+    /**
+     * Поки маньяк ближче за стільки блоків до того, хто висить, таймер СТОЇТЬ (пауза).
+     * 0 — пауза вимкнена, таймер іде завжди.
+     */
+    public static final ConfigKey<Integer> HOOK_PAUSE_RADIUS_BLOCKS =
+        ConfigKey.integer("hooks", "maniacPauseRadiusBlocks", 10, 0, 64);
+
+    /**
+     * Чи помирає той, хто просто лежить (не піднятий, не підвішений), за
+     * {@code survivors.downedBleedOutTicks}. За дизайном гаків лежачий лежить, доки його не
+     * піднімуть союзники або не візьме маньяк, тож за замовчуванням false.
+     */
+    public static final ConfigKey<Boolean> HOOK_LYING_BLEEDS_OUT =
+        ConfigKey.bool("hooks", "lyingBleedsOut", false);
+
+    /** Макс. відстань від маньяка до лежачого, з якої ПКМ підіймає його на плече. */
+    public static final ConfigKey<Double> HOOK_PICKUP_RANGE_BLOCKS =
+        ConfigKey.decimal("hooks", "pickupRangeBlocks", 3.0, 1.0, 8.0);
+
+    /** Макс. відстань від маньяка до гака, з якої ПКМ вішає жертву. */
+    public static final ConfigKey<Double> HOOK_USE_RANGE_BLOCKS =
+        ConfigKey.decimal("hooks", "hookRangeBlocks", 3.5, 1.0, 10.0);
+
+    /** Як довго (тіків) жертва, яку впустили зі стану «несуть», не може бути знову піднята маньяком. 0 — одразу. */
+    public static final ConfigKey<Integer> HOOK_REPICKUP_DELAY_TICKS =
+        ConfigKey.integer("hooks", "repickupDelayTicks", 20, 0, 200);
+
+    // Позиція жертви на гаку. Усе рахується від центру гака, у системі «куди дивиться гак».
+
+    /** Зсув жертви ВПЕРЕД від центру гака (у бік, куди дивиться гак), блоки. */
+    public static final ConfigKey<Double> HOOK_HANG_FORWARD =
+        ConfigKey.decimal("hooks", "hangForward", 0.70, -3.0, 3.0);
+
+    /** Зсув жертви ПРАВОРУЧ від центру гака (дивлячись у бік гака), блоки. */
+    public static final ConfigKey<Double> HOOK_HANG_SIDE =
+        ConfigKey.decimal("hooks", "hangSide", 0.0, -3.0, 3.0);
+
+    /** Висота ніг жертви над основою гака, блоки. Піднімай/опускай, щоб вістря (крюк) «проходило» крізь груди/плече. */
+    public static final ConfigKey<Double> HOOK_HANG_UP =
+        ConfigKey.decimal("hooks", "hangUp", 1.05, -3.0, 6.0);
+
+    /** Поворот тіла жертви відносно напрямку гака, градуси. 0 — обличчям туди, куди дивиться гак (від стовпа); 180 — обличчям до стовпа. */
+    public static final ConfigKey<Double> HOOK_HANG_YAW =
+        ConfigKey.decimal("hooks", "hangYawDegrees", 180.0, -180.0, 180.0);
+
+    /** На скільки блоків перед гаком (у бік, куди він дивиться) ставимо знятого з гака. */
+    public static final ConfigKey<Double> HOOK_UNHOOK_FRONT_BLOCKS =
+        ConfigKey.decimal("hooks", "unhookFrontBlocks", 1.0, 0.0, 4.0);
+
+    // Позиція жертви на плечі маньяка. Висота — частка зросту хітбокса маньяка (щоб працювало
+    // і для низького, і для високого архетипу), решта — блоки.
+
+    /** Висота ніг жертви на плечі як частка висоти хітбокса маньяка. */
+    public static final ConfigKey<Double> HOOK_CARRY_HEIGHT_FRACTION =
+        ConfigKey.decimal("hooks", "carryHeightFraction", 0.62, 0.0, 1.5);
+
+    /** Зсув жертви вперед від маньяка (мінус — назад), блоки. */
+    public static final ConfigKey<Double> HOOK_CARRY_FORWARD =
+        ConfigKey.decimal("hooks", "carryForward", -0.10, -2.0, 2.0);
+
+    /** Зсув жертви праворуч від маньяка (мінус — ліворуч), блоки. */
+    public static final ConfigKey<Double> HOOK_CARRY_SIDE =
+        ConfigKey.decimal("hooks", "carrySide", 0.0, -2.0, 2.0);
+
+    /** Поворот лежачої на плечі жертви відносно тіла маньяка: 90 — поперек плечей (як «пожежний»). */
+    public static final ConfigKey<Double> HOOK_CARRY_YAW =
+        ConfigKey.decimal("hooks", "carryYawDegrees", 90.0, -180.0, 180.0);
+
+    public static final ConfigBlock HOOKS = ConfigBlock.settings("hooks", "hooks.yml",
+        "Гаки: лежання, перенесення на плечі, підвішування, зняття.",
+        HOOK_HANG_SECONDS, HOOK_PAUSE_RADIUS_BLOCKS, HOOK_LYING_BLEEDS_OUT,
+        HOOK_PICKUP_RANGE_BLOCKS, HOOK_USE_RANGE_BLOCKS, HOOK_REPICKUP_DELAY_TICKS,
+        HOOK_HANG_FORWARD, HOOK_HANG_SIDE, HOOK_HANG_UP, HOOK_HANG_YAW, HOOK_UNHOOK_FRONT_BLOCKS,
+        HOOK_CARRY_HEIGHT_FRACTION, HOOK_CARRY_FORWARD, HOOK_CARRY_SIDE, HOOK_CARRY_YAW);
+
+    // ── barricades ───────────────────────────────────────────────────────
+    //
+    // Барикади (закриті зони): дощки, які виживі ламають ломом. Сама розмітка (де стоять дощки) —
+    // DATA-блок BARRICADE_LAYOUT нижче (barricade_layout.yml, наповнюється /maniac barricade ...).
+    // Тут — лише числа, які адмін справді може крутити; розміри самої дошки — константи
+    // BarricadeGeometry (клієнт їх малює сам, конфіг сервера він не читає).
+
+    /**
+     * Скільки відсотків міцності лом втрачає за КОЖЕН витягнутий цвях (а не за всю барикаду).
+     * Двері — 16 цвяхів: при 2% це 32% на двері, тобто лом вистачає приблизно на три двері.
+     */
+    public static final ConfigKey<Integer> BARRICADE_CROWBAR_WEAR_PER_NAIL_PERCENT =
+        ConfigKey.integer("barricades", "crowbarWearPerNailPercent", 2, 1, 100);
+
+    /** З якої відстані виживий дістає ломом до барикади (ПКМ), блоки. */
+    public static final ConfigKey<Double> BARRICADE_CROWBAR_RANGE_BLOCKS =
+        ConfigKey.decimal("barricades", "crowbarRangeBlocks", 4.5, 1.0, 8.0);
+
+    /** Найдовша дошка гнучкої барикади (адмін-режим будування), блоки. */
+    public static final ConfigKey<Double> BARRICADE_MAX_BOARD_LENGTH_BLOCKS =
+        ConfigKey.decimal("barricades", "maxBoardLengthBlocks", 6.0, 0.5, 16.0);
+
+    /** Скільки дощок максимум у одній гнучкій барикаді (і в буфері будування). */
+    public static final ConfigKey<Integer> BARRICADE_MAX_BOARDS =
+        ConfigKey.integer("barricades", "maxBoardsPerBarricade", 24, 1, 128);
+
+    /**
+     * Скільки тіків треба утримувати ЛКМ на ОДНОМУ цвяху в міні-грі барикади, щоб його витягти
+     * (20 тіків = 1 с). Цвяхів вдвічі більше, ніж дощок.
+     */
+    public static final ConfigKey<Integer> BARRICADE_NAIL_PULL_TICKS =
+        ConfigKey.integer("barricades", "nailPullTicks", 30, 5, 600);
+
+    /**
+     * На скільки швидше витягуються цвяхи при ПОВНОМУ серцебитті (страх): швидкість = 1 + бонус × серцебиття.
+     * 1.0 — до ×2 біля самого маньяка; 0 — серцебиття не впливає.
+     */
+    public static final ConfigKey<Double> BARRICADE_HEARTBEAT_SPEED_BONUS =
+        ConfigKey.decimal("barricades", "heartbeatSpeedBonus", 1.0, 0.0, 4.0);
+
+    public static final ConfigBlock BARRICADES = ConfigBlock.settings("barricades", "barricades.yml",
+        "Барикади: знос лома, дальність виламування, межі будування. "
+        + "Розмітка барикад — /maniac barricade (файл barricade_layout.yml).",
+        BARRICADE_CROWBAR_WEAR_PER_NAIL_PERCENT, BARRICADE_CROWBAR_RANGE_BLOCKS,
+        BARRICADE_MAX_BOARD_LENGTH_BLOCKS, BARRICADE_MAX_BOARDS,
+        BARRICADE_NAIL_PULL_TICKS, BARRICADE_HEARTBEAT_SPEED_BONUS);
+
+    /** Розмітка барикад (фіксовані блоки й гнучкі дощки). Наповнюється командами, не відновлюється з дефолту. */
+    public static final ConfigBlock BARRICADE_LAYOUT = ConfigBlock.data("barricade_layout",
+        "Розмітка барикад. Наповнюється командами /maniac barricade. "
+        + "Вміст ніколи не відновлюється з дефолту.");
+
     /**
      * Порядок = порядок блоків у згенерованому файлі та порядок табів у
      * меню налаштувань. Список мутабельний ЛИШЕ заради
@@ -1099,7 +1548,7 @@ public final class ConfigSchema {
      */
     public static final List<ConfigBlock> BLOCKS = new java.util.ArrayList<>(List.of(
         GAME, WORLD, MAP, GENERATORS, SURVIVORS, MANIAC, MANIAC_SELECTION,
-        VOICE, LOOT, INVENTORY, DARKZONES));
+        VOICE, LOOT, INVENTORY, DARKZONES, EVACUATION, HOOKS, BARRICADES));
 
     /**
      * Реєструє блок параметрів маньяка, ставлячи його одразу після

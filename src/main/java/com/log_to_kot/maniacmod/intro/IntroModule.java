@@ -53,6 +53,23 @@ public final class IntroModule implements PhaseListener {
     /** Прев'ю: гравець → скільки тіків минуло. */
     private final Map<UUID, Integer> previews = new HashMap<>();
 
+    /**
+     * Replay, що чекає, поки екран гравця стане чорним. {@link ReplayDirector#play}
+     * одразу переносить «якір» чанків до камери, і клієнт скидає чанки навколо
+     * гравця — якщо це відбувається посеред початкового затемнення, на екрані
+     * видно світ без блоків (лише небо). Тому запускаємо Replay лише коли
+     * затемнення завершилось ({@link IntroTimeline#CAMERA_START_MS}).
+     */
+    private static final class PendingReplay {
+        final ReplayScript script;
+        int ticksLeft;
+        PendingReplay(ReplayScript script, int ticksLeft) {
+            this.script = script;
+            this.ticksLeft = ticksLeft;
+        }
+    }
+    private final Map<UUID, PendingReplay> pendingReplay = new HashMap<>();
+
     public IntroModule(Supplier<MatchOrchestrator> match) {
         this.match = match;
     }
@@ -95,6 +112,7 @@ public final class IntroModule implements PhaseListener {
         // Клієнт сам завершує камеру за власним годинником (до цього моменту
         // екран уже майже чорний), тому Stop-пакет не шлемо.
         for (ServerPlayer p : players) {
+            pendingReplay.remove(p.getUUID());
             if (inMatchIntro.contains(p.getUUID())) ReplayDirector.stop(p, true, false);
         }
     }
@@ -110,6 +128,21 @@ public final class IntroModule implements PhaseListener {
                     unlock(id);
                     inMatchIntro.remove(id);
                 }
+            }
+        }
+        if (!pendingReplay.isEmpty()) {
+            for (ServerPlayer p : players) {
+                PendingReplay pending = pendingReplay.get(p.getUUID());
+                if (pending == null) continue;
+                if (--pending.ticksLeft > 0) continue;
+                pendingReplay.remove(p.getUUID());
+                ReplayDirector.play(p, pending.script, 0);
+            }
+            // Гравець вийшов, не діждавшись старту, — не тримаємо запис.
+            if (!pendingReplay.isEmpty()) {
+                Set<UUID> online = new HashSet<>();
+                for (ServerPlayer p : players) online.add(p.getUUID());
+                pendingReplay.keySet().retainAll(online);
             }
         }
         if (previews.isEmpty()) return;
@@ -151,7 +184,10 @@ public final class IntroModule implements PhaseListener {
                 IntroReplayConfigs.FILE_NAME, maniac ? "MANIAC" : "SURVIVOR");
         }
         ModNetwork.toPlayer(p, new IntroStartPacket(window, IntroTimeline.tipIntervalMs(), maniac, !script.isEmpty()));
-        ReplayDirector.play(p, script, IntroTimeline.CAMERA_START_MS);
+        // Камера (і перенесення чанків за нею) стартує, коли екран уже повністю
+        // чорний, — див. PendingReplay.
+        int delayTicks = Math.max(1, (IntroTimeline.CAMERA_START_MS + 49) / 50);
+        pendingReplay.put(p.getUUID(), new PendingReplay(script, delayTicks));
     }
 
     /** Контроль повернено + сигнал розтемнення. */
@@ -161,6 +197,7 @@ public final class IntroModule implements PhaseListener {
     }
 
     private void abort(ServerPlayer p) {
+        pendingReplay.remove(p.getUUID());
         ReplayDirector.stop(p, true, true);
         unlock(p.getUUID());
         previews.remove(p.getUUID());

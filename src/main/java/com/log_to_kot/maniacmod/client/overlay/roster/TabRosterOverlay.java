@@ -74,6 +74,8 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
     private static final int LEFT_MIN_H = 196;
     private static final int LOBBY_LEFT_MIN_H = 120;
     private static final int MANIAC_CARD_H = 118;
+    /** Висота лівої колонки, коли картки маньяка нема (див. TabContext#maniacHidden). */
+    private static final int HIDDEN_LEFT_MIN_H = 100;
 
     private final ManiacTabTheme theme = new ManiacTabTheme();
     private final TabListStyle style = new TabListStyle(this::resolveSkin, theme);
@@ -139,7 +141,8 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
         final int innerW = PANEL_W - PAD * 2;
         final int listW = innerW - LEFT_W - COL_GAP;
         int listH = survivorList.measure(c);
-        int leftMin = c.lobby ? LOBBY_LEFT_MIN_H : LEFT_MIN_H;
+        // Без картки маньяка (секрет для не-маньяків) ліва колонка — лише одна картка, тож нижчa.
+        int leftMin = c.lobby ? LOBBY_LEFT_MIN_H : c.maniacHidden ? HIDDEN_LEFT_MIN_H : LEFT_MIN_H;
         int bodyH = Math.max(leftMin, listH);
         int objH = c.lobby ? 14 : TabObjectiveCard.HEIGHT + GAP;
         int panelH = theme.titleHeight() + objH + bodyH + GAP + FOOTER_H;
@@ -213,9 +216,14 @@ public final class TabRosterOverlay implements TabVisibilityModule.TabRenderer {
         if (c.lobby) {
             sideCards.drawSelf(c, leftX, y, LEFT_W, bodyH, true);
         } else {
-            maniacCard.draw(c, leftX, y, LEFT_W, MANIAC_CARD_H);
-            int secondY = y + MANIAC_CARD_H + GAP - 2;
-            int secondH = bodyH - MANIAC_CARD_H - GAP + 2;
+            // Картку маньяка бачить лише сам маньяк; для решти її взагалі немає — не показуємо навіть «?».
+            int secondY = y;
+            int secondH = bodyH;
+            if (!c.maniacHidden) {
+                maniacCard.draw(c, leftX, y, LEFT_W, MANIAC_CARD_H);
+                secondY = y + MANIAC_CARD_H + GAP - 2;
+                secondH = bodyH - MANIAC_CARD_H - GAP + 2;
+            }
             if (c.iAmSurvivor()) sideCards.drawSelf(c, leftX, secondY, LEFT_W, secondH, false);
             else sideCards.drawStats(c, leftX, secondY, LEFT_W, secondH);
         }

@@ -100,6 +100,12 @@ public final class ModSoundCues {
         cue(ModSounds.MINIGAME_HIT,  SoundStage.NON_POSITIONAL, UI, 1.0f);
         cue(ModSounds.MINIGAME_MISS, SoundStage.NON_POSITIONAL, UI, 1.0f);
 
+        // Барикада: витяг цвяха, падіння дошки й обвал грає СЕРВЕР із місця барикади.
+        cue(ModSounds.NAIL_POP,           SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.BOARD_FALL,         SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.BARRICADE_COLLAPSE, SoundStage.POSITIONAL_FIXED, WORLD, 1.0f);
+        cue(ModSounds.NAIL_GRAB,          SoundStage.NON_POSITIONAL,   UI,    0.8f);
+
         // ── Напруга ──────────────────────────────────────────────────────
         // Маньяк рухається, тому звук має слідувати за джерелом.
         cue(ModSounds.MANIAC_NEARBY, SoundStage.POSITIONAL_MOVING, AMBIENCE, 1.0f);

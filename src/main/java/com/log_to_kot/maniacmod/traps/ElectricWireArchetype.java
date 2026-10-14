@@ -8,6 +8,7 @@ import com.log_to_kot.maniacmod.registry.ModEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.phys.Vec3;
@@ -181,7 +182,7 @@ public class ElectricWireArchetype extends TrapArchetype {
      * тут означало б мати два джерела правди.
      */
     @Override
-    public boolean shouldTrigger(ServerPlayer candidate) {
+    public boolean shouldTrigger(LivingEntity candidate) {
         return true;
     }
 
@@ -190,7 +191,7 @@ public class ElectricWireArchetype extends TrapArchetype {
      * навмисно (див. клас-докстрінг).
      */
     @Override
-    public void applyEffect(ServerPlayer victim, BlockPos trapPos) {
+    public void applyEffect(LivingEntity victim, BlockPos trapPos) {
         // Див. клас-докстрінг: таймер удару струмом належить TrapModule.
         ManiacMod.LOGGER.debug("[trap] electric_wire applyEffect викликано — очікується лише через tickWire");
     }

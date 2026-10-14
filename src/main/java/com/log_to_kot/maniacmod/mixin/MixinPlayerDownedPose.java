@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.survivors.DownedPose;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
@@ -34,7 +36,9 @@ public abstract class MixinPlayerDownedPose {
     @Inject(method = "updatePlayerPose", at = @At("HEAD"), cancellable = true, require = 0)
     private void maniacmod$proneWhenDowned(CallbackInfo ci) {
         Player self = (Player) (Object) this;
-        if (DownedPose.isDowned(self)) {
+        // VR: лягання блокуємо — голова гравця не має падати на підлогу (нудота,
+        // втрата орієнтації). Логічний стан «повзе» лишається серверним.
+        if (DownedPose.isDowned(self) && !VrServerCompat.isVrPlayer(self)) {
             self.setPose(Pose.SWIMMING);
             ci.cancel();
         }

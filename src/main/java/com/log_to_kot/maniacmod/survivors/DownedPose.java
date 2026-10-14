@@ -41,6 +41,8 @@ public final class DownedPose {
         if (player.level().isClientSide) {
             return ClientMatchState.isProne(player.getUUID());
         }
+        // На плечі маньяка / на гаку: поза ВЕРТИКАЛЬНА, а лежить чи висить модель за рахунок
+        // PAL-анімації (carried_shoulder / hook_hang). Інакше ванільне «плавання» клало б її вдруге.
         MatchOrchestrator match = ManiacMod.match();
         if (match == null) return false;
 
@@ -51,6 +53,7 @@ public final class DownedPose {
         // глядач, і гравець поза матчем). Без цієї перевірки перший же
         // тік з маньяком у світі валив би гру NPE з надрах міксина
         // пози — тобто падало б у кожному матчі.
+        if (match.hooks().isSeated(player.getUUID())) return false;
         SurvivorState state = match.survivorStateOf(player.getUUID());
         return state != null && state.isCrawlOnly();
     }

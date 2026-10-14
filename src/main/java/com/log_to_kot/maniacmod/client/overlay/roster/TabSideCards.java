@@ -92,9 +92,16 @@ final class TabSideCards {
         TabFx.textRight(g, c.font, "/" + maxHp, right, y + 33, 0.75f, TabFx.a(ManiacTabTheme.DIM, 1f));
         GeneratorFuelUiTheme.drawBarFx(g, tx, y + 44, right - tx, 7, frac, frac, hpColor, 0f);
 
-        String label = TabSurvivorList.stateLabel(state);
-        TabFx.text(g, c.font, TabFx.clip(c.font, label, right - tx, 0.75f), tx, y + 55, 0.75f,
-            TabFx.a(TabSurvivorList.stateColor(state), 1f));
+        // Власний стан пишемо лише коли він щось означає (нога, повзеш, лежиш):
+        // «Здоровий» поруч із повною шкалою хп — зайвий шум.
+        if (TabSurvivorList.worthShowing(state)) {
+            int sc = TabSurvivorList.stateColor(state);
+            TabIcons.Icon icon = TabIcons.forState(state);
+            TabIcons.draw(g, icon, tx, y + 54, TabFx.a(sc, 1f), 1);
+            String label = TabSurvivorList.stateLabel(state);
+            TabFx.text(g, c.font, TabFx.clip(c.font, label, right - tx - icon.w - 4, 0.75f),
+                tx + icon.w + 4, y + 55, 0.75f, TabFx.a(sc, 1f));
+        }
 
         // ЕКГ під показниками — «живе» тим швидше, чим менше хп.
         float bpm = down ? 0f : 66f + (1f - frac) * 70f;
@@ -150,13 +157,14 @@ final class TabSideCards {
             pose.translate((1f - appear) * -14f, 0f, 0f);
 
             int col = colors[i];
-            g.fill(x + 6, ry + 2, x + 9, ry + 11, TabFx.a(col, values[i] > 0 ? 1f : 0.35f));
+            TabIcons.Icon icon = TabIcons.forStat(keys[i]);
+            TabIcons.draw(g, icon, x + 6, ry + 1, TabFx.a(col, values[i] > 0 ? 1f : 0.35f), 1);
             String label = Component.translatable("maniacmod.tab.stats." + keys[i]).getString();
-            TabFx.text(g, c.font, label, x + 13, ry + 1, 0.8f, TabFx.a(ManiacTabTheme.DIM, 1f));
+            TabFx.text(g, c.font, label, x + 17, ry + 1, 0.8f, TabFx.a(ManiacTabTheme.DIM, 1f));
             TabFx.textRight(g, c.font, Integer.toString(Math.round(statShown[i])), x + w - 7, ry, 1.2f,
                 TabFx.a(values[i] > 0 ? col : ManiacTabTheme.DIM, 1f));
             // Мініатюрна шкала: частка цієї групи від усіх виживих.
-            GeneratorFuelUiTheme.drawBarFx(g, x + 13, ry + 10, w - 20, 3,
+            GeneratorFuelUiTheme.drawBarFx(g, x + 17, ry + 10, w - 24, 3,
                 UiAnim.clamp01(statShown[i] / total), UiAnim.clamp01(statShown[i] / total), col, 0f);
             pose.popPose();
         }

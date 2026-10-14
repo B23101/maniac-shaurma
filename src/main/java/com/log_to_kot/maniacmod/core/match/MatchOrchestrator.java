@@ -28,6 +28,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Random;
 import java.util.UUID;
@@ -66,6 +68,20 @@ public final class MatchOrchestrator {
     private final SpawnPlanner spawnPlanner = new SpawnPlanner(rng);
 
     private MatchContext context = new MatchContext();
+
+    /**
+     * UUID → ім'я гравців, що вийшли посеред матчу й лишили тіло. Ім'я потрібне,
+     * щоб ростер (таб) і підсумок показували офлайн-учасника, коли його вже немає
+     * у списку онлайн-гравців. Очищається разом із матчем.
+     */
+    private final java.util.Map<UUID, String> offlineNames = new java.util.HashMap<>();
+
+    /**
+     * Тіло маньяка знищено (порожнеча, {@code /kill}: усе, що обходить захист). Скидати
+     * матч прямо зі слухача lib небезпечно (ми всередині його retire), тому лише
+     * піднімаємо прапор: скидання робить наступний тік у {@link #checkPhaseExitConditions}.
+     */
+    private boolean maniacBodyLost;
     private MinecraftServer server;
     private SpawnPlanner.SpawnPlan pendingSpawnPlan;
     /**
@@ -139,6 +155,49 @@ public final class MatchOrchestrator {
     private final com.log_to_kot.maniacmod.intro.IntroModule intro =
         new com.log_to_kot.maniacmod.intro.IntroModule(() -> this);
 
+    /**
+     * Евакуація (приймач → ракета → вертоліт → мотузка). Тримається полем, бо сутності
+     * приймача/мотузки й хуки SurvivorModule звертаються до нього напряму — той самий
+     * патерн, що generators/combat.
+     */
+    private final com.log_to_kot.maniacmod.evac.EvacModule evac =
+        new com.log_to_kot.maniacmod.evac.EvacModule(() -> this);
+
+    /**
+     * Гаки: лежить → на плечі → на гаку. Тримається полем, бо сутності гака/сидіння, хук ПКМ
+     * (ServerHooks), SurvivorModule і ManiacCombatModule звертаються до нього напряму.
+     */
+    private final com.log_to_kot.maniacmod.hooks.HookModule hooks =
+        new com.log_to_kot.maniacmod.hooks.HookModule(() -> this);
+
+    /**
+     * Сцена перемоги маніяка (VICTORY_SCENE). Тримається полем з тієї ж причини, що intro/evac/hooks:
+     * оркестратор питає її «чи можна грати» і «чи скінчилась», а сутності гачків — «чи ти моя».
+     */
+    private final com.log_to_kot.maniacmod.victory.VictorySceneModule victory =
+        new com.log_to_kot.maniacmod.victory.VictorySceneModule(() -> this);
+
+    /** Freecam екрана підсумків (STATS_CAMERA): камера гравців на фазі ENDING. */
+    private final com.log_to_kot.maniacmod.victory.StatsCameraModule statsCamera =
+        new com.log_to_kot.maniacmod.victory.StatsCameraModule(() -> this);
+
+    /** Freecam статистики: сервер знімає її, коли гравець закрив екран підсумків. */
+    public com.log_to_kot.maniacmod.victory.StatsCameraModule statsCamera() {
+        return statsCamera;
+    }
+
+    /**
+     * Історія матчів: архів, списки, відкриття одного матчу. Тримається полем, бо мережеві обробники
+     * ({@code HistoryListRequestPacket}, {@code HistoryDetailRequestPacket}) звертаються до нього напряму —
+     * той самий патерн, що generators/hooks. ПИШЕ в нього лише оркестратор ({@link #archiveMatch}).
+     */
+    private final com.log_to_kot.maniacmod.history.MatchHistoryService history =
+        new com.log_to_kot.maniacmod.history.MatchHistoryService();
+
+    public com.log_to_kot.maniacmod.history.MatchHistoryService history() {
+        return history;
+    }
+
     public MatchOrchestrator() {
         Phases.bind(phases);
         // Синхронізація фази з клієнтами — теж звичайний модуль, а не
@@ -151,12 +210,34 @@ public final class MatchOrchestrator {
         phases.register(intro);
         phases.register(inventoryAllocation);
         phases.register(generators);
+        phases.register(evac);
         phases.register(combat);
         phases.register(traps);
         phases.register(maniacStun);
         phases.register(maniacSpeed);
+        phases.register(hooks);
+        phases.register(barricades);
+        phases.register(victory);
+        phases.register(statsCamera);
         phases.register(survivors);
         phases.register(worldEnvironment);
+    }
+
+    /**
+     * Барикади (закриті зони). Тримається полем: хуки ПКМ ({@code BarricadeHooks}), команди й
+     * сутності звертаються до нього напряму — той самий патерн, що evac/hooks.
+     */
+    private final com.log_to_kot.maniacmod.barricade.BarricadeModule barricades =
+        new com.log_to_kot.maniacmod.barricade.BarricadeModule(() -> this);
+
+    /** Барикади — для BarricadeHooks і /maniac barricade. */
+    public com.log_to_kot.maniacmod.barricade.BarricadeModule barricades() {
+        return barricades;
+    }
+
+    /** Сцена перемоги маніяка — для сутностей і команди прев'ю. */
+    public com.log_to_kot.maniacmod.victory.VictorySceneModule victory() {
+        return victory;
     }
 
     /** Кіно-вступ — для команди прев'ю Replay. */
@@ -165,6 +246,15 @@ public final class MatchOrchestrator {
     }
 
     /** Модуль генераторів — для GeneratorEntity і ServerPacketHandler. */
+    public com.log_to_kot.maniacmod.evac.EvacModule evac() {
+        return evac;
+    }
+
+    /** Гаки — для HookEntity/VictimSeatEntity, ServerHooks, SurvivorModule, команд. */
+    public com.log_to_kot.maniacmod.hooks.HookModule hooks() {
+        return hooks;
+    }
+
     public GeneratorModule generatorModule() {
         return generators;
     }
@@ -205,6 +295,8 @@ public final class MatchOrchestrator {
 
         @Override
         public void onPhaseEnter(GamePhase phase, java.util.List<ServerPlayer> players) {
+            // Хронологія для історії: кожна зміна фази — подія і межа відрізка.
+            context.timeline().onPhase(context.matchTick(), phase);
             // ПОРЯДОК ВАЖЛИВИЙ: роль йде РАНІШЕ за фазу.
             //
             // ClientMatchState.setPhase(LOBBY/RESET) викликає reset(), який
@@ -229,6 +321,26 @@ public final class MatchOrchestrator {
             // AI_CODE_GUIDE).
             for (ServerPlayer player : players) {
                 com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player, roleSyncFor(player));
+            }
+            // Результат матчу — РАНІШЕ за фазу ENDING: екран підсумків відкривається саме на
+            // ній і мусить уже мати, кого показувати переможцем.
+            if (phase == GamePhase.ENDING) {
+                var summary = matchSummary();
+                for (ServerPlayer player : players) {
+                    com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player, summary);
+                }
+                // Особисті нагороди XP — одразу після підсумку, до розсилки фази.
+                var rewards = com.log_to_kot.maniacmod.progression.MatchRewardService.awardAll(summary, players);
+                // Історія: той самий знімок, що бачить екран підсумків, + хто за що отримав XP.
+                archiveMatch(summary, rewards, resolveEnd());
+                var outcome = new com.log_to_kot.maniacmod.net.s2c.matchstate.MatchOutcomePacket(
+                    survivorsWon(), escapedSurvivorIds().size(), survivorTotal());
+                for (ServerPlayer player : players) {
+                    com.log_to_kot.maniacmod.net.ModNetwork.toPlayer(player, outcome);
+                }
+                ManiacMod.LOGGER.info("[match] підсумок: {} (втекло {}/{})",
+                    survivorsWon() ? "ПЕРЕМОГА ВИЖИВИХ" : "ПЕРЕМОГА МАНЬЯКА",
+                    escapedSurvivorIds().size(), survivorTotal());
             }
             com.log_to_kot.maniacmod.server.ServerHooks.broadcastPhase(players, phase);
             // Ролі й стани щойно могли змінитись цілком (ROLE_REVEAL,
@@ -270,6 +382,8 @@ public final class MatchOrchestrator {
             if (phase == GamePhase.CINEMATIC) {
                 prepareSpawnPlan(players);
             } else if (phase == GamePhase.SCATTER) {
+                // Новий матч уже йде: «повернутих у лобі» минулого матчу більше нема.
+                returnedToLobby.clear();
                 scatterApplied = applySpawnPlan(players);
                 scatterFailed = !scatterApplied;
             } else if (phase == GamePhase.LOBBY) {
@@ -296,11 +410,31 @@ public final class MatchOrchestrator {
                 // тут — для ВСІХ, хто вже онлайн, щойно матч повертається
                 // у LOBBY (RESET → LOBBY, а також прямий стоп команди).
                 for (ServerPlayer player : players) {
-                    ManiacMod.lib().lobbyModule().sendToLobby(player);
-                    ManiacMod.lib().lobbyModule().hideNameTag(player);
+                    // Хто дивиться статистику (freecam) — повернеться в лобі, коли закриє екран.
+                    if (statsCamera.isViewing(player.getUUID())) continue;
+                    // БАГ (повторний телепорт на спавн): хто вже повернутий у лобі раніше
+                    // (кінець сцени перемоги, закритий екран статистики) і встиг походити —
+                    // не телепортуємо вдруге, інакше його смикає на точку лобі «з нізвідки».
+                    if (returnedToLobby.contains(player.getUUID())) continue;
+                    returnToLobby(player);
                 }
+                returnedToLobby.clear();
             }
         }
+    }
+
+    /** Хто вже повернутий у лобі після завершення матчу (щоб не телепортувати вдруге). */
+    private final Set<UUID> returnedToLobby = new HashSet<>();
+
+    /**
+     * ЄДИНЕ місце, де гравця повертають у лобі наприкінці матчу (сцена перемоги, екран
+     * статистики, вхід у LOBBY). Запам'ятовує гравця, тож вхід у {@link GamePhase#LOBBY} не
+     * телепортує його повторно, якщо він давно вже там.
+     */
+    public void returnToLobby(ServerPlayer player) {
+        ManiacMod.lib().lobbyModule().sendToLobby(player);
+        ManiacMod.lib().lobbyModule().hideNameTag(player);
+        returnedToLobby.add(player.getUUID());
     }
 
     // ── Лобі (shaurma-lib LobbyModule читає це) ──────────────────────────
@@ -328,13 +462,23 @@ public final class MatchOrchestrator {
         addConfiguredPoints(SpawnPointKind.ITEM, configured.itemPoints());
         addConfiguredPoints(SpawnPointKind.GENERATOR, configured.generatorPoints());
         addConfiguredPoints(SpawnPointKind.EXIT, configured.exitPoints());
+        addConfiguredPoints(SpawnPointKind.RECEIVER, configured.receiverPoints());
+        addConfiguredPoints(SpawnPointKind.HOOK, configured.hookPoints());
+        addConfiguredPoints(SpawnPointKind.VICTORY_HOOK, configured.victoryHookPoints());
+        addConfiguredPoints(SpawnPointKind.VICTORY_MANIAC, configured.victoryManiacPoints());
+        addConfiguredPoints(SpawnPointKind.VICTORY_CAMERA, configured.victoryCameraPoints());
+        addConfiguredPoints(SpawnPointKind.VICTORY_PLAYER, configured.victoryPlayerPoints());
+        addConfiguredPoints(SpawnPointKind.VICTORY_GHOST, configured.victoryGhostPoints());
+        addConfiguredPoints(SpawnPointKind.VICTORY_PLAYERS_CAMERA, configured.victoryPlayersCameraPoints());
+        addConfiguredPoints(SpawnPointKind.STATS_CAMERA, configured.statsCameraPoints());
     }
 
     private void addConfiguredPoints(SpawnPointKind kind,
                                      List<MapPointConfigs.PointData> points) {
         for (MapPointConfigs.PointData point : points) {
             context.addSpawnPoint(new com.log_to_kot.maniacmod.spawn.SpawnPoint(
-                point.pos(), point.yaw(), kind, point.ownerId()));
+                point.pos(), point.yaw(), kind, point.ownerId(),
+                point.pitch(), point.x(), point.y(), point.z()));
         }
     }
 
@@ -452,6 +596,23 @@ public final class MatchOrchestrator {
         return context.escapedIds();
     }
 
+    /**
+     * ПРАВИЛО ПЕРЕМОГИ — єдине місце. Втік хоча б один виживий — перемога виживих; не втік
+     * ніхто — перемога маньяка. Умова «живих, що не втекли, нуль» (завершення матчу) —
+     * окремо, в {@code checkPhaseExitConditions}; тут лише хто виграв, коли матч скінчився
+     * (нуль живих, або вертоліт відлетів із тими, хто лишився).
+     */
+    public boolean survivorsWon() {
+        Boolean forced = context.forcedSurvivorsWin();
+        if (forced != null) return forced;
+        return !context.escapedIds().isEmpty();
+    }
+
+    /** Скільки виживих було в матчі: втекли + вибули + ще в грі (для «3/6»). */
+    public int survivorTotal() {
+        return context.escapedIds().size() + context.eliminatedIds().size() + context.aliveSurvivorCount();
+    }
+
     /** Хто вибув остаточно (непритомний не дочекався підняття) цього матчу. */
     public List<UUID> eliminatedSurvivorIds() {
         return context.eliminatedIds();
@@ -459,12 +620,57 @@ public final class MatchOrchestrator {
 
     /** Гравець дійшов до зони втечі здоровим — фіксує втечу. */
     public void markEscaped(ServerPlayer player) {
+        boolean wasInGame = context.isSurvivor(player.getUUID());
         context.markEscaped(player.getUUID(), player.getGameProfile().getName());
+        if (wasInGame) noteEscaped(player.getUUID());
     }
 
     /** Непритомний помер — гравець вибуває з матчу остаточно. */
     public void markEliminated(ServerPlayer player) {
+        boolean wasInGame = context.isSurvivor(player.getUUID());
         context.markEliminated(player.getUUID(), player.getGameProfile().getName());
+        if (wasInGame) noteEliminated(player.getUUID());
+    }
+
+    // ── Офлайн-присутність (тіло гравця, що вийшов посеред матчу) ────────
+
+    /** lib створив тіло: запам'ятовуємо ім'я для ростера на час відсутності власника. */
+    public void onOfflineBodySpawned(UUID owner, String name) {
+        offlineNames.put(owner, name);
+    }
+
+    /**
+     * Тіло виживого вбито (удар маньяка, пастка, порожнеча, /kill). Власника вже
+     * виключено з матчу: стан, що модулі тримають за його UUID, прибираємо, пастку
+     * звільняємо, у підсумок він іде як ELIMINATED. Лут уже випав на стороні lib.
+     * Тіло маньяка бути вбитим не може (правила урону не пропускають).
+     */
+    public void onOfflineBodyKilled(UUID owner, String name) {
+        if (context.isManiac(owner)) {
+            offlineNames.remove(owner);
+            maniacBodyLost = true;
+            return;
+        }
+        if (!context.isSurvivor(owner)) return;
+        survivors.onOfflineSurvivorEliminated(owner);
+        traps.onOfflineBodyGone(owner);
+        context.markEliminated(owner, name);
+        noteEliminated(owner);
+        offlineNames.remove(owner);
+        if (server != null) {
+            com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(
+                server.getPlayerList().getPlayers());
+        }
+    }
+
+    /** Гравець повернувся до свого тіла живим: ім'я для ростера більше не потрібне. */
+    public void onOfflineOwnerReturned(UUID owner) {
+        offlineNames.remove(owner);
+    }
+
+    /** Те саме «хто в матчі й може отримати удар»: онлайн-гравець або тіло. */
+    public boolean isMatchParticipant(UUID id) {
+        return context.isManiac(id) || context.isSurvivor(id);
     }
 
     /**
@@ -479,7 +685,126 @@ public final class MatchOrchestrator {
     /** Ім'я гравця, що вже вибув (втік/загинув) цього матчу. null, якщо такого немає. */
     /** Зафіксувати влучання маньяка по виживому (для підрахунку «своїх жертв» у табі). */
     public void recordManiacHit(UUID victim, UUID attacker) {
+        // Викликається ДО зняття хп, тож hpOf — це хп жертви перед ударом (для хронології).
+        int hpBefore = context.hpOf(victim);
         context.recordManiacHit(victim, attacker);
+        context.stats().add(attacker, MatchStat.HITS_DEALT, 1);
+        context.stats().add(victim, MatchStat.HITS_TAKEN, 1);
+        MatchTimeline tl = context.timeline();
+        tl.noteHit(victim, attacker);
+        tl.add(context.matchTick(), com.log_to_kot.maniacmod.history.HistoryEventType.HIT,
+            attacker, victim, "", Math.max(0, hpBefore));
+    }
+
+    /** Додає до особистого лічильника гравця (екран підсумків). Безпечно з будь-якої фази. */
+    public void recordStat(UUID playerId, MatchStat stat, long amount) {
+        context.stats().add(playerId, stat, amount);
+        // Лічильники, що мають момент у часі, потрапляють і в хронологію. RESCUES — через recordRescue
+        // (там відомо, КОГО врятовано), REPAIR_TICKS — це не подія, а накопичення.
+        MatchTimeline tl = context.timeline();
+        long now = context.matchTick();
+        switch (stat) {
+            case DOWNS -> tl.add(now, com.log_to_kot.maniacmod.history.HistoryEventType.DOWNED,
+                tl.lastHitterOf(playerId), playerId, "", 0);
+            case HOOKS -> tl.add(now, com.log_to_kot.maniacmod.history.HistoryEventType.HOOKED,
+                context.maniacUUID(), playerId, "", 0);
+            default -> { }
+        }
+    }
+
+    /** Виживий підняв товариша: лічильник рятівника + подія «хто кого». */
+    public void recordRescue(UUID rescuer, UUID rescued) {
+        context.stats().add(rescuer, MatchStat.RESCUES, 1);
+        context.timeline().add(context.matchTick(), com.log_to_kot.maniacmod.history.HistoryEventType.RESCUED,
+            rescuer, rescued, "", 0);
+    }
+
+    /** Генератор повністю готовий. {@code worker} — хто добив (може бути null), {@code done} — скільки вже готово. */
+    public void recordGeneratorCompleted(UUID worker, String where, int done) {
+        context.timeline().add(context.matchTick(),
+            com.log_to_kot.maniacmod.history.HistoryEventType.GENERATOR_DONE, worker, null, where, done);
+    }
+
+    /** Маніяк поставив пастку типу {@code trapId} (профіль → статистика пасток). */
+    public void recordTrapPlaced(UUID maniacId, String trapId) {
+        context.stats().addTrap(maniacId, trapId, 1, 0);
+        context.timeline().add(context.matchTick(), com.log_to_kot.maniacmod.history.HistoryEventType.TRAP_PLACED,
+            maniacId, null, trapId, 0);
+    }
+
+    /** Пастка типу {@code trapId} зачепила жертву. Автор — маніяк матчу (він єдиний ставить пастки). */
+    public void recordTrapCaught(String trapId, UUID victim) {
+        context.stats().addTrap(context.maniacUUID(), trapId, 0, 1);
+        MatchTimeline tl = context.timeline();
+        tl.noteTrap(victim, trapId);
+        tl.add(context.matchTick(), com.log_to_kot.maniacmod.history.HistoryEventType.TRAP_TRIGGERED,
+            null, victim, trapId, 0);
+    }
+
+    /**
+     * Повна статистика матчу для екрана підсумків: час, цілі й рядок на кожного учасника
+     * (маніяк, втекли, вибули, ті, кого не врятували). Єдине місце, що збирає ці дані.
+     */
+    public com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket matchSummary() {
+        var stats = context.stats();
+        long now = context.matchTick();
+        var entries = new ArrayList<com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Entry>();
+        var R = com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Result.class;
+
+        UUID maniacId = context.maniacUUID();
+        if (maniacId != null) {
+            entries.add(summaryEntry(maniacId, Enum.valueOf(R, "MANIAC"),
+                context.maniacArchetype() == null ? "" : context.maniacArchetype().id(), stats, now));
+        }
+        for (UUID id : context.escapedIds()) entries.add(summaryEntry(id, Enum.valueOf(R, "ESCAPED"), "", stats, now));
+        for (UUID id : context.eliminatedIds()) entries.add(summaryEntry(id, Enum.valueOf(R, "ELIMINATED"), "", stats, now));
+        for (UUID id : context.survivorIds()) entries.add(summaryEntry(id, Enum.valueOf(R, "CAUGHT"), "", stats, now));
+
+        int required = ManiacConfigs.get(ConfigSchema.GENERATORS_REQUIRED);
+        int done = (int) generators().stream().filter(g -> g.isCompleted()).count();
+        int mask = 0;
+        for (var objective : completedObjectives()) mask |= 1 << objective.ordinal();
+
+        return new com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket(
+            survivorsWon(), (int) (stats.playedTicks(now) / 20L), Math.min(done, required), required, mask, entries);
+    }
+
+    private com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Entry summaryEntry(
+            UUID id, com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Result result,
+            String maniacArchetypeId, MatchStats stats, long now) {
+        // Гачки маніяка = скільки разів повісили всіх його жертв.
+        long hooks = result == com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Result.MANIAC
+            ? stats.total(MatchStat.HOOKS) : stats.get(id, MatchStat.HOOKS);
+        return new com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Entry(
+            id, displayNameOf(id), result, maniacArchetypeId,
+            (int) (stats.survivedTicks(id, now) / 20L),
+            (int) stats.get(id, MatchStat.HITS_DEALT), (int) stats.get(id, MatchStat.HITS_TAKEN),
+            // БАГ (у маніяка downs завжди 0): падіння пишуться на ЖЕРТВУ, тож для маніяка це сума по всіх —
+            // так само, як гачки вище. Без цього не працювали ні XP «xpManiacDowns», ні «bestDowns» у профілі.
+            (int) (result == com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.Result.MANIAC
+                ? stats.total(MatchStat.DOWNS) : stats.get(id, MatchStat.DOWNS)), (int) hooks,
+            (int) stats.get(id, MatchStat.RESCUES), (int) (stats.get(id, MatchStat.REPAIR_TICKS) / 20L),
+            trapLines(stats, id));
+    }
+
+    private static java.util.List<com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.TrapLine> trapLines(
+            MatchStats stats, UUID id) {
+        var out = new ArrayList<com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.TrapLine>();
+        for (var e : stats.trapsOf(id).entrySet()) {
+            out.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.TrapLine(
+                e.getKey(), e.getValue()[0], e.getValue()[1]));
+        }
+        return out;
+    }
+
+    /** Ім'я учасника: онлайн → з профілю; вибулий → термінальне; той, що вийшов → запам'ятоване; інакше «?». */
+    public String displayNameOf(UUID id) {
+        ServerPlayer online = onlinePlayer(id);
+        if (online != null) return online.getGameProfile().getName();
+        String terminal = context.terminalDisplayNameOf(id);
+        if (terminal != null) return terminal;
+        String offline = offlineNames.get(id);
+        return offline != null ? offline : "?";
     }
 
     /** Маньяк, що останнім бив гравця; {@code null}, якщо невідомо. */
@@ -503,7 +828,10 @@ public final class MatchOrchestrator {
 
     /** Позначає ціль матчу досягнутою. Викликають лише зони/генератори. */
     public void completeObjective(MatchObjectives.Objective objective) {
-        context.objectives().complete(objective);
+        if (context.objectives().complete(objective)) {
+            context.timeline().add(context.matchTick(),
+                com.log_to_kot.maniacmod.history.HistoryEventType.OBJECTIVE, null, null, objective.name(), 0);
+        }
     }
 
     /**
@@ -629,6 +957,30 @@ public final class MatchOrchestrator {
             } else {
                 entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
                     id, name, RoleSyncPacket.Role.SPECTATOR, "", SurvivorState.HEALTHY, 0, 0, null, null));
+            }
+        }
+
+        // Учасники, що вийшли й лишили тіло: онлайн-списку в них немає, але в табі вони
+        // досі в матчі (виживий зі своїм станом/HP, маньяк зі своїм архетипом).
+        var shown = new java.util.HashSet<UUID>();
+        for (ServerPlayer player : onlinePlayers) shown.add(player.getUUID());
+        for (var offline : offlineNames.entrySet()) {
+            UUID id = offline.getKey();
+            if (shown.contains(id) || terminal.contains(id)) continue;
+            if (!com.log_to_kot.maniacmod.offline.ManiacOffline.hasBody(id)) continue;
+            String name = offline.getValue();
+            if (isManiac(id)) {
+                ManiacArchetype maniac = maniacArchetype();
+                var body = maniac == null ? null
+                    : new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.ManiacBody(
+                        maniac.hitboxWidth(), maniac.hitboxHeight(), maniac.eyeHeight());
+                entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
+                    id, name, RoleSyncPacket.Role.MANIAC,
+                    maniac == null ? "" : maniac.id(), SurvivorState.HEALTHY, 0, 0, body, null));
+            } else if (isSurvivor(id)) {
+                entries.add(new com.log_to_kot.maniacmod.net.s2c.matchstate.RosterSyncPacket.RosterEntry(
+                    id, name, RoleSyncPacket.Role.SURVIVOR, "",
+                    survivorStateOf(id), hpOf(id), maxHpOf(id), null, null));
             }
         }
 
@@ -952,6 +1304,16 @@ public final class MatchOrchestrator {
             return false;
         }
 
+        // Склад для історії: маніяк першим — індекс у хронології збігається з індексом у записі матчу.
+        MatchTimeline timeline = fresh.timeline();
+        if (maniacPlayer != null) timeline.register(maniacPlayer.getUUID(), maniacPlayer.getGameProfile().getName());
+        for (ServerPlayer p : participants) {
+            if (maniacPlayer != null && p.getUUID().equals(maniacPlayer.getUUID())) continue;
+            timeline.register(p.getUUID(), p.getGameProfile().getName());
+        }
+        timeline.add(0L, com.log_to_kot.maniacmod.history.HistoryEventType.MATCH_START, null, null,
+            maniacArchetype == null ? "" : maniacArchetype.id(), participants.size());
+
         MatchContext previous = this.context;
         this.context = fresh;
         pendingSpawnPlan = null;
@@ -1000,6 +1362,12 @@ public final class MatchOrchestrator {
      */
     public void tick(List<ServerPlayer> players) {
         context.tick();
+        // Мітки часу для «скільки грали»: старт — перший HUNT, кінець — перший тік сцени/ENDING.
+        if (phases.is(GamePhase.HUNT)) context.stats().markPlayStart(context.matchTick());
+        if ((phases.is(GamePhase.VICTORY_SCENE) || phases.is(GamePhase.ENDING))
+            && context.stats().hasPlayStarted()) {
+            context.stats().markPlayEnd(context.matchTick());
+        }
         if (phases.is(GamePhase.LOBBY)) tickLobbyHunger(players);
         phases.tick(players);
         checkPhaseExitConditions(players);
@@ -1089,28 +1457,43 @@ public final class MatchOrchestrator {
 
         if (phases.is(GamePhase.ROLE_REVEAL)) {
             long held = phases.ticksInPhase();
-            if (held >= roleRevealTicks()) {
-                // Маньяк ще вибирає пастки — чекаємо, але не довше запасу:
-                // без цього екран вибору закривався б посеред кліку, а вибір
-                // підміняв автовибір. Якщо встиг — фаза закривається одразу.
-                boolean waitForPick = traps().choicePending(maniacArchetype())
-                    && held < roleRevealTicks() + TRAP_PICK_GRACE_TICKS;
-                if (!waitForPick) advanceTo(GamePhase.HUNT, players);
-            }
+            // Гра НЕ чекає на вибір пасток: маньяк може обирати й під час
+            // полювання (меню лишається відкритим), а до підтвердження в
+            // нього просто немає пасток — автовибору більше немає.
+            if (held >= roleRevealTicks()) advanceTo(GamePhase.HUNT, players);
+            return;
+        }
+
+        if (phases.is(GamePhase.VICTORY_SCENE)) {
+            // Сцена веде себе сама (VictorySceneModule); тут лише передача естафети в ENDING.
+            if (victory.isFinished()) advanceTo(GamePhase.ENDING, players);
             return;
         }
 
         if (phases.is(GamePhase.ENDING)) {
-            if (phases.ticksInPhase() >= endingTicks()) reset(players);
+            // Усі втекли — матч іде в ENDING одразу, а вертоліт ще підтягує мотузку й відлітає.
+            // Не скидаємо світ, поки він не зникне (з запобіжником, щоб ніщо не зависло).
+            long held = phases.ticksInPhase();
+            boolean heliStillLeaving = evac.isDeparting() && held < endingTicks() + HELI_LEAVE_GRACE_TICKS;
+            if (held >= endingTicks() && !heliStillLeaving) reset(players);
             return;
         }
 
         if (!phases.isGameplay()) return;
 
+        // Маньяка (його тіло) знищено, а власник офлайн: матч без маньяка не має сенсу.
+        if (maniacBodyLost) {
+            maniacBodyLost = false;
+            if (!DebugMode.enabled()) {
+                reset(players);
+                return;
+            }
+        }
+
         // Дебаг: 0 виживих (або 0 маньяків) НЕ завершує матч — інакше
         // одиночна перевірка за маньяка кидала б у ENDING на першому ж тіку.
         if (!DebugMode.enabled() && noSurvivorsLeft()) {
-            advanceTo(GamePhase.ENDING, players);
+            concludeMatch(players);
             return;
         }
 
@@ -1123,12 +1506,24 @@ public final class MatchOrchestrator {
                     advanceTo(GamePhase.POWERED, players);
                 }
             }
+            // POWERED → HELI_WAIT: виживі викликали вертоліт з приймача.
             case POWERED -> {
+                if (objectives.isComplete(MatchObjectives.Objective.HELI_CALLED)) {
+                    advanceTo(GamePhase.HELI_WAIT, players);
+                }
+            }
+            // HELI_WAIT → FINALE: мотузка спущена й готова (EXIT_OPENED ставить EvacModule).
+            case HELI_WAIT -> {
                 if (objectives.isComplete(MatchObjectives.Objective.EXIT_OPENED)) {
                     advanceTo(GamePhase.FINALE, players);
                 }
             }
-            default -> { /* FINALE завершується лише через noSurvivorsLeft */ }
+            // FINALE → ENDING: вертоліт відлетів. Хто не встиг — програв; хто втік — виграв.
+            // (Усі втекли/вибули раніше — ENDING настане через noSurvivorsLeft вище.)
+            case FINALE -> {
+                if (evac.isFinished()) concludeMatch(players);
+            }
+            default -> { }
         }
     }
 
@@ -1146,7 +1541,14 @@ public final class MatchOrchestrator {
     }
 
     private boolean noSurvivorsLeft() {
-        return context.aliveSurvivorCount() == 0;
+        if (context.aliveSurvivorCount() == 0) return true;
+        // Усі, хто лишився в матчі, офлайн (стоять тілами): грати нікому, маньяк виграв.
+        // Живий виживий у складі без онлайн-гравця можливий лише як тіло, бо без тіла
+        // вихід прибирає його зі складу (див. onPlayerLeft).
+        for (UUID id : context.survivorIds()) {
+            if (onlinePlayer(id) != null) return false;
+        }
+        return true;
     }
 
     /**
@@ -1157,14 +1559,14 @@ public final class MatchOrchestrator {
      * кінематики немає; коли з'явиться — достатньо підняти
      * {@code cinematicSeconds} у maniac.yml, код міняти не треба.
      */
-    /** Запас часу понад ROLE_REVEAL на вибір пасток маньяком (10 с). */
-    private static final int TRAP_PICK_GRACE_TICKS = 200;
-
     private int roleRevealTicks() {
         // + повільне розтемнення після вступу: пробудження й роль не мають обрізатись.
         return ManiacConfigs.get(ConfigSchema.ROLE_REVEAL_SECONDS) * 20
             + com.log_to_kot.maniacmod.intro.IntroTimeline.roleRevealExtraTicks();
     }
+
+    /** Скільки тіків ENDING може тривати понад endingSeconds, чекаючи, поки вертоліт відлетить. */
+    private static final long HELI_LEAVE_GRACE_TICKS = 20L * 40L;
 
     private int endingTicks() {
         return ManiacConfigs.get(ConfigSchema.ENDING_SECONDS) * 20;
@@ -1193,7 +1595,16 @@ public final class MatchOrchestrator {
                 player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
                     "maniacmod.command.debug_scatter_skipped", failure.getMessage()));
             }
-            pendingSpawnPlan = SpawnPlanner.SpawnPlan.empty();
+            // Не порожній план, а «що є, те й спавнимо»: немає точки маньяка чи бракує точок
+            // виживих — генератори, лут, приймач і гаки все одно мають з'явитись.
+            try {
+                pendingSpawnPlan = spawnPlanner.planDebugBestEffort(
+                    context.spawnPoints(), context.survivorIds());
+            } catch (RuntimeException fallbackFailure) {
+                ManiacMod.LOGGER.warn("[debug] дебаг-план теж не вдалося побудувати: {}",
+                    fallbackFailure.toString());
+                pendingSpawnPlan = SpawnPlanner.SpawnPlan.empty();
+            }
         }
         plannerReady = true;
     }
@@ -1262,6 +1673,17 @@ public final class MatchOrchestrator {
         // Предмети на задіяних ITEM-точках. Точки вже позначені engage()
         // вище; рівень той самий, що й для генераторів.
         loot.spawnOnPoints(generatorLevel, pendingSpawnPlan.engagedItemPoints());
+
+        // Евакуація: єдиний приймач матчу + гарантовані сигнальні ракети.
+        evac.spawnReceiver(generatorLevel, pendingSpawnPlan.receiverPoint());
+        List<com.log_to_kot.maniacmod.spawn.SpawnPoint> allItemPoints = new ArrayList<>();
+        for (var sp : context.spawnPoints()) {
+            if (sp.kind() == SpawnPointKind.ITEM) allItemPoints.add(sp);
+        }
+        evac.spawnFlares(generatorLevel, allItemPoints);
+
+        // Гаки: спавняться ВСІ розмічені (на відміну від приймача — одного на матч).
+        hooks.spawnHooks(generatorLevel, context.spawnPoints());
         return true;
     }
 
@@ -1323,6 +1745,10 @@ public final class MatchOrchestrator {
         // ролі/фази нижче: гравець фізично зник із сервером зв'язку,
         // тож екран міні-гри (якщо був) уже нікому показувати.
         generatorModule().onPlayerLeftDuringMinigame(player.getUUID());
+        // Лазив по мотузці — зняти з носія ДО того, як lib залишить тіло в повітрі.
+        evac.onPlayerLeft(player);
+        // Несе/висить — зняти сидіння ДО того, як survivors забуде гравця (тіло вже створене lib).
+        hooks.onPlayerLeft(player);
         // Лок руху, прогрес вставання, правила стаміни — усе за UUID.
         survivors.onPlayerLeft(player);
         traps.onPlayerLeft(player);
@@ -1330,18 +1756,30 @@ public final class MatchOrchestrator {
         maniacSpeed.onPlayerLeft(player);
 
         List<ServerPlayer> online = player.getServer().getPlayerList().getPlayers();
+        // Тіло створює lib на HIGHEST logout, раніше за цей виклик: якщо воно стоїть,
+        // гравець лишається учасником матчу, а не «вибуває».
+        boolean hasBody = com.log_to_kot.maniacmod.offline.ManiacOffline.hasBody(player.getUUID());
+        noteLeft(player.getUUID(), hasBody);
         if (context.isManiac(player.getUUID())) {
             // Лок ATTACK і перезарядка прив'язані до UUID, а не до списку
             // онлайн-гравців — знімаємо їх ДО можливого reset(...) нижче.
             combat.onPlayerLeft(player);
+            // Маньяк із тілом: матч іде далі, тіло стоїть там, де він вийшов.
+            if (hasBody) return;
             // Дебаг: вихід/перезахід не має скидати тобі матч наодинці.
+            // Сцена перемоги: маніяк уже переміг — вихід не скидає матч, сцена сама прибере учасника.
             if (!DebugMode.enabled()
-                && !phases.is(GamePhase.LOBBY) && !phases.is(GamePhase.RESET)) reset(online);
+                && !phases.is(GamePhase.LOBBY) && !phases.is(GamePhase.RESET)
+                && !phases.is(GamePhase.VICTORY_SCENE)) reset(online);
             return;
         }
 
         if (phases.is(GamePhase.LOBBY) || phases.is(GamePhase.RESET)
-            || phases.is(GamePhase.ENDING)) return;
+            || phases.is(GamePhase.ENDING) || phases.is(GamePhase.VICTORY_SCENE)) return;
+
+        // Виживий із тілом лишається у складі: пастка, удар маньяка й лут працюють
+        // по тілу, а «усі офлайн» завершує матч у checkPhaseExitConditions.
+        if (hasBody) return;
 
         context.removeSurvivor(player.getUUID());
         pendingSpawnPlan = null;
@@ -1351,7 +1789,75 @@ public final class MatchOrchestrator {
 
         // Дебаг: 0 виживих не завершує матч (див. DebugMode).
         if (!DebugMode.enabled() && context.aliveSurvivorCount() == 0) {
-            advanceTo(GamePhase.ENDING, online);
+            concludeMatch(online);
+        }
+    }
+
+    /** Що вийшло з {@link #forceEnd}. */
+    public enum ForceEndResult {
+        /** Не ігрова фаза (лобі, вступ, підсумки, скидання) — завершувати нічого. */
+        REJECTED,
+        /** Перемога маніяка: піде сцена «гачки з тілами» (VICTORY_SCENE), далі екран підсумків. */
+        MANIAC_SCENE,
+        /** Перемога маніяка, але сцену вимкнено/не розмічено — одразу екран підсумків. */
+        MANIAC_RESULT_ONLY,
+        /** Перемога виживих: усі, хто лишився, «втікають» (з анонсом), далі екран підсумків. */
+        SURVIVORS
+    }
+
+    /**
+     * Адмінське примусове завершення матчу ({@code /maniac win}). Іде тим самим шляхом, що й
+     * природний кінець: {@link #concludeMatch} → {@code VICTORY_SCENE} (маніяк, якщо вона
+     * доступна) або {@code ENDING} (екран підсумків із титулом переможця).
+     *
+     * <p>Виживі: кожен, хто ще в грі, фіксується втеклим тим самим шляхом, що й лазіння по
+     * мотузці ({@code EvacModule.forceEscape}) — із титром «втік!» усім і табом. Маніяк: результат
+     * примусово «не втік ніхто», навіть якщо хтось уже втік раніше; лазіння по мотузці скасовується,
+     * гачки/ноші знімає сама фаза VICTORY_SCENE.
+     */
+    public ForceEndResult forceEnd(boolean survivorsWin, List<ServerPlayer> players) {
+        if (!phases.isGameplay()) return ForceEndResult.REJECTED;
+        context.timeline().add(context.matchTick(), com.log_to_kot.maniacmod.history.HistoryEventType.FORCE_END,
+            null, null, survivorsWin ? "survivors" : "maniac", 0);
+
+        ForceEndResult result;
+        if (survivorsWin) {
+            for (UUID id : context.survivorIds()) {
+                ServerPlayer online = onlinePlayer(id);
+                if (online != null) {
+                    evac.forceEscape(online);
+                } else {
+                    // Живий виживий без онлайн-гравця — стоїть тілом: фіксуємо втечу за UUID.
+                    String name = offlineNames.getOrDefault(id, "?");
+                    survivors.onOfflineSurvivorEliminated(id);
+                    traps.onOfflineBodyGone(id);
+                    context.markEscaped(id, name);
+                    noteEscaped(id);
+                    offlineNames.remove(id);
+                }
+            }
+            context.forceOutcome(true);
+            result = ForceEndResult.SURVIVORS;
+        } else {
+            evac.cancelClimbs();
+            context.forceOutcome(false);
+            result = victory.canPlay(players) ? ForceEndResult.MANIAC_SCENE : ForceEndResult.MANIAC_RESULT_ONLY;
+        }
+        com.log_to_kot.maniacmod.server.ServerHooks.broadcastRoster(players);
+        concludeMatch(players);
+        return result;
+    }
+
+    /**
+     * ЄДИНЕ місце, де матч іде до підсумків. Перемога маніяка (не втік ніхто) веде спершу у сцену
+     * перемоги, якщо вона ввімкнена й карта розмічена; усе інше — одразу в ENDING. Сцена сама
+     * передає естафету в ENDING (див. {@code checkPhaseExitConditions}).
+     */
+    private void concludeMatch(List<ServerPlayer> players) {
+        if (victory.canPlay(players)) {
+            advanceTo(GamePhase.VICTORY_SCENE, players);
+        } else {
+            advanceTo(GamePhase.ENDING, players);
         }
     }
 
@@ -1381,6 +1887,8 @@ public final class MatchOrchestrator {
     }
 
     public void reset(List<ServerPlayer> players) {
+        // Матч скинуто, не дійшовши до підсумків (маніяк вийшов, збій розкидання): це теж частина історії.
+        archiveIfAborted();
         if (server != null) MatchRuntimeRegistry.cleanup(server);
         if (server != null) MatchBlockRegistry.restoreAll(server);
         releaseSpawnPoints(context.spawnPoints());
@@ -1390,6 +1898,8 @@ public final class MatchOrchestrator {
         scatterFailed = false;
         advanceTo(GamePhase.RESET, players);
         this.context = new MatchContext();
+        offlineNames.clear();
+        maniacBodyLost = false;
         advanceTo(GamePhase.LOBBY, players);
         // БАГ (точки є в points.yml, а генератори не з'являються з ДРУГОГО
         // матчу): новий MatchContext порожній, а розмітку в нього
@@ -1404,8 +1914,81 @@ public final class MatchOrchestrator {
         reloadConfiguredMap();
     }
 
+    // ── Історія матчів: запис ────────────────────────────────────────────
+
+    private void noteEscaped(UUID id) {
+        MatchTimeline tl = context.timeline();
+        long now = context.matchTick();
+        tl.add(now, com.log_to_kot.maniacmod.history.HistoryEventType.ESCAPED, id, null, "", 0);
+        tl.markOut(id, now, "");
+    }
+
+    private void noteEliminated(UUID id) {
+        MatchTimeline tl = context.timeline();
+        long now = context.matchTick();
+        String cause = tl.causeOf(id);
+        tl.add(now, com.log_to_kot.maniacmod.history.HistoryEventType.ELIMINATED,
+            tl.lastHitterOf(id), id, cause, 0);
+        tl.markOut(id, now, cause);
+    }
+
+    /** Вихід учасника посеред матчу. Без тіла — він вибуває зі складу («left»); з тілом лишається в грі. */
+    private void noteLeft(UUID id, boolean hasBody) {
+        if (!context.isManiac(id) && !context.isSurvivor(id)) return;
+        if (phases.is(GamePhase.LOBBY) || phases.is(GamePhase.RESET)
+            || phases.is(GamePhase.ENDING) || phases.is(GamePhase.VICTORY_SCENE)) return;
+        MatchTimeline tl = context.timeline();
+        long now = context.matchTick();
+        tl.add(now, com.log_to_kot.maniacmod.history.HistoryEventType.PLAYER_LEFT, id, null,
+            hasBody ? "body" : "gone", 0);
+        if (!hasBody) tl.markOut(id, now, "left");
+    }
+
+    /** Як скінчився матч, що дійшов до підсумків. */
+    private com.log_to_kot.maniacmod.history.MatchRecord.End resolveEnd() {
+        if (context.forcedSurvivorsWin() != null) return com.log_to_kot.maniacmod.history.MatchRecord.End.FORCED;
+        if (survivorsWon()) return com.log_to_kot.maniacmod.history.MatchRecord.End.ESCAPE;
+        return context.aliveSurvivorCount() == 0
+            ? com.log_to_kot.maniacmod.history.MatchRecord.End.ALL_OUT
+            : com.log_to_kot.maniacmod.history.MatchRecord.End.TIME_OUT;
+    }
+
+    /** Скинутий матч, що встиг дійти до полювання, записується як перерваний (без XP). */
+    private void archiveIfAborted() {
+        MatchTimeline tl = context.timeline();
+        if (tl.isClosed() || !context.stats().hasPlayStarted()) return;
+        archiveMatch(matchSummary(), null, com.log_to_kot.maniacmod.history.MatchRecord.End.ABORTED);
+    }
+
+    /**
+     * ЄДИНЕ місце, де матч потрапляє в історію. Закриває хронологію (повторно не запишеться) і пропускає:
+     * вимкнену історію, дебаг (одиночні перевірки не засмічують історію справжніх ігор) і матч, що не
+     * дійшов до полювання.
+     */
+    private void archiveMatch(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket summary,
+                              java.util.Map<UUID, com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket> rewards,
+                              com.log_to_kot.maniacmod.history.MatchRecord.End end) {
+        MatchTimeline tl = context.timeline();
+        if (tl.isClosed()) return;
+        tl.noteDebug();
+        tl.close();
+        if (server == null || !ManiacConfigs.get(ConfigSchema.HISTORY_ENABLED)) return;
+        if (tl.debugTainted()) {
+            ManiacMod.LOGGER.info("[history] матч не записано: був увімкнений дебаг-режим");
+            return;
+        }
+        if (!context.stats().hasPlayStarted()) return;
+        try {
+            history.archive(server, MatchRecordBuilder.build(context, summary, rewards, end));
+        } catch (RuntimeException e) {
+            // Збій історії не має зривати кінець матчу (підсумки, XP, повернення в лобі).
+            ManiacMod.LOGGER.error("[history] не вдалося записати матч", e);
+        }
+    }
+
     /** Зупинка сервера — знімаємо статичне посилання, щоб не текло. */
     public void shutdown() {
+        history.close();
         if (server != null) MatchRuntimeRegistry.cleanup(server);
         if (server != null) MatchBlockRegistry.restoreAll(server);
         server = null;

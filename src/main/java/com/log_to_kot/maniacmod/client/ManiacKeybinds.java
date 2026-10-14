@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client;
 
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
+
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -28,6 +30,8 @@ import org.lwjgl.glfw.GLFW;
  * | Підняти непритомного      | ПКМ (утримання, приціл на ньому) | виживі | ванільна (use) |
  * | Ремонт / залив генератора | Shift+ПКМ | виживі | ванільна (sneak+use) |
  * | Спроба вибратись із капкана | F       | виживі | власна (лише поки видно підказку) |
+ * | Вікі предмета в руці      | H       | виживі | власна (відкриває {@code ItemWikiScreen}, Esc закриває) |
+ * | Профіль (лише лобі)       | E       | усі     | власна (клавішу інвентаря НЕ перехоплюємо) |
  *
  * ── Чому цифри вільні ────────────────────────────────────────────────
  * У маньяка немає інвентаря взагалі (0 слотів hotbar), тому клавіші
@@ -86,6 +90,21 @@ public final class ManiacKeybinds {
      */
     public static final KeyMapping TRAP_ESCAPE = mapping("trap_escape", GLFW.GLFW_KEY_F);
 
+    /**
+     * H: вікі предмета, який вижившій тримає в руці. Власний {@code KeyMapping}
+     * (як F вище): у ванілі H нічого не робить, тож це не друга клавіша для
+     * вже наявної дії. Для маньяка натискання нічого не відкриває —
+     * див. {@code ItemWikiOpener}.
+     */
+    public static final KeyMapping ITEM_WIKI = mapping("item_wiki", GLFW.GLFW_KEY_H);
+
+    /**
+     * Профіль у лобі. Власний {@code KeyMapping}: клавіша інвентаря в моді заблокована повністю,
+     * тож перехоплювати її (як раніше через {@code ScreenEvent.Opening}) не можна — екран інвентаря
+     * просто не відкривається. За замовчуванням E, перепризначається в меню керування.
+     */
+    public static final KeyMapping PROFILE = mapping("profile", GLFW.GLFW_KEY_E);
+
     private ManiacKeybinds() {}
 
     @SubscribeEvent
@@ -94,6 +113,8 @@ public final class ManiacKeybinds {
         for (KeyMapping key : TRAPS) event.register(key);
         event.register(HIGHLIGHT);
         event.register(TRAP_ESCAPE);
+        event.register(ITEM_WIKI);
+        event.register(PROFILE);
     }
 
     // ── Ванільні клавіші, перевикористані модом ──────────────────────────
@@ -133,6 +154,9 @@ public final class ManiacKeybinds {
      * клавішу для тієї самої дії.
      */
     public static boolean isRepairHeld() {
+        // VR: Shift+ПКМ незручний (присідання — фізичне). Ціль (GeneratorEntity під
+        // перехрестям-контролером) однозначно відрізняє ремонт від порятунку.
+        if (VrCompat.isVrActive()) return Minecraft.getInstance().options.keyUse.isDown();
         return Minecraft.getInstance().options.keyShift.isDown()
             && Minecraft.getInstance().options.keyUse.isDown();
     }

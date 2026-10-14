@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
 import com.log_to_kot.maniacmod.client.WakeUpAnimation;
 import net.minecraft.client.Camera;
 import net.minecraft.world.entity.Entity;
@@ -37,6 +39,8 @@ public abstract class MixinCameraWakeUp {
     @Inject(method = "setup", at = @At("TAIL"), require = 0)
     private void maniacmod$followAnimatedHead(BlockGetter level, Entity entity, boolean detached,
                                               boolean mirrored, float partialTick, CallbackInfo ci) {
+        // VR: камера = голова гравця, зсув камери викликає нудоту.
+        if (VrCompat.isVrActive()) return;
         if (detached) return;
         Vec3 shift = WakeUpAnimation.cameraShift(entity, partialTick);
         if (shift == null) return;

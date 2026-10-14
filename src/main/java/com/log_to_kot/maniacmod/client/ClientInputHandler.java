@@ -182,6 +182,8 @@ public final class ClientInputHandler {
         handleAbilities();
         handleTraps();
         handleHighlight();
+        handleItemWiki();
+        handleProfile();
         handleStandUp();
         handleRescueHold();
         handleGeneratorRepair();
@@ -222,6 +224,8 @@ public final class ClientInputHandler {
 
             // Слот без пастки (маньяк узяв менше трьох) чи на перезарядці —
             // режим не відкриваємо: підтвердити в ньому однаково нічого.
+            if (ClientMatchState.trapIds().isEmpty()
+                && com.log_to_kot.maniacmod.client.ClientPacketHandler.reopenTrapChoice()) return;
             if (slot >= ClientMatchState.trapIds().size()) continue;
             if (onCooldown(AbilityCooldownPacket.trapId(slot))) continue;
             com.log_to_kot.maniacmod.client.traps.TrapPlacementController.toggle(slot);
@@ -232,6 +236,58 @@ public final class ClientInputHandler {
         Minecraft mc = Minecraft.getInstance();
         long tick = mc.level != null ? mc.level.getGameTime() : 0L;
         return ClientMatchState.abilityCooldownFraction(actionId, tick) > 0f;
+    }
+
+    /**
+     * H — вікі предмета в руці. Клік З'ЇДАЄТЬСЯ в будь-якій ролі (цикл
+     * {@code consumeClick} виконується завжди), інакше натискання маньяком
+     * лишалося б у черзі й відкрило вікі, щойно роль зміниться.
+     *
+     * Що саме відкривати й чи можна — вирішує {@code ItemWikiOpener}
+     * (роль, предмет у руці, кіно-вступ); тут лише подія клавіші.
+     */
+    private static void handleItemWiki() {
+        boolean pressed = false;
+        while (ManiacKeybinds.ITEM_WIKI.consumeClick()) pressed = true;
+        if (pressed) com.log_to_kot.maniacmod.client.screen.wiki.ItemWikiOpener.tryOpen();
+    }
+
+    /**
+     * Профіль у лобі. Клік З'ЇДАЄТЬСЯ завжди (інакше натиснутий поза лобі відкрив би профіль,
+     * щойно почнеться лобі). Відкриваємо лише у фазі LOBBY, не в творчому/спостерігачі (там
+     * лишається ванільний інвентар) і не під час кіно-вступу.
+     */
+    private static void handleProfile() {
+        boolean pressed = false;
+        while (ManiacKeybinds.PROFILE.consumeClick()) pressed = true;
+        if (!pressed) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.screen != null) return;
+        if (mc.player.isCreative() || mc.player.isSpectator()) return;
+        if (ClientMatchState.phase() != com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY) return;
+        if (com.log_to_kot.maniacmod.client.intro.IntroClient.blocksScreens()) return;
+        mc.setScreen(new com.log_to_kot.maniacmod.client.screen.profile.ProfileScreen(null));
+    }
+
+    /**
+     * ПКМ по іншому гравцеві в лобі — відкрити його профіль. Подію скасовуємо на клієнті, тож
+     * ванільна взаємодія (і пакет на сервер) не йде. Лише лобі, лише головна рука (подія
+     * приходить для кожної руки), лише коли не відкрито жодного екрана.
+     */
+    @SubscribeEvent
+    public static void onPlayerProfileInteract(PlayerInteractEvent.EntityInteract event) {
+        if (!event.getLevel().isClientSide()) return;
+        if (event.getHand() != net.minecraft.world.InteractionHand.MAIN_HAND) return;
+        if (!(event.getTarget() instanceof net.minecraft.world.entity.player.Player other)) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || other == mc.player || mc.screen != null) return;
+        if (other.isSpectator() || mc.player.isSpectator()) return;
+        if (ClientMatchState.phase() != com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY) return;
+        if (com.log_to_kot.maniacmod.client.intro.IntroClient.blocksScreens()) return;
+        event.setCanceled(true);
+        event.setCancellationResult(InteractionResult.SUCCESS);
+        mc.setScreen(new com.log_to_kot.maniacmod.client.screen.profile.ProfileScreen(
+            null, other.getUUID(), other.getGameProfile().getName()));
     }
 
     private static void handleHighlight() {
@@ -288,6 +344,10 @@ public final class ClientInputHandler {
      */
     public static boolean isLookingAtDownedSurvivor() {
         if (!(Minecraft.getInstance().hitResult instanceof EntityHitResult hit)) return false;
+        // Приціл у сам гак із жертвою — теж «дивлюсь на лежачого»: сервер шукає жертву за відстанню.
+        if (hit.getEntity() instanceof com.log_to_kot.maniacmod.entity.HookEntity hook) {
+            return hook.isOccupied();
+        }
         return ClientMatchState.isDowned(hit.getEntity().getUUID());
     }
 

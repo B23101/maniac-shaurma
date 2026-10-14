@@ -101,7 +101,8 @@ public final class RescueOverlay {
         int y = screenH / 2 + OFFSET_FROM_CENTER;
 
         long leftMs = ClientMatchState.downedMillisLeft(self);
-        boolean urgent = leftMs < 10_000;
+        boolean timed = self.timed();
+        boolean urgent = timed && leftMs < 10_000;
         float target = UiAnim.clamp01(ClientMatchState.downedFraction(self));
         timeShown = timeShown < 0f ? target : UiAnim.approach(timeShown, target, 14f, dt);
         timeGhost = timeGhost < 0f ? target : (target > timeGhost ? target : UiAnim.approach(timeGhost, target, 1.4f, dt));
@@ -114,7 +115,9 @@ public final class RescueOverlay {
             GeneratorFuelUiTheme.alpha(GeneratorFuelUiTheme.FILL_DANGER, 0.55f + 0.45f * urgentPulse));
 
         long seconds = (leftMs + 999) / 1000;
-        String time = (seconds / 60) + ":" + String.format("%02d", seconds % 60);
+        String time = timed
+            ? (seconds / 60) + ":" + String.format("%02d", seconds % 60)
+            : Component.translatable("maniacmod.hook.status." + self.status()).getString();
         int rowX = x + PAD;
         int rowW = PANEL_W - PAD * 2;
         int rowY = y + PAD;

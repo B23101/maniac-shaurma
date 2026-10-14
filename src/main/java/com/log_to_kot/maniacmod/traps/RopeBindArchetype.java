@@ -11,6 +11,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.sounds.SoundEvent;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import net.minecraft.world.entity.Entity;
@@ -111,7 +112,7 @@ public class RopeBindArchetype extends TrapArchetype {
 
     /** Частинки спрацювання; сам підвіс веде {@link TrapModule}. */
     @Override
-    public void applyEffect(ServerPlayer victim, BlockPos trapPos) {
+    public void applyEffect(LivingEntity victim, BlockPos trapPos) {
         if (!(victim.level() instanceof ServerLevel level)) return;
         for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
             if (viewer.serverLevel() != level) continue;
@@ -121,12 +122,12 @@ public class RopeBindArchetype extends TrapArchetype {
     }
 
     @Override
-    public boolean shouldTrigger(ServerPlayer candidate) {
+    public boolean shouldTrigger(LivingEntity candidate) {
         var match = ManiacMod.match();
         if (match == null) return false;
-        var id = candidate.getUUID();
-        if (!match.isSurvivor(id)) return false;
-        if (candidate.isSpectator() || candidate.isCreative()) return false;
+        var id = com.log_to_kot.maniacmod.offline.ManiacOffline.idOf(candidate);
+        if (id == null || !match.isSurvivor(id)) return false;
+        if (candidate instanceof ServerPlayer sp && (sp.isSpectator() || sp.isCreative())) return false;
         SurvivorState st = match.survivorStateOf(id);
         return st != SurvivorState.UNCONSCIOUS && st != SurvivorState.CRAWLING;
     }

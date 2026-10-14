@@ -1,0 +1,172 @@
+{
+ "format_version": "1.8.0",
+ "animations": {
+  "sway_a": {
+   "loop": true,
+   "animation_length": 4.0,
+   "bones": {
+    "swing": {
+     "rotation": {
+      "0.0": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "1.0": {
+       "vector": [
+        1.2,
+        0,
+        3.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "2.0": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "3.0": {
+       "vector": [
+        -1.2,
+        0,
+        -3.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "4.0": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      }
+     }
+    }
+   }
+  },
+  "sway_b": {
+   "loop": true,
+   "animation_length": 5.0,
+   "bones": {
+    "swing": {
+     "rotation": {
+      "0.0": {
+       "vector": [
+        1.8,
+        0,
+        2.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "1.25": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "2.5": {
+       "vector": [
+        -1.8,
+        0,
+        -2.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "3.75": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "5.0": {
+       "vector": [
+        1.8,
+        0,
+        2.0
+       ],
+       "easing": "easeInOutSine"
+      }
+     }
+    }
+   }
+  },
+  "sway_c": {
+   "loop": true,
+   "animation_length": 3.4,
+   "bones": {
+    "swing": {
+     "rotation": {
+      "0.0": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "0.85": {
+       "vector": [
+        -0.9,
+        0,
+        -3.5
+       ],
+       "easing": "easeInOutSine"
+      },
+      "1.7": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      },
+      "2.55": {
+       "vector": [
+        0.9,
+        0,
+        3.5
+       ],
+       "easing": "easeInOutSine"
+      },
+      "3.4": {
+       "vector": [
+        0.0,
+        0,
+        0.0
+       ],
+       "easing": "easeInOutSine"
+      }
+     }
+    }
+   }
+  },
+  "empty": {
+   "loop": true,
+   "animation_length": 1.0,
+   "bones": {
+    "swing": {
+     "rotation": {
+      "0.0": {
+       "vector": [
+        0,
+        0,
+        0
+       ]
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -42,12 +42,12 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 public final class HeartbeatClock {
 
     /** Період удару, коли маньяка нема поруч (візуальний "спокійний" пульс). */
-    public static final float PERIOD_CALM_MS = 1100f;
-    /** Період удару впритул до маньяка (~125 уд/хв). */
-    public static final float PERIOD_CLOSE_MS = 480f;
+    public static final float PERIOD_CALM_MS = 1400f;
+    /** Період удару впритул до маньяка (~73 уд/хв, глибокий повільний ритм). */
+    public static final float PERIOD_CLOSE_MS = 820f;
 
     /** Де в циклі (частка 0..1) лежить другий удар. */
-    public static final float DUB_AT = 0.36f;
+    public static final float DUB_AT = 0.34f;
     /** Другий удар слабший за перший. */
     private static final float DUB_STRENGTH = 0.72f;
 

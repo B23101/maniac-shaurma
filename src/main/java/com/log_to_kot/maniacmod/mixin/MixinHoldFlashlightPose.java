@@ -48,7 +48,7 @@ public class MixinHoldFlashlightPose {
 
         // Підняти й трохи нахилити вгору — «рука на рівні плечей».
         poseStack.translate(0f, 0.10f, -0.05f);
-        poseStack.mulPose(Axis.XP.rotationDegrees(-20f));
-        poseStack.mulPose(Axis.ZP.rotationDegrees(-8f));
+        poseStack.mulPose(Axis.XP.rotationDegrees(-8f));
+        poseStack.mulPose(Axis.ZP.rotationDegrees(-3f));
     }
 }

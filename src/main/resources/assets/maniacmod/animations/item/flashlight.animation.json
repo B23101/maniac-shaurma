@@ -4,7 +4,7 @@
     "idle": {
       "loop": true,
       "animation_length": 2.0,
-      "comment": "Заглушка: ледь помітне погойдування. Ім'я 'idle' лишити — його читає FlashlightItem.registerControllers.",
+      "comment": "Ліхтар: легке погойдування в руці. Ім'я 'idle' лишити — його читає FlashlightItem.registerControllers.",
       "bones": {
         "root": {
           "rotation": {
@@ -14,9 +14,9 @@
               0
             ],
             "1.0": [
+              1.5,
               0,
-              1,
-              0
+              1.5
             ],
             "2.0": [
               0,

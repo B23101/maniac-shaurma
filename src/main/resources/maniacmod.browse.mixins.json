@@ -1,0 +1,21 @@
+{
+  "required": false,
+  "package": "com.log_to_kot.maniacmod.mixin.browse",
+  "compatibilityLevel": "JAVA_17",
+  "minVersion": "0.8",
+  "refmap": "maniacmod.refmap.json",
+  "mixins": [],
+  "client": [
+    "MixinScreenBrowseBackground",
+    "MixinAbstractButtonBrowse",
+    "MixinEditBoxBrowse",
+    "MixinSelectionListBrowse",
+    "MixinSelectionListFlatBrowse",
+    "MixinModEntryBrowse",
+    "MixinScrollPanelBrowse"
+  ],
+  "server": [],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

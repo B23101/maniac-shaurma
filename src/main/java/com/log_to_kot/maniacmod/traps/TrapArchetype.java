@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.sounds.SoundEvent;
 import com.log_to_kot.maniacmod.registry.ModSounds;
@@ -160,10 +161,10 @@ public abstract class TrapArchetype {
     }
 
     /** Ефект на гравця, що потрапив у пастку (знерухомлення, урон, зв'язування тощо). */
-    public abstract void applyEffect(ServerPlayer victim, BlockPos trapPos);
+    public abstract void applyEffect(LivingEntity victim, BlockPos trapPos);
 
     /** Чи спрацьовує пастка для цього гравця прямо зараз (виживий, ще не в пастці тощо). */
-    public abstract boolean shouldTrigger(ServerPlayer candidate);
+    public abstract boolean shouldTrigger(LivingEntity candidate);
 
     // ── Спільна логіка (ОДНА реалізація для всіх пасток) ────────────────────
 

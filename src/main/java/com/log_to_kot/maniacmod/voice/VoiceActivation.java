@@ -35,6 +35,7 @@ public final class VoiceActivation {
         GamePhase.ROLE_REVEAL,
         GamePhase.HUNT,
         GamePhase.POWERED,
+        GamePhase.HELI_WAIT,
         GamePhase.FINALE,
         GamePhase.ENDING);
 

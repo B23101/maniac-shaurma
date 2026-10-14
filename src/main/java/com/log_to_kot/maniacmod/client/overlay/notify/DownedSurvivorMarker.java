@@ -5,6 +5,11 @@ import com.log_to_kot.maniacmod.client.overlay.WorldToScreen;
 import com.log_to_kot.maniacmod.net.s2c.matchstate.DownedSurvivorsPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.PlayerFaceRenderer;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.resources.DefaultPlayerSkin;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
@@ -22,7 +27,9 @@ import java.util.UUID;
  * ({@code RescueOverlay}).
  *
  * ── Вигляд ───────────────────────────────────────────────────────────
- * Ромб із хрестом («потрібна допомога»), під ним відстань і час до смерті.
+ * Голова самого гравця (його скін) у рамці кольору стану, під нею відстань і час до смерті.
+ * Того, кого маньяк несе на плечі, не позначаємо зовсім: він і так у маньяка перед очима,
+ * а мітка над ним лише заважала б.
  * Спокійно пульсує, а в останні {@link #URGENT_MS} блимає червоним — щоб
  * було видно, що вже не встигаєш.
  *
@@ -33,7 +40,8 @@ import java.util.UUID;
 public final class DownedSurvivorMarker {
 
     private static final int EDGE_MARGIN = 26;
-    private static final int RADIUS = 7;
+    /** Півсторона голови-іконки, пікселі (голова 2*HEAD_HALF px). */
+    private static final int HEAD_HALF = 8;
 
     /** Скільки лишилось до смерті, коли мітка починає блимати. */
     private static final long URGENT_MS = 10_000;
@@ -72,38 +80,53 @@ public final class DownedSurvivorMarker {
         if (point == null) return;
 
         long leftMs = ClientMatchState.downedMillisLeft(entry);
-        boolean urgent = leftMs < URGENT_MS;
+        boolean timed = entry.timed();
+        boolean urgent = timed && leftMs < URGENT_MS;
+        com.log_to_kot.maniacmod.hooks.HookStatus status =
+            com.log_to_kot.maniacmod.hooks.HookStatus.fromCode(entry.status());
+        // На плечі маньяка — без мітки (див. опис класу).
+        if (status == com.log_to_kot.maniacmod.hooks.HookStatus.CARRIED) return;
 
         double pulse = urgent
             ? 0.45 + 0.55 * Math.abs(Math.sin(now / 130.0))
             : 0.80 + 0.20 * Math.sin(now / 320.0);
         int alpha = (int) Math.max(60, Math.min(255, 255 * pulse));
-        int rgb = urgent ? URGENT_RGB : CALM_RGB;
+        // Колір ромба = колір контуру жертви (лежить — золотий, висить — червоний).
+        int rgb = urgent ? URGENT_RGB : switch (status) {
+            case CARRIED -> 0xC060FF;
+            case HOOKED -> 0xFF4040;
+            default -> CALM_RGB;
+        };
 
         int cx = point.x();
         int cy = point.y();
-        drawDiamond(graphics, cx, cy, RADIUS + 1, (alpha << 24) | 0x101010);
-        drawDiamond(graphics, cx, cy, RADIUS, (alpha << 24) | rgb);
-
-        // Білий хрест усередині — «потрібна допомога».
-        int cross = (alpha << 24) | 0xFFFFFF;
-        graphics.fill(cx - 1, cy - 4, cx + 2, cy + 5, cross);
-        graphics.fill(cx - 4, cy - 1, cx + 5, cy + 2, cross);
+        // Рамка кольору стану + голова гравця всередині.
+        int x0 = cx - HEAD_HALF, y0 = cy - HEAD_HALF, size = HEAD_HALF * 2;
+        graphics.fill(x0 - 2, y0 - 2, x0 + size + 2, y0 + size + 2, (alpha << 24) | 0x101010);
+        graphics.fill(x0 - 1, y0 - 1, x0 + size + 1, y0 + size + 1, (alpha << 24) | rgb);
+        PlayerFaceRenderer.draw(graphics, skinOf(entry.id()), x0, y0, size);
 
         int meters = (int) Math.round(WorldToScreen.distanceXZ(wx, wz));
         long seconds = (leftMs + 999) / 1000;
-        String label = meters + " м · " + (seconds / 60) + ":" + String.format("%02d", seconds % 60);
+        String label = timed
+            ? meters + " м · " + (seconds / 60) + ":" + String.format("%02d", seconds % 60)
+            : meters + " м · " + net.minecraft.network.chat.Component
+                .translatable("maniacmod.hook.status." + entry.status()).getString();
         // Таймер до смерті — ЗАВЖДИ червоні цифри (а не лише в останні
         // секунди): лежачий має бачити, скільки йому лишилось, з першого
         // кадру, і це має читатись на всю карту без пояснень.
         int textColor = (Math.max(140, alpha) << 24) | URGENT_RGB;
-        graphics.drawCenteredString(mc.font, label, cx, cy + RADIUS + 5, textColor);
+        graphics.drawCenteredString(mc.font, label, cx, cy + HEAD_HALF + 5, textColor);
     }
 
-    private static void drawDiamond(GuiGraphics graphics, int cx, int cy, int radius, int argb) {
-        for (int dy = -radius; dy <= radius; dy++) {
-            int half = radius - Math.abs(dy);
-            graphics.fill(cx - half, cy + dy, cx + half + 1, cy + dy + 1, argb);
+    private static ResourceLocation skinOf(UUID uuid) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level != null) {
+            Player player = mc.level.getPlayerByUUID(uuid);
+            if (player instanceof AbstractClientPlayer clientPlayer) {
+                return clientPlayer.getSkinTextureLocation();
+            }
         }
+        return DefaultPlayerSkin.getDefaultSkin(uuid);
     }
 }

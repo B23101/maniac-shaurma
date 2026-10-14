@@ -47,11 +47,21 @@ import java.util.Map;
  *   /maniac hp [гравець]          — хп/стан виживого(-их)
  *   /maniac hp set <гравець> <0-100> — дебаг: виставити хп у % (0 = downed)
  *   /maniac generators complete   — дебаг: миттєво полагодити всі генератори
+ *   /maniac win <maniac|survivors> — примусово завершити матч перемогою маніяка (сцена «гачки з тілами»)
+ *                                    або виживих (усі лишені «втікають»), далі екран підсумків
  *   /maniac revive <гравець>      — дебаг: підняти непритомного гравця (як інший гравець підняв)
+ *   /maniac hook spawn|hang <гравець>|clear — дебаг гаків (тестовий гак, повісити, прибрати)
  *   /maniac lobby set             — точка лобі = позиція виконавця
  *   /maniac point add <вид> [id]  — розмітити точку на своїй позиції
  *   /maniac point list            — скільки яких точок розмічено
  *   /maniac point clear           — стерти розмітку
+ *   /maniac point add receiver    — точка приймача (дивись, КУДИ має дивитись приймач; yaw = твій)
+ *   /maniac point add hook        — точка гака (дивись, КУДИ має «дивитись» гак; жертва висітиме обличчям туди)
+ *   /maniac clearing create <n>   — нова галявина (зона запуску ракети)
+ *   /maniac clearing corner <n>   — додати кут (рівно два, діагональ прямокутника; Y не важить)
+ *   /maniac clearing heli <n>     — точка, над якою висітиме вертоліт (всередині прямокутника)
+ *   /maniac clearing reset|remove|list|clear — керування галявинами
+ *   /maniac heli entry [clear]    — у який бік від галявини вертоліт з’являється (напрям)
  *
  * ── Чому команда коротка ─────────────────────────────────────────────
  * v3 ManiacCommand — 526 рядків, бо кожен тип зони мав власну гілку з
@@ -83,8 +93,23 @@ public final class ManiacCommand {
         root.then(Commands.literal("reload")
             .executes(ctx -> reloadConfig(ctx.getSource())));
 
+        // /maniac reviews — відкриває екран відгуків (хто що поставив + коментар);
+        // з консолі (немає кому показати екран) — текстове зведення.
+        // /maniac reviews chat — те саме зведення текстом у чаті.
+        root.then(Commands.literal("reviews")
+            .executes(ctx -> openReviews(ctx.getSource()))
+            .then(Commands.literal("chat")
+                .executes(ctx -> reviews(ctx.getSource()))));
+
         root.then(Commands.literal("settings")
             .executes(ctx -> openSettings(ctx.getSource())));
+
+        // /maniac history          — архів ВСІХ матчів (екран; адмін бачить усе)
+        // /maniac history <гравець> — особиста історія вказаного гравця
+        root.then(Commands.literal("history")
+            .executes(ctx -> openHistory(ctx.getSource(), null))
+            .then(Commands.argument("player", EntityArgument.player())
+                .executes(ctx -> openHistory(ctx.getSource(), EntityArgument.getPlayer(ctx, "player")))));
 
         // ── /maniac debug ────────────────────────────────────────────────
         // Піддерево дебаг-інструментів, згруповане в одному місці за
@@ -189,12 +214,39 @@ public final class ManiacCommand {
             .then(Commands.literal("complete")
                 .executes(ctx -> completeGenerators(ctx.getSource()))));
 
+        // /maniac win <maniac|survivors> — примусове завершення матчу з перемогою вказаної сторони.
+        // Іде звичайним шляхом кінця матчу: перемога маніяка → сцена VICTORY_SCENE (якщо розмічена)
+        // → підсумки; перемога виживих → анонси втечі → підсумки з титулом «ВИЖИВІ ПЕРЕМОГЛИ».
+        root.then(Commands.literal("win")
+            .then(Commands.literal("maniac")
+                .executes(ctx -> forceWin(ctx.getSource(), false)))
+            .then(Commands.literal("survivors")
+                .executes(ctx -> forceWin(ctx.getSource(), true)))
+            .then(Commands.literal("survivor")
+                .executes(ctx -> forceWin(ctx.getSource(), true))));
+
         // /maniac revive <гравець> — дебаг: підняти непритомного гравця
         // без другого гравця, що фізично тримає ПКМ 8 секунд.
         root.then(Commands.literal("revive")
             .then(Commands.argument("survivor", EntityArgument.player())
                 .executes(ctx -> revive(ctx.getSource(),
                     EntityArgument.getPlayer(ctx, "survivor")))));
+
+        // /maniac hook ... — дебаг гаків без матчу й без розмітки:
+        //   hook spawn           — тестовий гак на моїй позиції, «обличчям» туди, куди я дивлюсь
+        //   hook hang <гравець>  — повісити непритомного (/maniac hp set <гравець> 0) на найближчий гак
+        //   hook clear           — прибрати всі гаки (і зняти тих, хто висить)
+        // Положення жертви підганяється в hooks.yml (hangForward/hangSide/hangUp/hangYawDegrees)
+        // і підхоплюється на льоту — повторювати команду не треба.
+        root.then(Commands.literal("hook")
+            .then(Commands.literal("spawn")
+                .executes(ctx -> hookSpawn(ctx.getSource())))
+            .then(Commands.literal("hang")
+                .then(Commands.argument("survivor", EntityArgument.player())
+                    .executes(ctx -> hookHang(ctx.getSource(),
+                        EntityArgument.getPlayer(ctx, "survivor")))))
+            .then(Commands.literal("clear")
+                .executes(ctx -> hookClear(ctx.getSource()))));
 
         root.then(Commands.literal("phase")
             .then(Commands.argument("phase", StringArgumentType.word())
@@ -247,6 +299,49 @@ public final class ManiacCommand {
             .then(Commands.literal("clear")
                 .executes(ctx -> clearPoints(ctx.getSource()))));
 
+        // ── /maniac clearing, /maniac heli ──────────────────────────────
+        // Галявини евакуації: два кути (Y не важить — контур сам лягає на землю) і точка
+        // зависання вертольота. Усе командами на місці, без ручних координат.
+        root.then(Commands.literal("clearing")
+            .then(Commands.literal("create")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .executes(ctx -> clearingCreate(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name")))))
+            .then(Commands.literal("corner")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests(ManiacCommand::suggestClearings)
+                    .executes(ctx -> clearingCorner(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name")))))
+            .then(Commands.literal("heli")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests(ManiacCommand::suggestClearings)
+                    .executes(ctx -> clearingHeli(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name")))))
+            .then(Commands.literal("reset")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests(ManiacCommand::suggestClearings)
+                    .executes(ctx -> clearingSimple(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name"), "reset"))))
+            .then(Commands.literal("remove")
+                .then(Commands.argument("name", StringArgumentType.word())
+                    .suggests(ManiacCommand::suggestClearings)
+                    .executes(ctx -> clearingSimple(ctx.getSource(),
+                        StringArgumentType.getString(ctx, "name"), "remove"))))
+            .then(Commands.literal("list")
+                .executes(ctx -> clearingList(ctx.getSource())))
+            .then(Commands.literal("clear")
+                .executes(ctx -> {
+                    com.log_to_kot.maniacmod.config.ClearingConfigs.clearAll();
+                    ctx.getSource().sendSuccess(() -> Component.translatable(
+                        "maniacmod.command.clearing_cleared"), true);
+                    return 1;
+                })));
+        root.then(Commands.literal("heli")
+            .then(Commands.literal("entry")
+                .executes(ctx -> heliEntry(ctx.getSource(), false))
+                .then(Commands.literal("clear")
+                    .executes(ctx -> heliEntry(ctx.getSource(), true)))));
+
         // ── /maniac replay ──────────────────────────────────────────────
         // Replay-ролики кіно-вступу: точки з позиції адміна, інтервали, прев'ю.
         root.then(com.log_to_kot.maniacmod.intro.IntroReplayCommand.build());
@@ -289,6 +384,10 @@ public final class ManiacCommand {
                         StringArgumentType.getString(ctx, "name")))))
             .then(Commands.literal("clear")
                 .executes(ctx -> darkZoneClear(ctx.getSource()))));
+
+        // ── /maniac barricade ──────────────────────────────────────────
+        // Закриті зони: дошки, які виживі ламають ломом. Деталі — barricade/README.md.
+        root.then(com.log_to_kot.maniacmod.barricade.BarricadeCommand.build());
 
         dispatcher.register(root);
 
@@ -407,6 +506,48 @@ public final class ManiacCommand {
      * зміна файлу підхоплюється сама протягом секунди. Команда
      * лишається, бо після неї одразу видно ПОВНИЙ список зауважень.
      */
+    /** {@code /maniac reviews} — екран гравцю, текст консолі. */
+    private static int openReviews(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            return reviews(source);
+        }
+        com.log_to_kot.maniacmod.server.ServerPacketHandler.onAdminReviewsRequest(player);
+        return 1;
+    }
+
+    /**
+     * Зведення оцінок маньяків. Читає файли з диска (а не кеш): команда
+     * рідкісна, а свіжі відгуки адміну потрібні саме зараз.
+     */
+    private static int reviews(CommandSourceStack source) {
+        var all = com.log_to_kot.maniacmod.server.rating.ManiacRatingStorage.loadAll();
+        var summary = com.log_to_kot.maniacmod.server.rating.ManiacRatingService.summarize(all);
+
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.reviews.header", all.size()), false);
+        for (var row : summary) {
+            boolean game = com.log_to_kot.maniacmod.net.s2c.rating.ManiacRatingSyncPacket.GAME_ID.equals(row.maniacId());
+            String name = game ? Component.translatable("maniacmod.rating.tab.game").getString()
+                : ManiacRegistry.exists(row.maniacId())
+                    ? ManiacRegistry.get(row.maniacId()).displayName() : row.maniacId();
+            if (row.voters() == 0) {
+                source.sendSuccess(() -> Component.translatable("maniacmod.command.reviews.none", name), false);
+            } else {
+                source.sendSuccess(() -> Component.translatable(
+                    game ? "maniacmod.command.reviews.row_game" : "maniacmod.command.reviews.row",
+                    name, row.voters(),
+                    String.format(java.util.Locale.ROOT, "%.1f", row.overall()),
+                    String.format(java.util.Locale.ROOT, "%.1f", row.look()),
+                    String.format(java.util.Locale.ROOT, "%.1f", row.abilities()),
+                    String.format(java.util.Locale.ROOT, "%.1f", row.fear())), false);
+            }
+        }
+        for (var review : com.log_to_kot.maniacmod.server.rating.ManiacRatingService.latestComments(all, 5)) {
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.reviews.comment",
+                review.player(), review.comment()), false);
+        }
+        return 1;
+    }
+
     private static int reloadConfig(CommandSourceStack source) {
         ConfigDiagnostics diag = ManiacConfigs.reload("команда /maniac reload");
         MapPointConfigs.reload();
@@ -442,6 +583,22 @@ public final class ManiacCommand {
      * виконавцю команди. Консольний виконавець (немає ServerPlayer)
      * отримує зрозумілу відмову — екран нема кому показати.
      */
+    /**
+     * {@code /maniac history [гравець]} — відкриває екран історії тому, хто виконав команду. Права
+     * гарантує корінь {@code /maniac} (оператор); дані екран усе одно запитує в сервера, який перевіряє
+     * їх сам ({@code HistoryAccess}) — тут нічого не дублюємо.
+     */
+    private static int openHistory(CommandSourceStack source, ServerPlayer target) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.translatable("maniacmod.command.history_players_only"));
+            return 0;
+        }
+        ModNetwork.toPlayer(player, new com.log_to_kot.maniacmod.net.s2c.history.OpenHistoryPacket(
+            target == null ? null : target.getUUID(),
+            target == null ? "" : target.getGameProfile().getName()));
+        return 1;
+    }
+
     private static int openSettings(CommandSourceStack source) {
         if (!(source.getEntity() instanceof ServerPlayer player)) {
             source.sendFailure(Component.translatable("maniacmod.command.settings_players_only"));
@@ -792,11 +949,56 @@ public final class ManiacCommand {
         return 1;
     }
 
+    /**
+     * {@code /maniac win <maniac|survivors>}: примусово завершує матч. Уся логіка — в
+     * {@link MatchOrchestrator#forceEnd}; тут лише повідомлення адміну.
+     */
+    private static int forceWin(CommandSourceStack source, boolean survivorsWin) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+
+        MatchOrchestrator.ForceEndResult result;
+        try {
+            result = match.forceEnd(survivorsWin, source.getServer().getPlayerList().getPlayers());
+        } catch (Exception e) {
+            ManiacMod.LOGGER.error("[ManiacMod] /maniac win впала", e);
+            source.sendFailure(Component.literal("Помилка при завершенні матчу: "
+                + e.getClass().getSimpleName()
+                + (e.getMessage() != null ? " — " + e.getMessage() : "")
+                + " (повний стек — у latest.log)"));
+            return 0;
+        }
+        switch (result) {
+            case REJECTED -> {
+                source.sendFailure(Component.translatable("maniacmod.command.win_not_in_game"));
+                return 0;
+            }
+            case SURVIVORS -> source.sendSuccess(
+                () -> Component.translatable("maniacmod.command.win_survivors"), true);
+            case MANIAC_SCENE -> source.sendSuccess(
+                () -> Component.translatable("maniacmod.command.win_maniac"), true);
+            case MANIAC_RESULT_ONLY -> source.sendSuccess(
+                () -> Component.translatable("maniacmod.command.win_maniac_no_scene"), true);
+        }
+        return 1;
+    }
+
     private static int stop(CommandSourceStack source) {
         MatchOrchestrator match = requireMatch(source);
         if (match == null) return 0;
 
-        match.reset(source.getServer().getPlayerList().getPlayers());
+        try {
+            match.reset(source.getServer().getPlayerList().getPlayers());
+        } catch (Exception e) {
+            // Без цього гравець бачить лише загальне «сталася неочікувана
+            // помилка». Тепер у чаті — тип і текст, у логах — повний stacktrace.
+            ManiacMod.LOGGER.error("[ManiacMod] /maniac stop впала", e);
+            source.sendFailure(Component.literal("Помилка при зупинці матчу: "
+                + e.getClass().getSimpleName()
+                + (e.getMessage() != null ? " — " + e.getMessage() : "")
+                + " (повний стек — у latest.log)"));
+            return 0;
+        }
         source.sendSuccess(() -> Component.translatable("maniacmod.command.stopped"), true);
         return 1;
     }
@@ -959,6 +1161,40 @@ public final class ManiacCommand {
         return 1;
     }
 
+    // ── Гаки (дебаг) ─────────────────────────────────────────────────────
+
+    private static int hookSpawn(CommandSourceStack source) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
+        match.hooks().spawnHookAt(source.getLevel(), pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
+            source.getRotation().y);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.hook_spawned",
+            pos.toShortString()), true);
+        return 1;
+    }
+
+    private static int hookHang(CommandSourceStack source, ServerPlayer target) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        if (!match.hooks().debugHang(target)) {
+            source.sendFailure(Component.translatable("maniacmod.command.hook_hang_failed",
+                target.getName().getString()));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.hook_hung",
+            target.getName().getString()), true);
+        return 1;
+    }
+
+    private static int hookClear(CommandSourceStack source) {
+        MatchOrchestrator match = requireMatch(source);
+        if (match == null) return 0;
+        match.hooks().debugClear();
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.hook_cleared"), true);
+        return 1;
+    }
+
     // ── Карта ────────────────────────────────────────────────────────────
 
     private static int setLobby(CommandSourceStack source) {
@@ -993,11 +1229,30 @@ public final class ManiacCommand {
             return 0;
         }
 
+        // Точки сцен перемоги й freecam точні (не центр блока): камери — позиція ОЧЕЙ адміна й нахил
+        // погляду, гачок/маніяк/гравець/привид — де стоїть адмін. Решта видів — по центру блока.
+        var exact = source.getPosition();
+        boolean cameraKind = kind == SpawnPointKind.VICTORY_CAMERA
+            || kind == SpawnPointKind.VICTORY_PLAYERS_CAMERA || kind == SpawnPointKind.STATS_CAMERA;
+        if (cameraKind && source.getEntity() != null) exact = source.getEntity().getEyePosition();
+        boolean victoryKind = kind == SpawnPointKind.VICTORY_HOOK || kind == SpawnPointKind.VICTORY_MANIAC
+            || kind == SpawnPointKind.VICTORY_PLAYER || kind == SpawnPointKind.VICTORY_GHOST
+            || cameraKind;
+        int cap = pointCap(kind);
+        if (cap > 0 && match.spawnPoints().stream().filter(p -> p.kind() == kind).count() >= cap) {
+            source.sendFailure(Component.translatable("maniacmod.command.point_cap_full", kind.name(), cap));
+            return 0;
+        }
         var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
-        SpawnPoint point = new SpawnPoint(pos, source.getRotation().y, kind, owner);
+        float yaw = source.getRotation().y;
+        float pitch = cameraKind ? source.getRotation().x : 0f;
+        SpawnPoint point = victoryKind
+            ? new SpawnPoint(pos, yaw, kind, owner, pitch, exact.x, exact.y, exact.z)
+            : new SpawnPoint(pos, yaw, kind, owner);
         match.addSpawnPoint(point);
-        MapPointConfigs.add(pointType(kind),
-            new MapPointConfigs.PointData(pos, source.getRotation().y, owner));
+        MapPointConfigs.add(pointType(kind), victoryKind
+            ? new MapPointConfigs.PointData(pos, yaw, owner, pitch, exact.x, exact.y, exact.z)
+            : new MapPointConfigs.PointData(pos, yaw, owner));
 
         source.sendSuccess(() -> Component.translatable("maniacmod.command.point_added",
             kind.name(), pos.toShortString()), true);
@@ -1045,6 +1300,112 @@ public final class ManiacCommand {
         if (match != null) match.reloadConfiguredMap();
         source.sendSuccess(() -> Component.literal("Точку " + kind.name()
             + " #" + index + " видалено."), true);
+        return 1;
+    }
+
+    // ── Галявини евакуації ───────────────────────────────────────────────
+
+    private static java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>
+    suggestClearings(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx,
+                     com.mojang.brigadier.suggestion.SuggestionsBuilder builder) {
+        for (var zone : com.log_to_kot.maniacmod.config.ClearingConfigs.snapshot()) builder.suggest(zone.name());
+        return builder.buildFuture();
+    }
+
+    private static int clearingCreate(CommandSourceStack source, String name) {
+        var result = com.log_to_kot.maniacmod.config.ClearingConfigs.create(name);
+        if (result != com.log_to_kot.maniacmod.config.ClearingConfigs.Result.OK) {
+            source.sendFailure(Component.translatable("maniacmod.command.clearing_exists", name));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.clearing_created", name, name, name), true);
+        return 1;
+    }
+
+    private static int clearingCorner(CommandSourceStack source, String name) {
+        var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
+        var result = com.log_to_kot.maniacmod.config.ClearingConfigs.addCorner(name, pos);
+        switch (result) {
+            case NO_SUCH_ZONE -> { source.sendFailure(Component.translatable("maniacmod.command.clearing_missing", name)); return 0; }
+            case CORNERS_FULL -> { source.sendFailure(Component.translatable("maniacmod.command.clearing_corners_full", name, name)); return 0; }
+            default -> { }
+        }
+        var zone = com.log_to_kot.maniacmod.config.ClearingConfigs.find(name);
+        int count = zone == null ? 0 : zone.corners().size();
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.clearing_corner_added",
+            name, pos.toShortString(), count), true);
+        return 1;
+    }
+
+    private static int clearingHeli(CommandSourceStack source, String name) {
+        var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
+        var result = com.log_to_kot.maniacmod.config.ClearingConfigs.setHeli(name, pos);
+        switch (result) {
+            case NO_SUCH_ZONE -> { source.sendFailure(Component.translatable("maniacmod.command.clearing_missing", name)); return 0; }
+            case NEED_CORNERS -> { source.sendFailure(Component.translatable("maniacmod.command.clearing_need_corners", name)); return 0; }
+            case HELI_OUTSIDE -> { source.sendFailure(Component.translatable("maniacmod.command.clearing_heli_outside", name)); return 0; }
+            default -> { }
+        }
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.clearing_heli_set", name, pos.toShortString()), true);
+
+        // Підказка адміну: вертоліт висітиме на ropeLength над ЗЕМЛЕЮ в цій колонці. Блоки в
+        // колонці (крона дерева, дах) — мотузка й гвинт пройдуть крізь них.
+        var level = source.getLevel();
+        int ropeLen = com.log_to_kot.maniacmod.config.ManiacConfigs.get(
+            com.log_to_kot.maniacmod.config.ConfigSchema.EVAC_ROPE_LENGTH);
+        int ground = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+            pos.getX(), pos.getZ());
+        for (int y = ground; y <= ground + ropeLen + 3; y++) {
+            var p = new net.minecraft.core.BlockPos(pos.getX(), y, pos.getZ());
+            if (!level.getBlockState(p).isAir()) {
+                source.sendSystemMessage(Component.translatable(
+                    "maniacmod.command.clearing_heli_blocked", ropeLen).withStyle(net.minecraft.ChatFormatting.YELLOW));
+                break;
+            }
+        }
+        return 1;
+    }
+
+    private static int clearingSimple(CommandSourceStack source, String name, String action) {
+        boolean ok;
+        if (action.equals("remove")) {
+            ok = com.log_to_kot.maniacmod.config.ClearingConfigs.remove(name);
+        } else {
+            ok = com.log_to_kot.maniacmod.config.ClearingConfigs.resetCorners(name)
+                == com.log_to_kot.maniacmod.config.ClearingConfigs.Result.OK;
+        }
+        if (!ok) {
+            source.sendFailure(Component.translatable("maniacmod.command.clearing_missing", name));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.clearing_" + action + (action.equals("remove") ? "d" : ""), name), true);
+        return 1;
+    }
+
+    private static int clearingList(CommandSourceStack source) {
+        var zones = com.log_to_kot.maniacmod.config.ClearingConfigs.snapshot();
+        if (zones.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("Галявин немає."), false);
+            return 1;
+        }
+        StringBuilder sb = new StringBuilder("Галявини:");
+        for (var z : zones) {
+            sb.append(' ').append(z.name()).append(z.isComplete() ? " ✓" : " (неповна: "
+                + z.corners().size() + "/2 кути" + (z.heli() == null ? ", без точки вертольота" : "") + ")");
+        }
+        source.sendSuccess(() -> Component.literal(sb.toString()), false);
+        return zones.size();
+    }
+
+    private static int heliEntry(CommandSourceStack source, boolean clear) {
+        if (clear) {
+            com.log_to_kot.maniacmod.config.ClearingConfigs.setEntry(null);
+            source.sendSuccess(() -> Component.translatable("maniacmod.command.heli_entry_cleared"), true);
+            return 1;
+        }
+        var pos = net.minecraft.core.BlockPos.containing(source.getPosition());
+        com.log_to_kot.maniacmod.config.ClearingConfigs.setEntry(pos);
+        source.sendSuccess(() -> Component.translatable("maniacmod.command.heli_entry_set", pos.toShortString()), true);
         return 1;
     }
 
@@ -1125,6 +1486,25 @@ public final class ManiacCommand {
             case ITEM -> MapPointConfigs.Type.ITEM_POINTS;
             case GENERATOR -> MapPointConfigs.Type.GENERATOR_POINTS;
             case EXIT -> MapPointConfigs.Type.EXIT_POINTS;
+            case RECEIVER -> MapPointConfigs.Type.RECEIVER_POINTS;
+            case HOOK -> MapPointConfigs.Type.HOOK_POINTS;
+            case VICTORY_HOOK -> MapPointConfigs.Type.VICTORY_HOOK_POINTS;
+            case VICTORY_MANIAC -> MapPointConfigs.Type.VICTORY_MANIAC_POINTS;
+            case VICTORY_CAMERA -> MapPointConfigs.Type.VICTORY_CAMERA_POINTS;
+            case VICTORY_PLAYER -> MapPointConfigs.Type.VICTORY_PLAYER_POINTS;
+            case VICTORY_GHOST -> MapPointConfigs.Type.VICTORY_GHOST_POINTS;
+            case VICTORY_PLAYERS_CAMERA -> MapPointConfigs.Type.VICTORY_PLAYERS_CAMERA_POINTS;
+            case STATS_CAMERA -> MapPointConfigs.Type.STATS_CAMERA_POINTS;
+        };
+    }
+
+    /** Скільки точок цього виду приймає розмітка (0 — без ліміту). */
+    private static int pointCap(SpawnPointKind kind) {
+        return switch (kind) {
+            case VICTORY_CAMERA, VICTORY_PLAYERS_CAMERA -> 2;
+            case STATS_CAMERA -> 1;
+            case VICTORY_PLAYER, VICTORY_GHOST -> 10;
+            default -> 0;
         };
     }
 

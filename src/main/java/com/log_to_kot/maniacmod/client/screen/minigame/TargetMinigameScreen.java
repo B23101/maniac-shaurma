@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client.screen.minigame;
 
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
+
 import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
 import com.log_to_kot.maniacmod.client.style.ManiacUiTheme;
 import com.log_to_kot.maniacmod.client.style.UiAnim;
@@ -220,7 +222,9 @@ public final class TargetMinigameScreen extends Screen {
         // Прямо GLFW, а не keyJump: keyPressed нижче ловить фізичний пробіл,
         // і початковий стан мусить відповідати ТІЙ САМІЙ клавіші (гравець
         // міг перепризначити «стрибок» на іншу).
-        this.spaceHeld = org.lwjgl.glfw.GLFW.glfwGetKey(
+        this.spaceHeld = VrCompat.isVrActive()
+            ? Minecraft.getInstance().options.keyJump.isDown()
+            : org.lwjgl.glfw.GLFW.glfwGetKey(
             Minecraft.getInstance().getWindow().getWindow(),
             org.lwjgl.glfw.GLFW.GLFW_KEY_SPACE) == org.lwjgl.glfw.GLFW.GLFW_PRESS;
     }
@@ -362,19 +366,24 @@ public final class TargetMinigameScreen extends Screen {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_SPACE) {
-            if (!spaceHeld && !finished && !failed) {
-                spaceHeld = true;
-                double position = cursorPosition();
-                // Локально «заморожуємо» палку одразу: якщо це промах,
-                // вона лишиться на місці схибленого натискання. Якщо влучання —
-                // сервер підтвердить onHit(), і ми розморозимо (див. onHit).
-                frozenCursor = position;
-                ModNetwork.toServer(new TargetMinigameClickPacket(position));
-            }
+            attempt();
             return true;
         }
         // ESC та решта клавіш навмисно ігноруються — вихід із міні-гри = провал.
         return true;
+    }
+
+    /** Одна спроба влучити (пробіл або, у VR, тригер контролера). */
+    private void attempt() {
+        if (!spaceHeld && !finished && !failed) {
+            spaceHeld = true;
+            double position = cursorPosition();
+            // Локально «заморожуємо» палку одразу: якщо це промах,
+            // вона лишиться на місці схибленого натискання. Якщо влучання —
+            // сервер підтвердить onHit(), і ми розморозимо (див. onHit).
+            frozenCursor = position;
+            ModNetwork.toServer(new TargetMinigameClickPacket(position));
+        }
     }
 
     /** Відпускання пробілу знову дозволяє наступну спробу. */
@@ -393,6 +402,14 @@ public final class TargetMinigameScreen extends Screen {
      */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // VR: клавіатури немає — тригер контролера (клік указівника) = «пробіл».
+        if (VrCompat.isVrActive() && button == 0) attempt();
+        return true;
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (VrCompat.isVrActive() && button == 0) spaceHeld = false;
         return true;
     }
 

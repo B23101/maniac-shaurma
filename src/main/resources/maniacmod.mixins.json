@@ -6,7 +6,8 @@
   "refmap": "maniacmod.refmap.json",
   "mixins": [
     "MixinPlayerDownedPose",
-    "MixinSwapOffhandServer"
+    "MixinSwapOffhandServer",
+    "MixinCarriedNoPush"
   ],
   "client": [
     "ManiacAttackGuardMixin",
@@ -23,12 +24,21 @@
     "MixinHoldFlashlightPose",
     "MixinFlashlightHoldUpThirdPerson",
     "MixinGeneratorWorkThirdPerson",
+    "MixinHeldItemBones",
     "MixinPlayerRendererDownedUpright",
     "MixinWakeUpPose",
     "MixinWoundedPose",
     "MixinCameraWakeUp",
     "MixinCameraRopeHang",
-    "MixinSwapOffhandClient"
+    "MixinCameraCarried",
+    "MixinSwapOffhandClient",
+    "MixinSvcRenderEventsIcons",
+    "MixinConnectScreenManiac",
+    "MixinReceivingLevelScreenManiac",
+    "MixinLevelLoadingScreenManiac",
+    "MixinGenericDirtMessageScreenManiac",
+    "MixinProgressScreenManiac",
+    "MixinInventorySwapPaintVr"
   ],
   "server": [],
   "injectors": {

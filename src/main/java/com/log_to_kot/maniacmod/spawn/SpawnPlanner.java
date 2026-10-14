@@ -60,15 +60,18 @@ public final class SpawnPlanner {
         private final Map<UUID, SpawnPoint> survivorPoints;
         private final List<SpawnPoint> engagedItemPoints;
         private final List<SpawnPoint> generatorPoints;
+        private final SpawnPoint receiverPoint;
 
         SpawnPlan(SpawnPoint maniacPoint,
                   Map<UUID, SpawnPoint> survivorPoints,
                   List<SpawnPoint> engagedItemPoints,
-                  List<SpawnPoint> generatorPoints) {
+                  List<SpawnPoint> generatorPoints,
+                  SpawnPoint receiverPoint) {
             this.maniacPoint = maniacPoint;
             this.survivorPoints = survivorPoints;
             this.engagedItemPoints = engagedItemPoints;
             this.generatorPoints = generatorPoints;
+            this.receiverPoint = receiverPoint;
         }
 
         public SpawnPoint maniacPoint()                 { return maniacPoint; }
@@ -76,13 +79,16 @@ public final class SpawnPlanner {
         public List<SpawnPoint> engagedItemPoints()     { return List.copyOf(engagedItemPoints); }
         public List<SpawnPoint> generatorPoints()       { return List.copyOf(generatorPoints); }
 
+        /** Єдина точка приймача цього матчу; null — приймача немає (лише дебаг без розмітки). */
+        public SpawnPoint receiverPoint()               { return receiverPoint; }
+
         /**
          * Порожній план — нікого не телепортувати й нічого не спавнити.
          * Використовується лише в дебазі, коли карта не розмічена й
          * будувати план нема з чого, а матч усе одно має стартувати.
          */
         public static SpawnPlan empty() {
-            return new SpawnPlan(null, Map.of(), List.of(), List.of());
+            return new SpawnPlan(null, Map.of(), List.of(), List.of(), null);
         }
 
         /** Чи в плані немає жодної дії (дебаг без розмітки). */
@@ -139,7 +145,8 @@ public final class SpawnPlanner {
 
             if (assigned != null) {
                 return new SpawnPlan(maniacPoint, assigned, pickItemPoints(allPoints),
-                    pickGeneratorPoints(allPoints, maniacPoint, numManiacs));
+                    pickGeneratorPoints(allPoints, maniacPoint, numManiacs),
+                    pickReceiverPoint(allPoints, maniacPoint));
             }
 
                     minToManiac   *= step;
@@ -180,13 +187,54 @@ public final class SpawnPlanner {
                 tryAssign(survivorPool, survivorIds, anchor, minToManiac, minToSurvivor);
             if (assigned != null) {
                 return new SpawnPlan(anchor, assigned, pickItemPoints(allPoints),
-                    pickGeneratorPoints(allPoints, anchor, 1));
+                    pickGeneratorPoints(allPoints, anchor, 1),
+                    pickReceiverPoint(allPoints, anchor));
             }
             minToManiac *= step;
             minToSurvivor *= step;
         }
         throw new SpawnPlanFailure(
             "Не вдалося рознести виживих навіть із послабленими дистанціями.");
+    }
+
+    /**
+     * ДЕБАГ-план «що є, те й спавнимо». Викликається, коли звичайний план неможливий (немає
+     * стартової точки маньяка, бракує точок виживих, не вдалося рознести) і ввімкнено debugMode.
+     *
+     * <p>Раніше в цьому випадку матч отримував {@link SpawnPlan#empty()} — і не спавнилося
+     * НІЧОГО: ні генераторів, ні предметів, ні приймача, хоча їхня розмітка є. Тепер кожна
+     * частина плану будується окремо й незалежно від інших: нестача однієї розмітки гасить
+     * лише свою частину. Виживих розкидаємо по доступних точках (кого не вистачило — лишається
+     * на місці), дистанцій не перевіряємо.</p>
+     */
+    public SpawnPlan planDebugBestEffort(List<SpawnPoint> allPoints, List<UUID> survivorIds) {
+        List<SpawnPoint> survivorPool = new ArrayList<>(filter(allPoints, SpawnPointKind.SURVIVOR, null));
+        Collections.shuffle(survivorPool, rng);
+        Map<UUID, SpawnPoint> assigned = new LinkedHashMap<>();
+        int next = 0;
+        for (UUID id : survivorIds) {
+            if (next >= survivorPool.size()) break;
+            assigned.put(id, survivorPool.get(next++));
+        }
+
+        // Точка маньяка — будь-яка розмічена (дебаг-архетип може не збігатися з розміткою).
+        List<SpawnPoint> maniacPoints = filter(allPoints, SpawnPointKind.MANIAC, null);
+        SpawnPoint anchor = maniacPoints.isEmpty()
+            ? null : maniacPoints.get(rng.nextInt(maniacPoints.size()));
+
+        List<SpawnPoint> items = safe(() -> pickItemPoints(allPoints), List.of());
+        List<SpawnPoint> generators = safe(() -> pickGeneratorPoints(allPoints, anchor, 1), List.of());
+        SpawnPoint receiver = safe(() -> pickReceiverPoint(allPoints, anchor), null);
+        return new SpawnPlan(anchor, assigned, items, generators, receiver);
+    }
+
+    /** Будує одну частину дебаг-плану; якщо вона не вдалась — порожня заміна, решта плану живе. */
+    private static <T> T safe(java.util.function.Supplier<T> part, T fallback) {
+        try {
+            return part.get();
+        } catch (RuntimeException e) {
+            return fallback;
+        }
     }
 
     /**
@@ -245,6 +293,40 @@ public final class SpawnPlanner {
             ManiacConfigs.get(ConfigSchema.MAX_RELAXATION_PASSES),
             SpawnPoint::horizontalDistanceTo,
             rng);
+    }
+
+    /**
+     * Обирає ЄДИНУ точку приймача матчу з усіх розмічених.
+     *
+     * <p>Точок може бути скільки завгодно — на матч береться одна, випадкова, але не
+     * впритул до старту маньяка ({@code receiverMinManiacBlocks}): інакше приймач, що
+     * стоїть у маньяка під боком, робить евакуацію нездійсненною ще до її початку.
+     * Дистанція послаблюється так само, як для генераторів, і лише якщо розмітка інакше
+     * не дозволяє; жорстке правило одне — «рівно одна точка».</p>
+     *
+     * <p>Жодної точки: звичайний режим — {@link SpawnPlanFailure} (евакуація без приймача
+     * неможлива, краще побачити це в лобі, ніж після години гри); дебаг — {@code null}.</p>
+     */
+    private SpawnPoint pickReceiverPoint(List<SpawnPoint> allPoints, SpawnPoint maniacPoint) {
+        List<SpawnPoint> pool = filter(allPoints, SpawnPointKind.RECEIVER, null);
+        if (pool.isEmpty()) {
+            if (DebugMode.enabled()) return null;
+            throw new SpawnPlanFailure("Немає жодної точки приймача. "
+                + "Додай її командою /maniac point add receiver (дивись, куди має «дивитись» приймач).");
+        }
+        double minToManiac = ManiacConfigs.get(ConfigSchema.EVAC_RECEIVER_MIN_MANIAC_BLOCKS);
+        double step = ManiacConfigs.get(ConfigSchema.RELAXATION_STEP);
+        int maxPasses = ManiacConfigs.get(ConfigSchema.MAX_RELAXATION_PASSES);
+        for (int pass = 0; pass <= maxPasses; pass++) {
+            final double min = minToManiac;
+            List<SpawnPoint> fit = new ArrayList<>();
+            for (SpawnPoint p : pool) {
+                if (maniacPoint == null || p.horizontalDistanceTo(maniacPoint) >= min) fit.add(p);
+            }
+            if (!fit.isEmpty()) return fit.get(rng.nextInt(fit.size()));
+            minToManiac *= step;
+        }
+        return pool.get(rng.nextInt(pool.size()));
     }
 
     /**

@@ -125,10 +125,20 @@ public final class GroundItemSpawner {
      * @return {@code true}, якщо світ прийняв сутність
      */
     public static boolean dropAround(ServerPlayer body, ItemStack stack) {
-        Random rng = new Random();
-        ServerLevel level = body.serverLevel();
+        return dropAround(body.serverLevel(), new Vec3(body.getX(), body.getY(), body.getZ()), stack);
+    }
 
-        Vec3 pos = new Vec3(body.getX(), body.getY() + BODY_DROP_HEIGHT, body.getZ());
+    /**
+     * Те саме, але навколо ТОЧКИ у світі, а не навколо гравця: потрібне для тіла
+     * офлайн-гравця, якого як {@link ServerPlayer} немає (лут вбитого тіла).
+     *
+     * @param origin точка під ногами тіла (висоту розльоту додає сам метод)
+     * @return {@code true}, якщо світ прийняв сутність
+     */
+    public static boolean dropAround(ServerLevel level, Vec3 origin, ItemStack stack) {
+        Random rng = new Random();
+
+        Vec3 pos = new Vec3(origin.x, origin.y + BODY_DROP_HEIGHT, origin.z);
         double angle = rng.nextDouble() * Math.PI * 2;
         // 0.4..1.0 від максимуму: усі предмети різної дальності, а не кільце.
         double speed = BODY_DROP_SPREAD_SPEED * (0.4 + 0.6 * rng.nextDouble());

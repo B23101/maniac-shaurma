@@ -1,0 +1,43 @@
+{
+	"format_version": "1.8.0",
+	"animations": {
+		"тримає_маніяк": {
+			"loop": true,
+			"bones": {
+				"body": {
+					"rotation": {
+						"vector": [-90, 0, 0]
+					},
+					"position": {
+						"vector": [0, -2, -4]
+					}
+				},
+				"head": {
+					"rotation": {
+						"vector": [-47.5, 0, 0]
+					}
+				},
+				"right_arm": {
+					"rotation": {
+						"vector": [27.5, 0, 7.5]
+					}
+				},
+				"left_arm": {
+					"rotation": {
+						"vector": [12.3874, 1.2988, -9.9161]
+					}
+				},
+				"right_leg": {
+					"rotation": {
+						"vector": [52.2619, -5.9438, 4.5822]
+					}
+				},
+				"left_leg": {
+					"rotation": {
+						"vector": [57.2766, 6.3202, -4.0462]
+					}
+				}
+			}
+		}
+	}
+}

@@ -15,10 +15,15 @@ import java.util.Set;
  *   SCATTER      технічна  розкидання по карті + спавн генераторів/луту
  *   ROLE_REVEAL  технічна  оголошення ролей (хто маньяк, хто виживший)
  *   HUNT         ІГРОВА    основна фаза: ремонт генераторів, полювання
- *   POWERED      ІГРОВА    усі генератори полагоджені → відкриваються виходи
- *   FINALE       ІГРОВА    фінал: лишився останній / ворота відкриті
+ *   POWERED      ІГРОВА    усі генератори полагоджені → приймач отримав живлення
+ *   HELI_WAIT    ІГРОВА    вертоліт викликано з приймача; виживі шукають ракету й
+ *                          запускають її на галявині, вертоліт летить, кидає мотузку
+ *   FINALE       ІГРОВА    фінал: мотузка спущена, виживі лізуть до вертольота
  *   ENDING       технічна  підсумки, статистика, ніхто нікого не б'є
  *   RESET        технічна  прибирання сутностей, повернення в LOBBY
+ *   VICTORY_SCENE технічна кінець матчу перемогою маніяка: кінематографічна сцена
+ *                          «гачки з тілами» (victory/VictorySceneModule), далі ENDING.
+ *                          ДОПИСАНА В КІНЕЦЬ enum-а: PhaseSyncPacket пише ordinal.
  *
  * ── Як додати нову фазу ──────────────────────────────────────────────
  *   Дописати один рядок нижче з її PhaseKind і набором PhaseRule.
@@ -41,8 +46,10 @@ public enum GamePhase {
     SCATTER(PhaseKind.TECHNICAL, LifecycleMirror.IDLE,
         EnumSet.noneOf(PhaseRule.class)),
 
+    // ITEM_USE: слоти вже роздані на вході в фазу, а предмети лежать із SCATTER — без цього
+    // гравці не могли підбирати лут перші секунди після старту гри (поки триває ROLE_REVEAL).
     ROLE_REVEAL(PhaseKind.TECHNICAL, LifecycleMirror.IDLE,
-        EnumSet.of(PhaseRule.HUD)),
+        EnumSet.of(PhaseRule.HUD, PhaseRule.ITEM_USE)),
 
     HUNT(PhaseKind.GAMEPLAY, LifecycleMirror.ACTIVE,
         EnumSet.of(PhaseRule.MOVEMENT, PhaseRule.DAMAGE, PhaseRule.TRAPS,
@@ -53,8 +60,18 @@ public enum GamePhase {
     POWERED(PhaseKind.GAMEPLAY, LifecycleMirror.ACTIVE,
         EnumSet.of(PhaseRule.MOVEMENT, PhaseRule.DAMAGE, PhaseRule.TRAPS,
                    PhaseRule.ITEM_USE, PhaseRule.ABILITIES, PhaseRule.HUD,
-                   PhaseRule.SURVIVOR_VITALS, PhaseRule.RESCUE,
-                   PhaseRule.ESCAPE)),
+                   PhaseRule.SURVIVOR_VITALS, PhaseRule.RESCUE)),
+
+    /**
+     * Вертоліт викликано, але мотузка ще не спущена. Дозволи ті самі, що в POWERED
+     * (ESCAPE немає — тікати ще нікуди; в POWERED його теж більше нема: єдиний вихід —
+     * мотузка вертольота, а вона з'являється лише у FINALE). Окрема фаза, а не прапорець у модулі:
+     * HUD, Tab і голос питають фазу, а не знають про модуль евакуації.
+     */
+    HELI_WAIT(PhaseKind.GAMEPLAY, LifecycleMirror.ACTIVE,
+        EnumSet.of(PhaseRule.MOVEMENT, PhaseRule.DAMAGE, PhaseRule.TRAPS,
+                   PhaseRule.ITEM_USE, PhaseRule.ABILITIES, PhaseRule.HUD,
+                   PhaseRule.SURVIVOR_VITALS, PhaseRule.RESCUE)),
 
     FINALE(PhaseKind.GAMEPLAY, LifecycleMirror.ACTIVE,
         EnumSet.of(PhaseRule.MOVEMENT, PhaseRule.DAMAGE, PhaseRule.TRAPS,
@@ -65,6 +82,13 @@ public enum GamePhase {
         EnumSet.of(PhaseRule.MOVEMENT, PhaseRule.HUD)),
 
     RESET(PhaseKind.TECHNICAL, LifecycleMirror.IDLE,
+        EnumSet.noneOf(PhaseRule.class)),
+
+    /**
+     * Сцена перемоги маніяка. Правил немає: ніхто не рухається, не б'є, не користується
+     * предметами. Lifecycle — ENDING: бібліотека бачить матч як завершений.
+     */
+    VICTORY_SCENE(PhaseKind.TECHNICAL, LifecycleMirror.ENDING,
         EnumSet.noneOf(PhaseRule.class));
 
     // ─────────────────────────────────────────────────────────────────

@@ -140,6 +140,8 @@ public final class ClientMatchState {
     private static long downedReceivedAtMs = 0;
     /** Найбільший ticksLeft, побачений для кожного лежачого, — знаменник шкали часу. */
     private static final Map<UUID, Integer> downedMaxTicks = new java.util.HashMap<>();
+    /** Останній статус гака (лежить/несуть/висить) кожного лежачого — щоб помітити його зміну. */
+    private static final Map<UUID, Integer> downedStatus = new java.util.HashMap<>();
 
     // ── Прогрес підняття (RescueProgressPacket) ──────────────────────────
     // Шкала живе, поки пакети приходять: якщо нового не було довше за
@@ -166,6 +168,14 @@ public final class ClientMatchState {
     // Повний стан з сервера (ObjectiveSyncPacket), а не подія: Tab, відкритий
     // будь-коли, показує правду. Скидається в reset() разом з рештою матчу.
     private static ObjectiveSyncPacket objectives = ObjectiveSyncPacket.empty();
+
+    // ── Підсумок матчу: хто переміг (MatchOutcomePacket, до фази ENDING) ──
+    private static com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket summary;
+    private static com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket reward;
+    private static boolean outcomeKnown = false;
+    private static boolean outcomeSurvivorsWon = false;
+    private static int outcomeEscaped = 0;
+    private static int outcomeTotal = 0;
 
     // ── Візуальні налаштування предметів на землі (loot.sparkleEnabled,
     // loot.pickupRangeBlocks) ──────────────────────────────────────────
@@ -205,6 +215,24 @@ public final class ClientMatchState {
         // робити в кожному оверлеї окремо — і про половину забували.
         if (next == GamePhase.LOBBY || next == GamePhase.RESET) reset();
     }
+
+    static void setOutcome(boolean survivorsWon, int escaped, int total) {
+        outcomeKnown = true;
+        outcomeSurvivorsWon = survivorsWon;
+        outcomeEscaped = escaped;
+        outcomeTotal = total;
+    }
+
+    static void setSummary(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket s) { summary = s; }
+    static void setReward(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket r) { reward = r; }
+    /** Нагорода XP за матч для екрана підсумків; {@code null}, якщо сервер її не слав. */
+    public static com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket reward() { return reward; }
+    /** Статистика матчу (приходить перед ENDING); {@code null}, якщо ще не було. */
+    public static com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket summary() { return summary; }
+    public static boolean outcomeKnown()        { return outcomeKnown; }
+    public static boolean outcomeSurvivorsWon() { return outcomeSurvivorsWon; }
+    public static int outcomeEscaped()          { return outcomeEscaped; }
+    public static int outcomeTotal()            { return outcomeTotal; }
 
     static void setRole(RoleSyncPacket.Role newRole, String newArchetypeId, double newAttackRangeBlocks) {
         role = newRole;
@@ -282,9 +310,17 @@ public final class ClientMatchState {
         java.util.Set<UUID> present = new java.util.HashSet<>();
         for (DownedSurvivorsPacket.Entry entry : entries) {
             present.add(entry.id());
-            downedMaxTicks.merge(entry.id(), entry.ticksLeft(), Math::max);
+            // Статус змінився (повісили) — відлік починається заново: «максимум» старого стану
+            // (лежав, час стояв) зробив би шкалу висіння неправдивою.
+            Integer prev = downedStatus.put(entry.id(), entry.status());
+            if (prev == null || prev != entry.status()) {
+                downedMaxTicks.put(entry.id(), Math.max(0, entry.ticksLeft()));
+            } else {
+                downedMaxTicks.merge(entry.id(), entry.ticksLeft(), Math::max);
+            }
         }
         downedMaxTicks.keySet().retainAll(present);
+        downedStatus.keySet().retainAll(present);
     }
 
     static void setRescueProgress(int progress, int required, boolean asVictim) {
@@ -341,6 +377,7 @@ public final class ClientMatchState {
 
     /** Повне скидання. Викликається при виході з матчу і при диконекті. */
     public static void reset() {
+        com.log_to_kot.maniacmod.client.evac.ClientDispatcher.stop();
         role = RoleSyncPacket.Role.SPECTATOR;
         archetypeId = "";
         attackRangeBlocks = 0.0;
@@ -368,13 +405,25 @@ public final class ClientMatchState {
         activeTrapSlot = -1;
         downed = List.of();
         downedMaxTicks.clear();
+        downedStatus.clear();
         generatorInteraction.clear();
+        com.log_to_kot.maniacmod.client.evac.ClientEvac.reset();
+        summary = null;
+        reward = null;
+        outcomeKnown = false;
+        outcomeSurvivorsWon = false;
+        outcomeEscaped = 0;
+        outcomeTotal = 0;
         com.log_to_kot.maniacmod.client.ItemPickupPose.reset();
         com.log_to_kot.maniacmod.client.WoundedPose.reset();
         com.log_to_kot.maniacmod.client.rope.RopeHangClient.reset();
         com.log_to_kot.maniacmod.client.rope.RopeHangPoseAnimation.reset();
         com.log_to_kot.maniacmod.client.DownedPoseAnimation.reset();
+        com.log_to_kot.maniacmod.client.ClimbPoseAnimation.reset();
         com.log_to_kot.maniacmod.client.ManiacHitEffect.reset();
+        com.log_to_kot.maniacmod.client.ManiacHitConfirmFx.reset();
+        com.log_to_kot.maniacmod.client.SpikeHitEffect.reset();
+        com.log_to_kot.maniacmod.client.BloodSplatterFx.clear();
         rescueRequired = 0;
         rescueProgress = 0;
         com.log_to_kot.maniacmod.client.overlay.WorldToScreen.invalidate();
@@ -383,6 +432,9 @@ public final class ClientMatchState {
         com.log_to_kot.maniacmod.client.overlay.notify.RoleRevealOverlay.reset();
         com.log_to_kot.maniacmod.client.glow.GeneratorHighlightGlow.reset();
         com.log_to_kot.maniacmod.client.glow.TrapVictimGlow.reset();
+        com.log_to_kot.maniacmod.client.hooks.ClientHooks.reset();
+        com.log_to_kot.maniacmod.client.hooks.HookPoseAnimation.reset();
+        com.log_to_kot.maniacmod.client.SmokeMuffle.reset();
     }
 
     // ── Читання ──────────────────────────────────────────────────────────
@@ -432,7 +484,18 @@ public final class ClientMatchState {
      * {@code UNCONSCIOUS} — 0 хп, повзе.
      */
     public static boolean isProne(UUID id) {
-        return survivorStateOf(id).isCrawlOnly();
+        // На плечі / на гаку поза вертикальна, а лежить чи висить модель PAL-анімацією.
+        return survivorStateOf(id).isCrawlOnly() && !hookStatusOf(id).isSeated();
+    }
+
+    /** Статус гака лежачого (NONE, якщо він не лежить). Бачать усі клієнти. */
+    public static com.log_to_kot.maniacmod.hooks.HookStatus hookStatusOf(UUID id) {
+        for (DownedSurvivorsPacket.Entry entry : downed) {
+            if (entry.id().equals(id)) {
+                return com.log_to_kot.maniacmod.hooks.HookStatus.fromCode(entry.status());
+            }
+        }
+        return com.log_to_kot.maniacmod.hooks.HookStatus.NONE;
     }
 
     /**
@@ -468,6 +531,7 @@ public final class ClientMatchState {
 
     /** Частка часу, що ще лишилась (1 — щойно ліг, 0 — час вийшов). */
     public static float downedFraction(DownedSurvivorsPacket.Entry entry) {
+        if (!entry.timed()) return 1f;
         int max = downedMaxTicks.getOrDefault(entry.id(), entry.ticksLeft());
         if (max <= 0) return 0f;
         return Math.max(0f, Math.min(1f, downedMillisLeft(entry) / (max * 50f)));

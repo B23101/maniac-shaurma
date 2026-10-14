@@ -532,7 +532,10 @@ public final class GeneratorModule implements PhaseListener {
 
         if (generator.stage() == GeneratorPoi.Stage.REPAIR) {
             markWorking(players, session, player, GeneratorInteractionPacket.ACTION_REPAIR);
-            boolean justCompleted = generator.addRepairProgress(repairTicksThisTick(player, session));
+            int repairTicks = repairTicksThisTick(player, session);
+            matchSupplier.get().recordStat(player.getUUID(),
+                com.log_to_kot.maniacmod.core.match.MatchStat.REPAIR_TICKS, 1);
+            boolean justCompleted = generator.addRepairProgress(repairTicks);
             sendProgress(player, session, generator);
 
             // Ремонт — ДРУГА стадія (типовий порядок FUEL_THEN_REPAIR): його
@@ -540,7 +543,7 @@ public final class GeneratorModule implements PhaseListener {
             // для порядку REPAIR_THEN_FUEL.
             if (justCompleted) {
                 sounds.completed(generator, levelOf(players));
-                onGeneratorCompleted(generator, players);
+                onGeneratorCompleted(generator, player.getUUID(), players);
                 return true;
             }
 
@@ -715,7 +718,7 @@ public final class GeneratorModule implements PhaseListener {
 
         if (justCompleted) {
             sounds.completed(generator, levelOf(players));
-            onGeneratorCompleted(generator, players);
+            onGeneratorCompleted(generator, player.getUUID(), players);
         }
     }
 
@@ -1243,12 +1246,19 @@ public final class GeneratorModule implements PhaseListener {
      * полагодити для виходу, а не скільки точок розмічено (з бонусними
      * їх більше). Бонусні понад норму не виводять N за межі M.
      */
-    private void onGeneratorCompleted(GeneratorPoi completed, List<ServerPlayer> players) {
+    private void onGeneratorCompleted(GeneratorPoi completed, UUID worker, List<ServerPlayer> players) {
         int done = 0;
         for (GeneratorPoi generator : matchSupplier.get().generators()) {
             if (generator.isCompleted()) done++;
         }
         int total = ManiacConfigs.get(ConfigSchema.GENERATORS_REQUIRED);
+
+        // Історія: хто добив генератор і скільки вже готово. completed == null — дебаг-«завершити всі».
+        if (completed != null) {
+            var at = completed.pos();
+            matchSupplier.get().recordGeneratorCompleted(worker,
+                at.getX() + "," + at.getY() + "," + at.getZ(), Math.min(done, total));
+        }
 
         GeneratorCompletedPacket packet = new GeneratorCompletedPacket(Math.min(done, total), total);
         for (ServerPlayer player : players) {
@@ -1315,7 +1325,7 @@ public final class GeneratorModule implements PhaseListener {
         }
 
         if (justCompleted > 0) {
-            onGeneratorCompleted(null, players);
+            onGeneratorCompleted(null, null, players);
         }
         return justCompleted;
     }

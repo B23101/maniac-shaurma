@@ -7,6 +7,15 @@ import com.log_to_kot.maniacmod.survivors.SurvivorState;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.item.ItemStack;
+import net.minecraftforge.client.extensions.common.IClientItemExtensions;
+import software.bernie.geckolib.animatable.GeoItem;
+import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
+import software.bernie.geckolib.core.animatable.instance.SingletonAnimatableInstanceCache;
+import software.bernie.geckolib.core.animation.AnimatableManager;
+import software.bernie.geckolib.core.animation.AnimationController;
+import software.bernie.geckolib.core.animation.RawAnimation;
+
+import java.util.function.Consumer;
 
 /**
  * Шина: лагодить поламану ногу (BROKEN_LEG → HEALTHY), одне
@@ -31,7 +40,31 @@ import net.minecraft.world.item.ItemStack;
  * взагалі (TODO у README items/) — поламана нога в v3 не існувала як
  * окремий стан.
  */
-public class SplintItem extends ItemArchetype {
+public class SplintItem extends ItemArchetype implements GeoItem {
+
+    /** Вигляд: geo/item/splint.geo.json, textures/item/splint.png, animations/item/splint.animation.json. */
+    private static final ItemVisuals VISUALS = ItemVisuals.of("splint");
+    private static final RawAnimation ANIM_IDLE =
+        RawAnimation.begin().thenLoop(VISUALS.animationSet().idle());
+
+    private final AnimatableInstanceCache geoCache = new SingletonAnimatableInstanceCache(this);
+
+    @Override
+    public void initializeClient(Consumer<IClientItemExtensions> consumer) {
+        com.log_to_kot.maniacmod.client.renderer.ItemGeoRenderer
+            .attach(consumer, () -> new com.log_to_kot.maniacmod.client.renderer.ItemGeoRenderer<>(VISUALS));
+    }
+
+    @Override
+    public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
+        controllers.add(new AnimationController<>(this, "splint", 0,
+                state -> state.setAndContinue(ANIM_IDLE)));
+    }
+
+    @Override
+    public AnimatableInstanceCache getAnimatableInstanceCache() {
+        return geoCache;
+    }
 
     public SplintItem() {
         super(new Properties().stacksTo(1), /* cooldownTicks */ 0, /* maxUsesPerGame */ 1);

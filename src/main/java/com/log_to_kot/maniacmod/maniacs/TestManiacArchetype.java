@@ -70,13 +70,17 @@ public final class TestManiacArchetype extends ManiacArchetype {
     }
 
     /**
-     * Пастки маньяка. Капкан — базова; електричний дріт — нова (ТЗ 2).
-     * Решта (мотузка, розтяжка) додасться разом із реалізацією.
-     * Порядок = порядок клавіш 5/6/7.
+     * Каталог пасток маньяка: капкан, електричний дріт, мотузка, димова міна, шипи.
+     * Їх 5, а обрати можна {@code trapsPerMatch} (максимум 3, клавіші 5/6/7) —
+     * саме тому на початку матчу відкривається меню вибору. Якби в каталозі було
+     * не більше пасток, ніж ліміт, вибирати було б нема з чого й меню не
+     * показувалось би (усі пастки брались би автоматично).
      */
     @Override
     public List<TrapArchetype> traps() {
         return List.of(new BearTrapArchetype(), new ElectricWireArchetype(),
-            new com.log_to_kot.maniacmod.traps.RopeBindArchetype());
+            new com.log_to_kot.maniacmod.traps.RopeBindArchetype(),
+            new com.log_to_kot.maniacmod.traps.SmokeMineArchetype(),
+            new com.log_to_kot.maniacmod.traps.SpikeTrapArchetype());
     }
 }

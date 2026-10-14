@@ -42,6 +42,7 @@ public final class ItemRegistry {
         register("geo_scissors", GeoScissorsItem::new, Group.SURVIVOR);  // Geo-ножиці (розмінування пасток)
         register("screwdriver", ScrewdriverItem::new, Group.SURVIVOR);  // Викрутка (ремонт генератора ×2, -5%/с)
         register("adrenaline", AdrenalineItem::new, Group.SURVIVOR);  // Адреналін (швидкість, без витрати стаміни, потім відкат)
+        register("signal_flare", SignalFlareItem::new, Group.SURVIVOR);  // Сигнальна ракета (евакуація, лише на галявині)
         // TODO(міграція items): у міру перенесення з v3 ItemImplementations
         //   register("scissors",     ScissorsItem::new,     Group.SURVIVOR);
 

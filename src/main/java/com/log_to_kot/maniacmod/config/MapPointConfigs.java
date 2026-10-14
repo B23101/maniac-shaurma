@@ -27,7 +27,16 @@ public final class MapPointConfigs {
         MANIAC_SPAWNS("maniacSpawns", "maniac_spawns.yml"),
         ITEM_POINTS("itemPoints", "item_points.yml"),
         GENERATOR_POINTS("generatorPoints", "generator_points.yml"),
-        EXIT_POINTS("exitPoints", "exit_points.yml");
+        EXIT_POINTS("exitPoints", "exit_points.yml"),
+        RECEIVER_POINTS("receiverPoints", "receiver_points.yml"),
+        HOOK_POINTS("hookPoints", "hook_points.yml"),
+        VICTORY_HOOK_POINTS("victoryHookPoints", "victory_hook_points.yml"),
+        VICTORY_MANIAC_POINTS("victoryManiacPoints", "victory_maniac_points.yml"),
+        VICTORY_CAMERA_POINTS("victoryCameraPoints", "victory_camera_points.yml"),
+        VICTORY_PLAYER_POINTS("victoryPlayerPoints", "victory_player_points.yml"),
+        VICTORY_GHOST_POINTS("victoryGhostPoints", "victory_ghost_points.yml"),
+        VICTORY_PLAYERS_CAMERA_POINTS("victoryPlayersCameraPoints", "victory_players_camera_points.yml"),
+        STATS_CAMERA_POINTS("statsCameraPoints", "stats_camera_points.yml");
 
         private final String key;
         private final String legacyFileName;
@@ -38,11 +47,31 @@ public final class MapPointConfigs {
         }
     }
 
-    public record PointData(BlockPos pos, float yaw, String ownerId) {}
+    /**
+     * Точка розмітки. {@code pitch} і точні {@code x/y/z} потрібні лише сцені перемоги (камера =
+     * позиція очей + нахил); для решти видів {@link #PointData(BlockPos, float, String)} дає центр
+     * блока й нуль, а в yml ці поля не пишуться — старі файли читаються без змін.
+     */
+    public record PointData(BlockPos pos, float yaw, String ownerId,
+                            float pitch, double x, double y, double z) {
+        public PointData(BlockPos pos, float yaw, String ownerId) {
+            this(pos, yaw, ownerId, 0f, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+        }
+
+        boolean hasExtras() {
+            return pitch != 0f
+                || x != pos.getX() + 0.5 || y != pos.getY() || z != pos.getZ() + 0.5;
+        }
+    }
 
     public record Snapshot(List<PointData> survivorSpawns, List<PointData> maniacSpawns,
                            List<PointData> itemPoints, List<PointData> generatorPoints,
-                           List<PointData> exitPoints,
+                           List<PointData> exitPoints, List<PointData> receiverPoints,
+                           List<PointData> hookPoints,
+                           List<PointData> victoryHookPoints, List<PointData> victoryManiacPoints,
+                           List<PointData> victoryCameraPoints,
+                           List<PointData> victoryPlayerPoints, List<PointData> victoryGhostPoints,
+                           List<PointData> victoryPlayersCameraPoints, List<PointData> statsCameraPoints,
                            double lobbyX, double lobbyY, double lobbyZ, float lobbyYaw) {}
 
     private static final Yaml YAML = buildYaml();
@@ -82,6 +111,15 @@ public final class MapPointConfigs {
             readPoints(root, Type.ITEM_POINTS),
             readPoints(root, Type.GENERATOR_POINTS),
             readPoints(root, Type.EXIT_POINTS),
+            readPoints(root, Type.RECEIVER_POINTS),
+            readPoints(root, Type.HOOK_POINTS),
+            readPoints(root, Type.VICTORY_HOOK_POINTS),
+            readPoints(root, Type.VICTORY_MANIAC_POINTS),
+            readPoints(root, Type.VICTORY_CAMERA_POINTS),
+            readPoints(root, Type.VICTORY_PLAYER_POINTS),
+            readPoints(root, Type.VICTORY_GHOST_POINTS),
+            readPoints(root, Type.VICTORY_PLAYERS_CAMERA_POINTS),
+            readPoints(root, Type.STATS_CAMERA_POINTS),
             lobby[0], lobby[1], lobby[2], (float) lobby[3]);
         fileMtime = mtime(file);
         synchronized (legacyMtimes) {
@@ -135,6 +173,15 @@ public final class MapPointConfigs {
             case ITEM_POINTS -> current.itemPoints();
             case GENERATOR_POINTS -> current.generatorPoints();
             case EXIT_POINTS -> current.exitPoints();
+            case RECEIVER_POINTS -> current.receiverPoints();
+            case HOOK_POINTS -> current.hookPoints();
+            case VICTORY_HOOK_POINTS -> current.victoryHookPoints();
+            case VICTORY_MANIAC_POINTS -> current.victoryManiacPoints();
+            case VICTORY_CAMERA_POINTS -> current.victoryCameraPoints();
+            case VICTORY_PLAYER_POINTS -> current.victoryPlayerPoints();
+            case VICTORY_GHOST_POINTS -> current.victoryGhostPoints();
+            case VICTORY_PLAYERS_CAMERA_POINTS -> current.victoryPlayersCameraPoints();
+            case STATS_CAMERA_POINTS -> current.statsCameraPoints();
         };
     }
 
@@ -163,11 +210,15 @@ public final class MapPointConfigs {
         List<PointData> result = new ArrayList<>();
         for (Object item : list) {
             if (!(item instanceof Map<?, ?> map)) continue;
-            result.add(new PointData(
-                new BlockPos((int) number(map.get("x"), 0), (int) number(map.get("y"), 64),
-                    (int) number(map.get("z"), 0)),
+            BlockPos pos = new BlockPos((int) number(map.get("x"), 0), (int) number(map.get("y"), 64),
+                (int) number(map.get("z"), 0));
+            result.add(new PointData(pos,
                 (float) number(map.get("yaw"), 0),
-                text(map.get("owner"))));
+                text(map.get("owner")),
+                (float) number(map.get("pitch"), 0),
+                number(map.get("ex"), pos.getX() + 0.5),
+                number(map.get("ey"), pos.getY()),
+                number(map.get("ez"), pos.getZ() + 0.5)));
         }
         return List.copyOf(result);
     }
@@ -183,6 +234,12 @@ public final class MapPointConfigs {
             value.put("yaw", point.yaw());
             if (point.ownerId() != null && !point.ownerId().isBlank()) {
                 value.put("owner", point.ownerId());
+            }
+            if (point.hasExtras()) {
+                value.put("pitch", point.pitch());
+                value.put("ex", point.x());
+                value.put("ey", point.y());
+                value.put("ez", point.z());
             }
             values.add(value);
         }
@@ -282,7 +339,8 @@ public final class MapPointConfigs {
     }
 
     private static Snapshot empty() {
-        return new Snapshot(List.of(), List.of(), List.of(), List.of(), List.of(), 0, 64, 0, 0);
+        return new Snapshot(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+            List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), 0, 64, 0, 0);
     }
 
     @SuppressWarnings("unchecked")

@@ -68,23 +68,31 @@ public final class MatchBlockRegistry extends SavedData {
         int restored = 0;
         for (ServerLevel level : server.getAllLevels()) {
             MatchBlockRegistry registry = get(level);
-            for (Map.Entry<BlockPos, SavedBlock> entry : registry.savedBlocks.entrySet()) {
-                BlockPos pos = entry.getKey();
-                level.getChunkAt(pos);
-                BlockState state = NbtUtils.readBlockState(
-                    level.registryAccess().lookupOrThrow(
-                        net.minecraft.core.registries.Registries.BLOCK),
-                    entry.getValue().state);
-                level.setBlock(pos, state, 3);
+            // Копія: setBlock викликає оновлення сусідів, і якщо щось у
+            // відповідь зареєструє блок — перебір «наживо» впав би з CME.
+            for (Map.Entry<BlockPos, SavedBlock> entry : new java.util.ArrayList<>(registry.savedBlocks.entrySet())) {
+                try {
+                    BlockPos pos = entry.getKey();
+                    level.getChunkAt(pos);
+                    BlockState state = NbtUtils.readBlockState(
+                        level.registryAccess().lookupOrThrow(
+                            net.minecraft.core.registries.Registries.BLOCK),
+                        entry.getValue().state);
+                    level.setBlock(pos, state, 3);
 
-                if (entry.getValue().blockEntityData != null) {
-                    BlockEntity blockEntity = level.getBlockEntity(pos);
-                    if (blockEntity != null) {
-                        blockEntity.load(entry.getValue().blockEntityData.copy());
-                        blockEntity.setChanged();
+                    if (entry.getValue().blockEntityData != null) {
+                        BlockEntity blockEntity = level.getBlockEntity(pos);
+                        if (blockEntity != null) {
+                            blockEntity.load(entry.getValue().blockEntityData.copy());
+                            blockEntity.setChanged();
+                        }
                     }
+                    restored++;
+                } catch (Exception e) {
+                    // Один зіпсований запис не повинен зривати скидання матчу.
+                    com.log_to_kot.maniacmod.ManiacMod.LOGGER.error(
+                        "[ManiacMod] не вдалося відновити блок {}", entry.getKey(), e);
                 }
-                restored++;
             }
             registry.savedBlocks.clear();
             registry.setDirty();

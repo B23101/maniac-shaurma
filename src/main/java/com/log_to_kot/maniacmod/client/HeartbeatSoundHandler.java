@@ -97,11 +97,11 @@ public final class HeartbeatSoundHandler {
 
         float volume = volumeFor(proximitySmoothed, lowHpSeverity);
         if ((events & HeartbeatClock.EVENT_LUB) != 0) {
-            playHeartbeatSound(ModSounds.HEARTBEAT_OUT, volume, level, 1.0f);
+            playHeartbeatSound(ModSounds.HEARTBEAT_OUT, volume, level, DEEP_PITCH);
         }
         if ((events & HeartbeatClock.EVENT_DUB) != 0) {
             // Другий удар трохи тихіший і вищий — природне «тук-ТУК».
-            playHeartbeatSound(ModSounds.HEARTBEAT_IN, volume * 0.88f, level, 1.04f);
+            playHeartbeatSound(ModSounds.HEARTBEAT_IN, volume * 0.88f, level, DEEP_PITCH + 0.03f);
         }
     }
 
@@ -111,6 +111,9 @@ public final class HeartbeatSoundHandler {
     /** Гучність від малого хп: тихий фон на порозі ({@link #LOW_HP_VOLUME_MIN}) і лише помірна на нулі хп ({@link #LOW_HP_VOLUME_MAX}). */
     private static final float LOW_HP_VOLUME_MIN = 0.10f;
     private static final float LOW_HP_VOLUME_MAX = 0.32f;
+
+    /** Базова висота тону серця: низький, глибокий звук (ванільний мінімум — 0.5). */
+    private static final float DEEP_PITCH = 0.62f;
 
     private static float proximitySmoothed = 0f;
 
@@ -145,7 +148,8 @@ public final class HeartbeatSoundHandler {
                                            float rhythmLevel, float pitchBase) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        float pitch = pitchBase + 0.08f * Math.min(1f, rhythmLevel);
+        // Глибокий низький «бух-бух»: тон майже не росте з близькістю (раніше +8% робило звук тонким).
+        float pitch = Math.max(0.5f, pitchBase + 0.04f * Math.min(1f, rhythmLevel));
         SoundCenter.playAt(sound.getId().toString(), SoundSource.PLAYERS, Math.min(1f, volume), pitch,
             mc.player.getX(), mc.player.getY(), mc.player.getZ());
     }

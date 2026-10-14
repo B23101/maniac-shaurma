@@ -36,7 +36,8 @@ public final class VoiceSilencePhaseModule implements PhaseListener {
         GamePhase.CINEMATIC,
         GamePhase.SCATTER,
         GamePhase.ROLE_REVEAL,
-        GamePhase.RESET);
+        GamePhase.RESET,
+        GamePhase.VICTORY_SCENE);
 
     private final ServerVoiceSilenceModule silence;
 
@@ -69,6 +70,13 @@ public final class VoiceSilencePhaseModule implements PhaseListener {
         // груп ні на сервері, ні в мапі модуля.
         if (phase == GamePhase.RESET) {
             silence.clearAll();
+        }
+        // Сцена мовчазна, а ENDING глушіння свідомо не знімає — тож знімаємо його на виході зі сцени,
+        // щоб спільний ефір ENDING мав до кого достукатись.
+        if (phase == GamePhase.VICTORY_SCENE) {
+            for (ServerPlayer player : players) {
+                silence.unsilence(player.getUUID());
+            }
         }
     }
 

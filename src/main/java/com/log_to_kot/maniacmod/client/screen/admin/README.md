@@ -1,6 +1,15 @@
 # client/screen/admin — адмін-панель
 
-Ця папка зараз порожня. Тут з'явиться GUI-еквівалент команд
+## Є: `AdminReviewsScreen` — відгуки гравців
+Команда `/maniac reviews` → `ServerPacketHandler.onAdminReviewsRequest`
+(перевіряє `hasPermissions(2)`) → `ManiacRatingService.buildAdminPacket()` →
+`AdminReviewsPacket` (S2C, `net/s2c/rating`) → екран. Текстова версія в чаті —
+`/maniac reviews chat`; з консолі `/maniac reviews` теж дає текст.
+Вкладки: «ВІДГУКИ» (список гравців + коментар і всі їхні оцінки) та
+«ЗВЕДЕННЯ» (середні по грі й кожному маньяку). Лише перегляд.
+
+## Ще немає: GUI до команд `/maniac`
+Решта цієї папки — план GUI-еквівалента команд
 `/maniac` (`server/ManiacCommand.java`) — щоб не набирати команду
 руками під час тестів/модерації матчу.
 

@@ -97,6 +97,12 @@ public final class ModSounds {
     public static final RegistryObject<SoundEvent> ROPE_CATCH  = register("rope_catch");
     public static final RegistryObject<SoundEvent> ROPE_ESCAPE = register("rope_escape");
 
+    // ── Шипи ────────────────────────────────────────────────────────────
+    // spike_hit — шипи вискочили й проткнули жертву (звук із місця пастки):
+    //   металевий «шінг» + глухий удар + вологий хруст. Файл
+    //   sounds/spike_hit.ogg можна замінити без змін коду.
+    public static final RegistryObject<SoundEvent> SPIKE_HIT = register("spike_hit");
+
     // Фідбек міні-гри "ціль" (ТЗ 1.2 вимагає окремого ЗВУКОВОГО відгуку
     // на попадання й на промах). Тут реєструються ЛИШЕ події —
     // файли додаються окремо (див. sounds.json): без файлу подія просто
@@ -128,6 +134,16 @@ public final class ModSounds {
     // ── Тіло ─────────────────────────────────────────────────────────────
     // Хрускіт кісток при переломі ноги (onStandUpAttempt → BROKEN_LEG).
     public static final RegistryObject<SoundEvent> BONE_BREAK = register("bone_break");
+
+    // ── Барикада (міні-гра «витягни цвяхи») ──────────────────────────────
+    // Усе грає СЕРВЕР із місця барикади (BarricadeModule): виліт цвяха й падіння дошки
+    // чути й маньяку поруч — це частина напруги. Файли моно
+    // (стерео в Minecraft не затухає з відстанню).
+    public static final RegistryObject<SoundEvent> NAIL_POP           = register("nail_pop");
+    public static final RegistryObject<SoundEvent> BOARD_FALL         = register("board_fall");
+    public static final RegistryObject<SoundEvent> BARRICADE_COLLAPSE = register("barricade_collapse");
+    // Клієнтський «хват» цвяха — звук інтерфейсу, лише для того, хто тягне.
+    public static final RegistryObject<SoundEvent> NAIL_GRAB          = register("nail_grab");
 
     // TODO(асети): за дизайном ще потрібен провал міні-гри генератора
     // (minigame_fail). Реєструвати після додавання .ogg.

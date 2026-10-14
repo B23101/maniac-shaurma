@@ -38,6 +38,7 @@ import com.log_to_kot.maniacmod.net.s2c.notify.TrapEscapePromptPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.GeneratorInteractionPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ItemPickupPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.TrapVictimGlowPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.SmokeMufflePacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.WireShockPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.TrapEscapeAttemptPacket;
 import com.log_to_kot.maniacmod.net.s2c.darkzone.DarkZoneStatePacket;
@@ -88,8 +89,27 @@ public final class ModNetwork {
      *
      * 15: {@code WireMinigameOpenPacket} несе ще й кольори правої колодки.
      * 16: {@code ObjectiveSyncPacket} — ціль матчу для tab-екрана.
+     * 17: оцінки маньяків — {@code ManiacRatingSyncPacket} (S2C) і
+     *     {@code ManiacRatingSubmitPacket} (C2S).
+     * 18: адмін-екран відгуків — {@code AdminReviewsPacket} (S2C), відкривається
+     *     командою {@code /maniac reviews}.
+     * 19: димова міна — {@code SmokeMufflePacket} (S2C): приглушити звуки в хмарі.
+     * 20: бризки крові від удару маньяка — {@code BloodSplatterPacket} (S2C).
+     * 21: шипи — {@code SpikeHitPacket} (S2C): екранний ефект «потрапив на шипи».
+     * 28: витягування цвяхів барикади — {@code BarricadePullPacket} (S2C).
+     * 29: міні-гра барикади замість утримання ПКМ: {@code BarricadeGameOpenPacket},
+     *     {@code BarricadeNailPacket}, {@code BarricadeGameClosePacket} (S2C) і
+     *     {@code BarricadeNailHoldPacket}, {@code BarricadeGameExitPacket} (C2S);
+     *     {@code BarricadePullPacket} прибрано.
+     * 27: барикади — {@code BarricadeBuildStatePacket} (S2C): буфер і прев'ю режиму будування.
+     * 32: історія матчів — {@code HistoryListPacket}, {@code HistoryDetailPacket} (S2C) і
+     *     {@code HistoryListRequestPacket}, {@code HistoryDetailRequestPacket} (C2S), {@code OpenHistoryPacket} (S2C, команда).
+     * 33: лідерборди — {@code LeaderboardPagePacket}, {@code LeaderboardOverviewPacket} (S2C) і
+     *     {@code LeaderboardRequestPacket} (C2S).
+     * 23: гаки — {@code DownedSurvivorsPacket} несе статус (лежить/несуть/висить) і може не мати
+     *     таймера; новий {@code HookHighlightPacket} (S2C) — вільні гаки для маньяка, що несе жертву.
      */
-    private static final String PROTOCOL_VERSION = "16";
+    private static final String PROTOCOL_VERSION = "33";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
         new ResourceLocation(ManiacMod.MOD_ID, "main"),
@@ -162,6 +182,96 @@ public final class ModNetwork {
         // PROTOCOL 16: ціль матчу для tab-екрана («N з M генераторів», віхи).
         s2c(ObjectiveSyncPacket.class,            ObjectiveSyncPacket::new);
         c2s(GroundItemPickupPacket.class,         GroundItemPickupPacket::new);
+        // PROTOCOL 17: оцінки маньяків (екран оцінок у кастомному ESC-меню).
+        s2c(com.log_to_kot.maniacmod.net.s2c.rating.ManiacRatingSyncPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.rating.ManiacRatingSyncPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.rating.ManiacRatingSubmitPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.rating.ManiacRatingSubmitPacket::new);
+        // PROTOCOL 18: адмін-екран відгуків (хто що поставив + коментар), команда /maniac reviews.
+        s2c(com.log_to_kot.maniacmod.net.s2c.rating.AdminReviewsPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.rating.AdminReviewsPacket::new);
+        // PROTOCOL 19: димова міна — приглушення звуків для того, хто в хмарі.
+        s2c(SmokeMufflePacket.class,              SmokeMufflePacket::new);
+        // PROTOCOL 20: бризки крові від удару маньяка (плями на підлозі й стінах).
+        s2c(com.log_to_kot.maniacmod.net.s2c.notify.BloodSplatterPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.notify.BloodSplatterPacket::new);
+        // PROTOCOL 21: шипи — екранний ефект «потрапив на шипи» для жертви.
+        s2c(com.log_to_kot.maniacmod.net.s2c.notify.SpikeHitPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.notify.SpikeHitPacket::new);
+        // ── Евакуація (v22) — лише в кінець блоку, інакше ломиться сумісність клієнт/сервер.
+        s2c(com.log_to_kot.maniacmod.net.s2c.evac.ReceiverMenuOpenPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.evac.ReceiverMenuOpenPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.evac.ClearingSyncPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.evac.ClearingSyncPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.intent.ReceiverCallPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.intent.ReceiverCallPacket::new);
+        // Підсумок матчу (хто переміг) — теж лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchOutcomePacket.class,
+            com.log_to_kot.maniacmod.net.s2c.matchstate.MatchOutcomePacket::new);
+        // Екранний HUD евакуації і банер «втік 3/6» — теж лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.evac.EvacStatusPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.evac.EvacStatusPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.evac.EscapeAnnouncePacket.class,
+            com.log_to_kot.maniacmod.net.s2c.evac.EscapeAnnouncePacket::new);
+        // PROTOCOL 23: підсвітка вільних гаків для маньяка, що несе жертву — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.hooks.HookHighlightPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.hooks.HookHighlightPacket::new);
+        // PROTOCOL 24: голос диспетчера після виклику вертольота — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.evac.DispatcherPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.evac.DispatcherPacket::new);
+        // PROTOCOL 25: сцена перемоги маніяка і статистика матчу — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.victory.VictoryStartPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.victory.VictoryStartPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.victory.VictoryEndPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.victory.VictoryEndPacket::new);
+        // PROTOCOL 26: сцена перемоги гравців (VictoryStartPacket отримав прапор «хто переміг»),
+        // нагороди за матч (XP) для нового екрана підсумків — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.intent.StatsViewClosePacket.class,
+            com.log_to_kot.maniacmod.net.c2s.intent.StatsViewClosePacket::new);
+        // PROTOCOL 27: режим будування барикад (буфер дощок і прев'ю) — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeBuildStatePacket.class,
+            com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeBuildStatePacket::new);
+        // PROTOCOL 29: міні-гра «витягни цвяхи» (BarricadePullPacket прибрано) — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeGameOpenPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeGameOpenPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeNailPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeNailPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeGameClosePacket.class,
+            com.log_to_kot.maniacmod.net.s2c.barricade.BarricadeGameClosePacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.hold.BarricadeNailHoldPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.hold.BarricadeNailHoldPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.intent.BarricadeGameExitPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.intent.BarricadeGameExitPacket::new);
+        // PROTOCOL 30: екранний ефект влучання для маньяка — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitConfirmPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitConfirmPacket::new);
+        // PROTOCOL 31: профіль гравця (довготривала статистика, ранги) — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.profile.ProfilePacket.class,
+            com.log_to_kot.maniacmod.net.s2c.profile.ProfilePacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.profile.ProfileRequestPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.profile.ProfileRequestPacket::new);
+        // PROTOCOL 32: історія матчів (адмінський список, особиста історія, деталі матчу) — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.history.HistoryListPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.history.HistoryListPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.history.HistoryDetailPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.history.HistoryDetailPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.history.HistoryListRequestPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.history.HistoryListRequestPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.history.HistoryDetailRequestPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.history.HistoryDetailRequestPacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.history.OpenHistoryPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.history.OpenHistoryPacket::new);
+        // PROTOCOL 33: лідерборди (топи гравців, 3D-бюсти) — лише в кінець блоку.
+        s2c(com.log_to_kot.maniacmod.net.s2c.leaderboard.LeaderboardPagePacket.class,
+            com.log_to_kot.maniacmod.net.s2c.leaderboard.LeaderboardPagePacket::new);
+        s2c(com.log_to_kot.maniacmod.net.s2c.leaderboard.LeaderboardOverviewPacket.class,
+            com.log_to_kot.maniacmod.net.s2c.leaderboard.LeaderboardOverviewPacket::new);
+        c2s(com.log_to_kot.maniacmod.net.c2s.leaderboard.LeaderboardRequestPacket.class,
+            com.log_to_kot.maniacmod.net.c2s.leaderboard.LeaderboardRequestPacket::new);
     }
 
     // ── Реєстрація ───────────────────────────────────────────────────────

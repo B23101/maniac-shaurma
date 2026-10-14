@@ -75,6 +75,12 @@ public class ManiacGeoModel extends GeoModel<ManiacAnimatable> {
      * підряд, а не змушуємо кожен .geo.json під один канон. */
     private static final String[] HEAD_BONE_NAMES = { "head", "Head", "HEAD" };
 
+    /** Чи це кістка голови (для повороту голови за поглядом гравця, див. {@code ManiacGeoRenderer}). */
+    public static boolean isHeadBone(String name) {
+        for (String n : HEAD_BONE_NAMES) if (n.equals(name)) return true;
+        return false;
+    }
+
     /** Кістки, які {@link #hideHeadIfFirstPerson()} сховав у ПОТОЧНОМУ рендері. */
     private static final java.util.List<GeoBone> HIDDEN_NOW = new java.util.ArrayList<>();
 

@@ -135,6 +135,9 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
     private static final float ENTRANCE_SPEED = 8f;
     private static final float PULSE_DECAY_SPEED = 6f;
 
+    /** Анімації «додано / викинуто» предмета в слоті. */
+    private final HotbarItemFx itemFx = new HotbarItemFx();
+
     private static final int MAX_POWER_CHARGES = 3;
     private int powerCharges = MAX_POWER_CHARGES;
 
@@ -151,6 +154,7 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
         if (selectedIndex < 0) selectedIndex = 0;
 
         advanceAnimation(selectedIndex);
+        itemFx.update(minecraft, allowedSlots, frameDt, maniac, entrance);
 
         int totalWidth = allowedSlots.size() * SLOT_SIZE + (allowedSlots.size() - 1) * SLOT_GAP;
         int left = screenWidth - MARGIN_RIGHT - totalWidth;
@@ -190,6 +194,10 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
                 : SlotKind.STRIKE; // STRIKE тут лише позначає "нейтральний білий колір", виживий не має типів
         int selectionColor = SELECTION_COLOR;
         renderSelectionFrame(graphics, left, top, maniac && selectedIndex == 0, selectionColor);
+
+        // Прохід 3: іконки, що летять у слот / зі слота, і ефекти приземлення — поверх усього.
+        itemFx.render(graphics, minecraft, allowedSlots, left, baseTop, SLOT_SIZE, SLOT_GAP,
+            screenWidth, screenHeight);
     }
 
     /** Вертикальний зсув слота під час каскадної появи (0 — на місці). */
@@ -394,12 +402,15 @@ public final class ManiacHotbarOverlay implements InventorySlotAllocationClientH
 
     private void drawSlotContents(GuiGraphics graphics, Minecraft minecraft, int x, int y,
                                    int inventorySlot, int displayNumber) {
-        int itemSize = Math.round(SLOT_SIZE * 0.72f);
+        // Пружне «влітання» після приземлення; поки предмет ще летить до слота — слот його не малює.
+        int itemSize = Math.round(SLOT_SIZE * 0.72f * itemFx.popScale(inventorySlot));
         int itemX = x + (SLOT_SIZE - itemSize) / 2;
         int itemY = y + (SLOT_SIZE - itemSize) / 2;
 
         ItemStack stack = minecraft.player.getInventory().getItem(inventorySlot);
-        if (!stack.isEmpty()) renderItem(graphics, minecraft, itemX, itemY, itemSize, stack);
+        if (!stack.isEmpty() && !itemFx.isFlying(inventorySlot)) {
+            renderItem(graphics, minecraft, itemX, itemY, itemSize, stack);
+        }
 
         String number = String.valueOf(displayNumber);
         // Номер — у лівому верхньому куті: внизу слота тепер бар перезарядки / відсотки предмета.

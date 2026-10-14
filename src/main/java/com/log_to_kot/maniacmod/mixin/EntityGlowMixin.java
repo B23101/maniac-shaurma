@@ -26,6 +26,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  *
  * Міксин зареєстрований у секції {@code client} — на виділеному сервері
  * він не застосовується взагалі.
+ *
+ * ── Чому лише {@code level().isClientSide} (БАГ «біла підсвітка») ────
+ * У одиночній грі / грі «для друзів» клієнт і сервер живуть в одній JVM і
+ * ділять ОДИН клас {@code Entity}: міксин спрацьовував і на СЕРВЕРНІЙ
+ * сутності. Серверний {@code setGlowingTag}/оновлення ефектів (сліпота від
+ * газу тощо) викликає {@code isCurrentlyGlowing()} і записує результат у
+ * спільний прапорець метаданих (біт 6). Поки id був у клієнтському
+ * реєстрі, туди потрапляло {@code true} — і коли реєстр очищався, справжній
+ * ванільний прапорець лишався ввімкненим: гравець світився БІЛИМ (кольору
+ * команди нема), а не червоним, і не гаснув. Тепер підміна діє лише на
+ * клієнтській стороні, серверні метадані не чіпаються.
  */
 @Mixin(Entity.class)
 public abstract class EntityGlowMixin {
@@ -33,6 +44,7 @@ public abstract class EntityGlowMixin {
     @Inject(method = "isCurrentlyGlowing", at = @At("HEAD"), cancellable = true)
     private void maniacmod$perPlayerGlow(CallbackInfoReturnable<Boolean> cir) {
         Entity self = (Entity) (Object) this;
+        if (!self.level().isClientSide) return;
         if (ClientEntityGlow.isGlowing(self.getId())) {
             cir.setReturnValue(true);
         }
@@ -41,6 +53,7 @@ public abstract class EntityGlowMixin {
     @Inject(method = "getTeamColor", at = @At("HEAD"), cancellable = true)
     private void maniacmod$perPlayerGlowColor(CallbackInfoReturnable<Integer> cir) {
         Entity self = (Entity) (Object) this;
+        if (!self.level().isClientSide) return;
         if (ClientEntityGlow.isGlowing(self.getId())) {
             cir.setReturnValue(ClientEntityGlow.color(self.getId()));
         }

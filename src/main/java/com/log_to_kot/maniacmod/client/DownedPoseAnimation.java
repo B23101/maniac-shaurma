@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.ManiacMod;
 import dev.kosmx.playerAnim.api.layered.AnimationStack;
 import dev.kosmx.playerAnim.api.layered.IAnimation;
@@ -101,6 +103,7 @@ public final class DownedPoseAnimation {
     }
 
     private static void start(AbstractClientPlayer player) {
+        if (VrServerCompat.isVrPlayer(player)) return; // VR: модель веде Vivecraft
         Entry e = entryFor(player);
         if (e == null || e.playing) return;
         KeyframeAnimation anim = clip();

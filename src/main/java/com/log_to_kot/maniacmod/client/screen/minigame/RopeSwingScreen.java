@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client.screen.minigame;
 
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
+
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.client.rope.RopeHangClient;
 import com.log_to_kot.maniacmod.client.style.GeneratorFuelUiTheme;
@@ -101,24 +103,32 @@ public final class RopeSwingScreen extends Screen {
         return Minecraft.getInstance().options.keyRight.matches(key, scan) || key == GLFW.GLFW_KEY_RIGHT;
     }
 
+    private void pressLeft() {
+        if (!heldA) {
+            heldA = true;
+            flashA = 1f;
+            UiAnim.playClick();
+            ModNetwork.toServer(new RopeSwingPacket((byte) -1));
+        }
+    }
+
+    private void pressRight() {
+        if (!heldD) {
+            heldD = true;
+            flashD = 1f;
+            UiAnim.playClick();
+            ModNetwork.toServer(new RopeSwingPacket((byte) 1));
+        }
+    }
+
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (isLeft(keyCode, scanCode)) {
-            if (!heldA) {
-                heldA = true;
-                flashA = 1f;
-                UiAnim.playClick();
-                ModNetwork.toServer(new RopeSwingPacket((byte) -1));
-            }
+            pressLeft();
             return true;
         }
         if (isRight(keyCode, scanCode)) {
-            if (!heldD) {
-                heldD = true;
-                flashD = 1f;
-                UiAnim.playClick();
-                ModNetwork.toServer(new RopeSwingPacket((byte) 1));
-            }
+            pressRight();
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
@@ -134,6 +144,16 @@ public final class RopeSwingScreen extends Screen {
     /** Клік не «провалюється» у світ під панеллю. */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // VR: A/D немає — клік лівою/правою половиною екрана = розкачування вліво/вправо.
+        if (VrCompat.isVrActive() && button == 0) {
+            if (mouseX < this.width / 2.0) pressLeft(); else pressRight();
+        }
+        return true;
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (VrCompat.isVrActive() && button == 0) { heldA = false; heldD = false; }
         return true;
     }
 

@@ -151,3 +151,35 @@ orchestrator.tick(event.getServer().getPlayerList().getPlayers());
 ```
 
 Без `if (getGameState() != RUNNING)` — фільтрація фаз тепер усередині.
+
+---
+
+# Доповнення v6 — евакуація
+
+Пакет `evac/` (`EvacModule`, `EvacStage`) — `PhaseListener`, що веде евакуацію після генераторів.
+Нові фаза `HELI_WAIT`, досягнення `HELI_CALLED`/`FLARE_FIRED` (+ `EXIT_OPENED` = мотузка готова), вид
+точки `RECEIVER`, сутності `ReceiverEntity`/`HelicopterEntity`/`EvacRopeEntity`/`ClimbCarrierEntity`,
+галявини в `ClearingConfigs` (`zones.yml`). Деталі — `evac/README.md`.
+
+---
+
+# Доповнення v7 — барикади
+
+Пакет `barricade/` (`BarricadeModule` — `PhaseListener`, `BarricadeBuilder`, `BarricadeCommand`,
+геометрія/дані), блок `blocks/BoardsBlock`, сутності `BarricadeEntity`/`BarricadeColliderEntity`,
+хуки `server/BarricadeHooks`, конфіг `barricades` + DATA `barricade_layout`, пакет
+`BarricadeBuildStatePacket` (PROTOCOL 27). Деталі — `barricade/README.md`.
+
+
+# Доповнення v8 — історія матчів
+
+Пакет `history/` (див. `history/README.md`). Матч пише в `MatchTimeline` (усередині `MatchContext`) лише через
+фасад `MatchOrchestrator`; на ENDING оркестратор збирає `MatchRecord` (`MatchRecordBuilder`) і віддає
+`MatchHistoryService`, яким володіє сам (`history()`), — нової статики нема. Дебаг-матчі не записуються.
+Мережа: `HistoryListRequestPacket`/`HistoryDetailRequestPacket` (C2S) → `HistoryListPacket`/`HistoryDetailPacket` (S2C),
+PROTOCOL 32; права — `HistoryAccess`.
+
+Побічні виправлення статистики, знайдені під час роботи:
+* `SurvivorModule.onSurvivorDowned` не рахував `DOWNS` (рахував лише `onBodyDowned`) — тепер обидва шляхи рахують;
+* у підсумку `downs` маніяка завжди було 0 (падіння пишуться на жертву) — тепер це сума по всіх, як `hooks`.
+  Через це раніше не працювали XP `xpManiacDowns` і `bestDowns` у профілі маніяка.

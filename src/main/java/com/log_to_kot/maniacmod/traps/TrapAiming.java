@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.traps;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Entity;
@@ -43,8 +45,8 @@ public final class TrapAiming {
      *         грань блока або задалеко
      */
     public static BlockPos targetFloor(Level level, Entity viewer, double range) {
-        Vec3 eye = viewer.getEyePosition();
-        Vec3 end = eye.add(viewer.getViewVector(1.0f).scale(range));
+        Vec3 eye = VrServerCompat.aimOrigin(viewer);
+        Vec3 end = eye.add(VrServerCompat.aimDirView(viewer).scale(range));
 
         BlockHitResult hit = level.clip(new ClipContext(
             eye, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, viewer));
@@ -66,8 +68,8 @@ public final class TrapAiming {
      * @return влучання або {@code null}, якщо погляд у небо
      */
     public static BlockHitResult rawHit(Level level, Entity viewer, double reach) {
-        Vec3 eye = viewer.getEyePosition();
-        Vec3 end = eye.add(viewer.getViewVector(1.0f).scale(reach));
+        Vec3 eye = VrServerCompat.aimOrigin(viewer);
+        Vec3 end = eye.add(VrServerCompat.aimDirView(viewer).scale(reach));
         BlockHitResult hit = level.clip(new ClipContext(
             eye, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, viewer));
         return hit.getType() == HitResult.Type.BLOCK ? hit : null;
@@ -86,8 +88,8 @@ public final class TrapAiming {
      * у сусідній кімнаті.
      */
     public static boolean isLookingAtFloor(Level level, Entity viewer, BlockPos floor, double range) {
-        Vec3 eye = viewer.getEyePosition();
-        Vec3 look = viewer.getViewVector(1.0f);
+        Vec3 eye = VrServerCompat.aimOrigin(viewer);
+        Vec3 look = VrServerCompat.aimDirView(viewer);
         Vec3 center = new Vec3(floor.getX() + 0.5, floor.getY() + 1.0, floor.getZ() + 0.5);
 
         // Проєкція центру верхньої грані на промінь погляду.

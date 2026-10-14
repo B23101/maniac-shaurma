@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client;
 
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
+
 import com.log_to_kot.maniacmod.ManiacMod;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ViewportEvent;
@@ -42,12 +44,17 @@ public final class WireShockCameraShake {
 
     /** Викликає {@code ClientPacketHandler.onWireShock}. {@code active=false} знімає тряску. */
     public static void configure(boolean active, double degrees, double hz) {
+        if (active) {
+            VrCompat.haptic(VrCompat.Hand.MAIN, 0.6f, 1.0f);
+            VrCompat.haptic(VrCompat.Hand.OFF, 0.6f, 1.0f);
+        }
         WireShockCameraShake.degrees = active ? Math.max(0.0, degrees) : 0.0;
         WireShockCameraShake.hz = active ? Math.max(0.1, hz) : 9.0;
     }
 
     @SubscribeEvent
     public static void onComputeCameraAngles(ViewportEvent.ComputeCameraAngles event) {
+        if (VrCompat.isVrActive()) return; // VR: тряска камери = нудота
         if (degrees <= 0.0) return;
         if (!ClientMatchState.isWireShocked()) return;
 

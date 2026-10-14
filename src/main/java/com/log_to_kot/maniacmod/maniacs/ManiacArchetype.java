@@ -66,6 +66,14 @@ public abstract class ManiacArchetype {
     /** Пастки: клавіші 5, 6, 7. */
     public static final int MAX_TRAP_SLOTS = 3;
 
+    /**
+     * Скільки пасток може бути в КАТАЛОЗІ архетипу (з нього маньяк обирає у меню
+     * до {@link #MAX_TRAP_SLOTS}). Каталог має бути БІЛЬШИМ за ліміт вибору —
+     * інакше вибирати нема з чого й меню не відкривається (сервер бере всі
+     * пастки сам). Екран вибору малює картки в один ряд: влізає до 5.
+     */
+    public static final int MAX_TRAP_CATALOG = 5;
+
     /** У маньяка немає інвентаря — звідси й вільні клавіші 1–4. */
     public static final int HOTBAR_SLOTS = 0;
 
@@ -251,9 +259,9 @@ public abstract class ManiacArchetype {
             throw new IllegalStateException(id + ": здібностей "
                 + abilities().size() + ", а клавіш лише " + MAX_ABILITIES + " (1/2/3).");
         }
-        if (traps().size() > MAX_TRAP_SLOTS) {
-            throw new IllegalStateException(id + ": пасток "
-                + traps().size() + ", а клавіш лише " + MAX_TRAP_SLOTS + " (5/6/7).");
+        if (traps().size() > MAX_TRAP_CATALOG) {
+            throw new IllegalStateException(id + ": пасток у каталозі "
+                + traps().size() + ", а меню вибору вміщує лише " + MAX_TRAP_CATALOG + ".");
         }
     }
 

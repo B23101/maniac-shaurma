@@ -5,7 +5,7 @@
 			"loop": true,
 			"animation_length": 0.5,
 			"bones": {
-				"rightArm": {
+				"right_arm": {
 					"rotation": {
 						"0.0": {
 							"vector": [-71.62, -11.46, 17.19]
@@ -18,9 +18,9 @@
 						}
 					}
 				},
-				"rightItem": {
+				"right_item": {
 					"rotation": {
-						"vector": [-15, 0, 0]
+						"vector": [0, 0, 0]
 					},
 					"position": {
 						"0.0": {
@@ -32,19 +32,9 @@
 						"0.5": {
 							"vector": [0, 3, 1]
 						}
-					}
-				},
-				"right_arm": {
-					"rotation": {
-						"vector": [-122.5247, 2.1083, -1.3439]
-					}
-				},
-				"right_item": {
-					"rotation": {
-						"vector": [30, 0, 0]
 					},
-					"position": {
-						"vector": [0, 4, 12]
+					"scale": {
+						"vector": [1, 1, 1]
 					}
 				}
 			}

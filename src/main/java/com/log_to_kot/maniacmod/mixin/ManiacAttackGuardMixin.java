@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.net.ModNetwork;
@@ -143,8 +145,8 @@ public abstract class ManiacAttackGuardMixin {
         if (range <= 0.0) return false;
         if (self.level() == null) return false;
 
-        Vec3 eye = self.getEyePosition();
-        Vec3 look = self.getLookAngle();
+        Vec3 eye = VrServerCompat.aimOrigin(self);
+        Vec3 look = VrServerCompat.aimDir(self);
 
         for (RosterSyncPacket.RosterEntry entry : ClientMatchState.roster()) {
             if (entry.role() != RoleSyncPacket.Role.SURVIVOR) continue;

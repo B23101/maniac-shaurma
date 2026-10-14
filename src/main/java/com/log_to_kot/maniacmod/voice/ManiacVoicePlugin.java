@@ -4,8 +4,10 @@ import com.log_to_kot.maniacmod.ManiacMod;
 import de.maxhenkel.voicechat.api.ForgeVoicechatPlugin;
 import de.maxhenkel.voicechat.api.VoicechatApi;
 import de.maxhenkel.voicechat.api.VoicechatPlugin;
+import de.maxhenkel.voicechat.api.VoicechatClientApi;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.events.ClientSoundEvent;
+import de.maxhenkel.voicechat.api.events.ClientVoicechatInitializationEvent;
 import de.maxhenkel.voicechat.api.events.EventRegistration;
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 
@@ -30,6 +32,8 @@ import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
  *     хто говорить (розділ 4 плану). Точка офіційна й документована.
  *   • {@link MicrophonePacketEvent} — пересилання живого мікрофона в
  *     спільний канал ENDING (розділ 8.6 плану).
+ *   • {@link ClientVoicechatInitializationEvent}, {@link ClientSoundEvent} (стан «я говорю» і гучність голосу) —
+ *     живлять HUD-індикатор власного голосу, див. {@link VoiceIndicatorState} і voice/README.md §7.
  *
  * ── Пріоритет обробника ──────────────────────────────────────────────
  * У цій версії SVC {@code EventBuilder} сортує обробники за СПАДАННЯМ
@@ -67,5 +71,17 @@ public final class ManiacVoicePlugin implements VoicechatPlugin {
 
         registration.registerEvent(MicrophonePacketEvent.class,
             VoiceRuntime::onMicrophonePacket);
+
+        // HUD-індикатор власного голосу (замість штатних іконок SVC). Лише пишуть стан; малює client/voice.
+        registration.registerEvent(ClientVoicechatInitializationEvent.class, event -> {
+            VoicechatClientApi client = event.getVoicechat();
+            VoiceIndicatorState.bind(client::isMuted, client::isDisabled, client::isDisconnected);
+            // Та сама логіка, що в RenderEvents SVC: сховано, якщо ввімкнено hideIcons або вимкнено showHudIcons.
+            VoiceIndicatorState.bindIconsHidden(() ->
+                    de.maxhenkel.voicechat.VoicechatClient.CLIENT_CONFIG.hideIcons.get()
+                            || !de.maxhenkel.voicechat.VoicechatClient.CLIENT_CONFIG.showHudIcons.get());
+        });
+        registration.registerEvent(ClientSoundEvent.class,
+            event -> VoiceIndicatorState.markOwnTalking(event.isWhispering(), event.getRawAudio()));
     }
 }

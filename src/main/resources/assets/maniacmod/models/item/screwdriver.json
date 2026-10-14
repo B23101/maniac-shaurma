@@ -1,6 +1,79 @@
 {
-  "parent": "minecraft:item/handheld",
-  "textures": {
-    "layer0": "maniacmod:item/screwdriver"
-  }
+	"format_version": "26.3",
+	"credit": "Made with Blockbench",
+	"textures": {
+		"1": "maniacmod:item/screwdriver"
+	},
+	"elements": [
+		{
+			"from": [7.25, 0, 7.25],
+			"to": [9.75, 5, 9.75],
+			"rotation": {"angle": 0, "axis": "y", "origin": [6.75, 0, 7.7]},
+			"faces": {
+				"north": {"uv": [2, 2, 4, 7], "texture": "#1"},
+				"east": {"uv": [0, 2, 2, 7], "texture": "#1"},
+				"south": {"uv": [6, 2, 8, 7], "texture": "#1"},
+				"west": {"uv": [4, 2, 6, 7], "texture": "#1"},
+				"up": {"uv": [4, 2, 2, 0], "texture": "#1"},
+				"down": {"uv": [6, 0, 4, 2], "texture": "#1"}
+			}
+		},
+		{
+			"from": [8, 5, 8],
+			"to": [9, 9, 9],
+			"rotation": {"angle": 0, "axis": "y", "origin": [7, 5, 8.9]},
+			"faces": {
+				"north": {"uv": [13, 12, 14, 16], "texture": "#1"},
+				"east": {"uv": [12, 12, 13, 16], "texture": "#1"},
+				"south": {"uv": [15, 12, 16, 16], "texture": "#1"},
+				"west": {"uv": [14, 12, 15, 16], "texture": "#1"},
+				"up": {"uv": [14, 12, 13, 11], "texture": "#1"},
+				"down": {"uv": [15, 11, 14, 12], "texture": "#1"}
+			}
+		},
+		{
+			"from": [7.55, 9, 8],
+			"to": [9.5, 11, 9],
+			"rotation": {"angle": 0, "axis": "y", "origin": [6.15, 5, 8.9]},
+			"faces": {
+				"north": {"uv": [1, 14, 2, 16], "texture": "#1"},
+				"east": {"uv": [0, 14, 1, 16], "texture": "#1"},
+				"south": {"uv": [3, 14, 4, 16], "texture": "#1"},
+				"west": {"uv": [2, 14, 3, 16], "texture": "#1"},
+				"up": {"uv": [2, 14, 1, 13], "texture": "#1"},
+				"down": {"uv": [3, 13, 2, 14], "texture": "#1"}
+			}
+		}
+	],
+	"display": {
+		"thirdperson_righthand": {
+			"translation": [-0.25, 2.75, 1.25],
+			"scale": [0.5, 0.5, 0.5]
+		},
+		"firstperson_righthand": {
+			"rotation": [-9, 19.5, 0],
+			"translation": [1, 4.75, -0.75]
+		},
+		"firstperson_lefthand": {
+			"rotation": [-8.75, 11.25, 0],
+			"translation": [2.75, 5.25, 0]
+		},
+		"gui": {
+			"rotation": [0, -42.25, -41.75],
+			"translation": [2.5, 3.75, 0],
+			"scale": [1.6, 1.6, 1.6]
+		},
+		"head": {
+			"rotation": [-89, 0, 0]
+		}
+	},
+	"groups": [
+		{
+			"name": "bone",
+			"origin": [2.15, 5, -0.1],
+			"scope": 0,
+			"color": 0,
+			"children": [0, 1, 2]
+		}
+	]
 }

@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.WoundedPose;
 import net.minecraft.client.model.PlayerModel;
@@ -40,6 +42,7 @@ public abstract class MixinWoundedPose {
     private void maniacmod$applyWounded(LivingEntity entity, float limbSwing, float limbSwingAmount,
                                         float ageInTicks, float netHeadYaw, float headPitch,
                                         CallbackInfo ci) {
+        if (entity instanceof net.minecraft.world.entity.player.Player vrp && VrServerCompat.isVrPlayer(vrp)) return;
         PlayerModel<?> m = (PlayerModel<?>) (Object) this;
 
         boolean wrote = false;

@@ -25,16 +25,16 @@ import java.util.function.ToIntFunction;
  * і бар перезарядки ({@code ItemCooldownBarDecorator}) були НЕЗАЛЕЖНИМИ
  * декораторами, що не знали одне про одного: число «67%» у правому нижньому
  * куті лягало просто на бар, секунди — на жалюзі, а у лома ще й ванільна
- * біла «шторка» {@code ItemCooldowns}. Тепер на іконці завжди ОДНЕ з двох:
+ * біла «шторка» {@code ItemCooldowns}. Тепер шари розведено по висоті:
  * <ul>
- *   <li><b>спокій</b> — число відсотків у правому нижньому куті;</li>
- *   <li><b>перезарядка</b> — горизонтальний бар на всю ширину іконки внизу +
- *       секунди НАД баром (там, де інакше було б число). Відсотки на цей час
- *       ховаються й плавно повертаються після «готово».</li>
+ *   <li><b>внизу</b> — число відсотків у правому нижньому куті; воно видиме ЗАВЖДИ,
+ *       і під час перезарядки теж;</li>
+ *   <li><b>над ним</b> — горизонтальний бар перезарядки на всю ширину іконки (y 7..11),
+ *       а ще вище — секунди. Предмет без відсотків (бару нема з чим ділити місце) має
+ *       бар унизу, y 12..16.</li>
  * </ul>
- * Зони не перетинаються: бар — y 12..16, текст — над ним (перезарядка) або
- * в самому куті (спокій). Бар малюється заливкою, що скорочується справа
- * наліво (дробовий кінець згладжений), колір червоний → бурштин → холодно-білий.
+ * Бар малюється заливкою, що скорочується справа наліво (дробовий кінець згладжений),
+ * колір червоний → бурштин → холодно-білий.
  *
  * Усе — чиста функція від часу (декоратор викликається по разу на слот на
  * кадр і стану не має).
@@ -44,7 +44,10 @@ public final class ItemHudDecorator implements IItemDecorator {
 
     // ── Геометрія (піксельна сітка іконки 16×16) ─────────────────────────
     private static final int BAR_X = 1;
-    private static final int BAR_Y = 12;
+    /** Бар у «спокійному» варіанті, коли відсотків на іконці нема (y 12..16). */
+    private static final int BAR_Y_PLAIN = 12;
+    /** Коли є відсотки — бар піднято над ними (y 7..11), числа лишаються внизу й завжди видимі. */
+    private static final int BAR_Y_ABOVE_PERCENT = 7;
     private static final int BAR_W = 14;              // зовнішня ширина з рамкою
     private static final int BAR_H = 4;               // зовнішня висота з рамкою
     private static final int INNER_W = BAR_W - 2;
@@ -67,6 +70,7 @@ public final class ItemHudDecorator implements IItemDecorator {
 
     private final ToIntFunction<ItemStack> percent;
     private final String cooldownId; // null — предмет без власної перезарядки
+    private final int barY;
 
     /**
      * @param percent     відсотки для числа на іконці (міцність / заряд), {@code null} — без числа
@@ -75,6 +79,7 @@ public final class ItemHudDecorator implements IItemDecorator {
     public ItemHudDecorator(ToIntFunction<ItemStack> percent, String cooldownKey) {
         this.percent = percent;
         this.cooldownId = cooldownKey == null ? null : AbilityCooldownPacket.itemId(cooldownKey);
+        this.barY = percent == null ? BAR_Y_PLAIN : BAR_Y_ABOVE_PERCENT;
     }
 
     @Override
@@ -93,13 +98,12 @@ public final class ItemHudDecorator implements IItemDecorator {
                 float left = readyAt - now;
                 long ms = System.currentTimeMillis();
                 if (left > 0f) {
-                    renderActive(g, font, x, y, Math.min(1f, left / total), left,
+                    renderActive(g, font, x, y, barY, Math.min(1f, left / total), left,
                         now - (readyAt - total), ms);
-                    percentAlpha = 0f; // по черзі: відсотки ховаємо на час перезарядки
+                    // Відсотки НЕ ховаємо: вони лишаються внизу під баром перезарядки.
                 } else if (now - readyAt < READY_FX_TICKS) {
                     float r = (now - readyAt) / READY_FX_TICKS;
-                    renderReady(g, x, y, r);
-                    percentAlpha = UiAnim.clamp01((r - 0.45f) / 0.55f); // повертаються, коли бар розчинився
+                    renderReady(g, x, y, barY, r);
                 }
             }
         }
@@ -133,14 +137,14 @@ public final class ItemHudDecorator implements IItemDecorator {
 
     // ── Перезарядка триває ───────────────────────────────────────────────
 
-    private static void renderActive(GuiGraphics g, Font font, int x, int y, float frac,
+    private static void renderActive(GuiGraphics g, Font font, int x, int y, int barY, float frac,
                                      float leftTicks, float sinceStart, long ms) {
         float progress = 1f - frac;
         boolean slam = sinceStart < START_FX_TICKS;
         float st = UiAnim.clamp01(sinceStart / START_FX_TICKS);
 
         // 1) Світла «жалюзі» на іконці над баром (не залазить у зону бару).
-        int curtainH = Math.min(BAR_Y, Math.round(16f * frac));
+        int curtainH = Math.min(barY, Math.round(16f * frac));
         if (curtainH > 0) {
             g.fill(x, y, x + 16, y + curtainH, COL_CURTAIN);
             int edge = GeneratorFuelUiTheme.mix(COL_MID, COL_END, progress);
@@ -153,7 +157,7 @@ public final class ItemHudDecorator implements IItemDecorator {
         boolean finale = leftTicks < FINALE_TICKS;
         float blink = finale ? 0.5f + 0.5f * (float) Math.sin(ms / 65.0) : 0f;
 
-        int bx = x + BAR_X, by = y + BAR_Y;
+        int bx = x + BAR_X, by = y + barY;
         int fillRgb = barColor(progress);
         int base = 0xFF000000 | fillRgb;
         int top = GeneratorFuelUiTheme.mix(base, 0xFFFFFFFF, 0.38f);
@@ -177,28 +181,28 @@ public final class ItemHudDecorator implements IItemDecorator {
         // 3) Старт: короткий спалах і кільце навколо слота.
         if (slam) {
             float inv = 1f - st;
-            g.fill(x, y, x + 16, y + BAR_Y, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, 0.45f * inv * inv));
+            g.fill(x, y, x + 16, y + barY, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, 0.45f * inv * inv));
             ring(g, x, y, 1 + Math.round(st * 5f), GeneratorFuelUiTheme.alpha(COL_START, inv * inv));
         }
 
-        // 4) Секунди — НАД баром, там, де в спокої стоїть число відсотків.
+        // 4) Секунди — НАД баром, над баром; відсотки лишаються внизу іконки.
         float secs = leftTicks / 20f;
         String text = secs >= 10f ? String.valueOf((int) Math.ceil(secs))
                                   : String.format(Locale.ROOT, "%.1f", secs);
         int color = GeneratorFuelUiTheme.mix(0xFFFFFFFF, COL_MID, progress > 0.75f ? (progress - 0.75f) * 4f : 0f);
-        drawCornerText(g, font, text, x, y + BAR_Y - 0.5f, color);
+        drawCornerText(g, font, text, x, y + barY - 0.5f, color);
     }
 
     // ── Готово ───────────────────────────────────────────────────────────
 
-    private static void renderReady(GuiGraphics g, int x, int y, float r) {
+    private static void renderReady(GuiGraphics g, int x, int y, int barY, float r) {
         float inv = 1f - r;
 
         // Діагональний блик по іконці (тільки над зоною бару).
         float sweepT = UiAnim.clamp01(r * 1.7f);
         if (sweepT < 1f) {
             float bc = -6f + 28f * UiAnim.easeOutCubic(sweepT);
-            for (int row = 0; row < BAR_Y; row++) {
+            for (int row = 0; row < barY; row++) {
                 float c = bc - row * 0.55f;
                 int a0 = Math.max(0, Math.round(c - 2f));
                 int a1 = Math.min(16, Math.round(c + 2f));
@@ -206,11 +210,11 @@ public final class ItemHudDecorator implements IItemDecorator {
                     GeneratorFuelUiTheme.alpha(0xFFFFFFFF, 0.5f * (1f - sweepT)));
             }
         }
-        g.fill(x, y, x + 16, y + BAR_Y, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, 0.30f * inv * inv * inv));
+        g.fill(x, y, x + 16, y + barY, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, 0.30f * inv * inv * inv));
 
         // Повний бар холодно-білого кольору, що розчиняється НА МІСЦІ (без росту вгору).
         float a = inv * inv;
-        int bx = x + BAR_X, by = y + BAR_Y;
+        int bx = x + BAR_X, by = y + barY;
         g.fill(bx, by, bx + BAR_W, by + BAR_H, GeneratorFuelUiTheme.alpha(COL_END, 0.85f * a));
         g.fill(bx + 1, by + 1, bx + BAR_W - 1, by + 2, GeneratorFuelUiTheme.alpha(0xFFFFFFFF, a));
 

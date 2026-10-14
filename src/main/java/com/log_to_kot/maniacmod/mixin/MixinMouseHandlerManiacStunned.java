@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
 import com.log_to_kot.maniacmod.client.ClientLookLock;
 import net.minecraft.client.MouseHandler;
 import org.spongepowered.asm.mixin.Mixin;
@@ -68,7 +70,7 @@ public abstract class MixinMouseHandlerManiacStunned {
         // Умова одна на всі стани, що забирають огляд (оглушення, струм,
         // робота з генератором) — див. ClientLookLock: копія цієї умови в
         // двох міксинах розійшлася б на першому ж новому стані.
-        if (!ClientLookLock.isLocked()) return;
+        if (!ClientLookLock.isLocked() || VrCompat.isVrActive()) return;
 
         // Спершу гасимо накопичене (ванільний код зробив би це сам, але
         // ми зараз скасуємо його тіло — див. докстрінг), потім блокуємо

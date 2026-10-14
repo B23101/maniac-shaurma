@@ -8,10 +8,14 @@ import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.net.s2c.actionprogress.AbilityCooldownPacket;
 import dev.shaurmalib.common.lock.LockType;
+import dev.shaurmalib.forge.offline.OfflineActors;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -175,15 +179,25 @@ public final class ManiacCombatModule implements PhaseListener {
         // перевірка стану, а не сам факт локу (лок — додатковий шар для
         // бібліотеки/HUD, не єдине джерело правди в цьому модулі).
         if (match.maniacStun().isStunned(attacker.getUUID())) return false;
+        // З жертвою на плечі не б'ють (як у Dead by Daylight): спершу гак або кинути.
+        if (match.hooks().isCarrying(attacker.getUUID())) return false;
 
         ManiacArchetype archetype = match.maniacArchetype();
         if (archetype == null) return false;
 
-        ServerPlayer victim = findTarget(match, attacker, archetype.attackRangeBlocks());
+        LivingEntity victim = findTarget(match, attacker, archetype.attackRangeBlocks());
         if (victim == null) return false;
 
         double yawRad = Math.toRadians(attacker.getYRot());
-        resolveHit(match, attacker, victim, archetype.attackDamage(), Math.sin(yawRad), -Math.cos(yawRad));
+        double dirX = Math.sin(yawRad);
+        double dirZ = -Math.cos(yawRad);
+        if (victim instanceof ServerPlayer onlineVictim) {
+            resolveHit(match, attacker, onlineVictim, archetype.attackDamage(), dirX, dirZ);
+        } else {
+            // Тіло виживого, що вийшов із сервера: той самий удар, але без пакетів
+            // власнику (його немає) і без стадії непритомності.
+            resolveBodyHit(match, attacker, victim, archetype.attackDamage(), dirX, dirZ);
+        }
         startCooldown(attacker, archetype.attackCooldownTicks());
         return true;
     }
@@ -215,7 +229,72 @@ public final class ManiacCombatModule implements PhaseListener {
         applyHitRecoil(victim, dirX, dirZ);
         ModNetwork.toPlayer(victim,
             new com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitPacket(downed));
+        sendBlood(victim, dirX, dirZ, downed);
+        if (attacker != null) {
+            ModNetwork.toPlayer(attacker,
+                new com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitConfirmPacket(downed));
+        }
         return downed;
+    }
+
+    /**
+     * Удар по ТІЛУ виживого, що вийшов із сервера. Правила ті самі, що в
+     * {@link #resolveHit}: останній, хто бив, запам'ятовується, хп знімає
+     * {@code MatchOrchestrator#damageSurvivor}. Відмінності: ні ManiacHitPacket,
+     * ні адреналіну (власника немає). HP = 0 валить тіло так само, як гравця:
+     * воно непритомне (повзе), має таймер кровотечі, і його піднімають союзники.
+     */
+    private void resolveBodyHit(MatchOrchestrator match, ServerPlayer attacker, LivingEntity body,
+                                int damage, double dirX, double dirZ) {
+        Optional<UUID> ownerId = OfflineActors.ownerOf(body);
+        if (ownerId.isEmpty()) return;
+        UUID owner = ownerId.get();
+
+        boolean killed = false;
+        if (damage >= 0) {
+            match.recordManiacHit(owner, attacker.getUUID());
+            killed = match.damageSurvivor(owner, damage);
+        }
+        if (killed) {
+            match.survivors().onBodyDowned(owner);
+            sendBlood(body, dirX, dirZ, true);
+            ModNetwork.toPlayer(attacker,
+                new com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitConfirmPacket(true));
+            return;
+        }
+
+        body.knockback(KNOCKBACK_STRENGTH, dirX, dirZ);
+        body.hurtMarked = true;
+        // Подія 2 = «отримав удар»: червоний спалах моделі + звук болю.
+        body.level().broadcastEntityEvent(body, (byte) 2);
+        sendBlood(body, dirX, dirZ, false);
+        ModNetwork.toPlayer(attacker,
+            new com.log_to_kot.maniacmod.net.s2c.notify.ManiacHitConfirmPacket(false));
+    }
+
+    /**
+     * Бризки крові з жертви — бачать усі в рівні, а не лише вона сама.
+     *
+     * <p>{@code dirX/dirZ} тут — той самий вектор, що йде у {@code knockback}:
+     * він вказує НА маньяка (ванільний knockback штовхає в протилежний бік),
+     * тому «від маньяка» — це мінус цей вектор. Помилка в знаку й кров
+     * летіла б у маньяка замість жертви за ним.</p>
+     */
+    private void sendBlood(LivingEntity victim, double dirX, double dirZ, boolean downed) {
+        if (!com.log_to_kot.maniacmod.config.ManiacConfigs.get(
+                com.log_to_kot.maniacmod.config.ConfigSchema.BLOOD_ENABLED)) return;
+        int droplets = com.log_to_kot.maniacmod.config.ManiacConfigs.get(
+            com.log_to_kot.maniacmod.config.ConfigSchema.BLOOD_DROPLETS);
+        if (droplets <= 0) return;
+        if (!(victim.level() instanceof net.minecraft.server.level.ServerLevel level)) return;
+
+        double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        float awayX = len > 1.0e-4 ? (float) (-dirX / len) : 0f;
+        float awayZ = len > 1.0e-4 ? (float) (-dirZ / len) : 0f;
+
+        ModNetwork.toLevel(level, new com.log_to_kot.maniacmod.net.s2c.notify.BloodSplatterPacket(
+            victim.getX(), victim.getY() + victim.getBbHeight() * 0.7, victim.getZ(),
+            awayX, awayZ, downed, droplets, level.random.nextLong()));
     }
 
     /**
@@ -292,19 +371,20 @@ public final class ManiacCombatModule implements PhaseListener {
      * так маньяк завжди б'є того, хто фактично під прицілом, а не
      * випадкового виживого з групи.
      */
-    private ServerPlayer findTarget(MatchOrchestrator match, ServerPlayer attacker, double range) {
+    private LivingEntity findTarget(MatchOrchestrator match, ServerPlayer attacker, double range) {
         Vec3 eye = attacker.getEyePosition();
         Vec3 look = attacker.getLookAngle();
 
-        ServerPlayer best = null;
+        LivingEntity best = null;
         double bestDistSq = Double.MAX_VALUE;
 
-        for (ServerPlayer candidate : attacker.getServer().getPlayerList().getPlayers()) {
+        // Онлайн-виживі І тіла тих, хто вийшов: фільтр за UUID власника той самий.
+        for (LivingEntity candidate : OfflineActors.candidates(attacker.getServer(),
+                id -> match.isSurvivor(id)
+                    && match.survivorStateOf(id)
+                        != com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS)) {
             if (candidate == attacker) continue;
             if (candidate.level() != attacker.level()) continue;
-            if (!match.isSurvivor(candidate.getUUID())) continue;
-            if (match.survivorStateOf(candidate.getUUID())
-                == com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS) continue;
 
             Vec3 toCandidate = candidate.getEyePosition().subtract(eye);
             double distSq = toCandidate.lengthSqr();

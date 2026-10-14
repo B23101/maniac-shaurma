@@ -39,13 +39,19 @@ public record DownedSurvivorsPacket(List<Entry> entries) implements S2CPacket {
     /**
      * @param id        UUID лежачого
      * @param x         позиція тіла (для мітки на всю карту)
-     * @param ticksLeft скільки тіків лишилось до смерті
+     * @param ticksLeft скільки тіків лишилось до смерті; ВІД'ЄМНЕ — таймера немає взагалі
+     *                  (лежить чи його несуть: поки не повісили, він не вмирає)
+     * @param status    {@link com.log_to_kot.maniacmod.hooks.HookStatus#code()}: лежить / несуть / висить
      * @param paused    {@code true}, якщо таймер ЗАРАЗ стоїть — маньяк у
      *                  радіусі милосердя. Клієнт тоді показує зафіксоване
      *                  значення замість власного відліку, інакше таймер
      *                  «тікав» би всупереч серверу.
      */
-    public record Entry(UUID id, double x, double y, double z, int ticksLeft, boolean paused) {}
+    public record Entry(UUID id, double x, double y, double z, int ticksLeft, boolean paused,
+                        int status) {
+        /** Чи має цей запис таймер до смерті (інакше показуємо лише статус). */
+        public boolean timed() { return ticksLeft >= 0; }
+    }
 
     public DownedSurvivorsPacket(FriendlyByteBuf buf) {
         this(read(buf));
@@ -56,7 +62,7 @@ public record DownedSurvivorsPacket(List<Entry> entries) implements S2CPacket {
         List<Entry> list = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
             list.add(new Entry(buf.readUUID(), buf.readDouble(), buf.readDouble(),
-                buf.readDouble(), buf.readVarInt(), buf.readBoolean()));
+                buf.readDouble(), buf.readInt(), buf.readBoolean(), buf.readVarInt()));
         }
         return list;
     }
@@ -69,8 +75,9 @@ public record DownedSurvivorsPacket(List<Entry> entries) implements S2CPacket {
             buf.writeDouble(e.x());
             buf.writeDouble(e.y());
             buf.writeDouble(e.z());
-            buf.writeVarInt(e.ticksLeft());
+            buf.writeInt(e.ticksLeft());
             buf.writeBoolean(e.paused());
+            buf.writeVarInt(e.status());
         }
     }
 

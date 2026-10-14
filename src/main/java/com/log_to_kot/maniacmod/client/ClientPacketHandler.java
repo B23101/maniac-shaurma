@@ -34,6 +34,8 @@ public final class ClientPacketHandler {
 
     public static void onPhase(GamePhase phase) {
         ClientMatchState.setPhase(phase);
+        com.log_to_kot.maniacmod.client.victory.VictoryClient.onPhaseChanged(phase);
+        if (phase == GamePhase.LOBBY || phase == GamePhase.RESET || phase == GamePhase.ENDING) pendingCatalog = null;
         if (!phase.allows(com.log_to_kot.maniacmod.core.phase.PhaseRule.TRAPS)) {
             // Гра скінчилась / не почалась: жодної підсвітки жертв, підказки F,
             // удару струмом чи підвісу — незалежно від того, чи дійшли пакети.
@@ -43,14 +45,33 @@ public final class ClientPacketHandler {
             com.log_to_kot.maniacmod.client.WireShockCameraShake.configure(false, 0.0, 1.0);
             com.log_to_kot.maniacmod.client.rope.RopeHangClient.reset();
             com.log_to_kot.maniacmod.client.rope.RopeHangPoseAnimation.reset();
+            com.log_to_kot.maniacmod.client.SmokeMuffle.reset();
+            com.log_to_kot.maniacmod.client.SpikeHitEffect.reset();
         }
         // Голос маньяка прив'язаний до фази й ролі — перераховуємо одразу
         // після оновлення стану (див. voice/VoiceActivation).
         com.log_to_kot.maniacmod.voice.VoiceActivation.refresh();
         if (phase == GamePhase.ENDING) {
-            Minecraft.getInstance().setScreen(
-                new com.log_to_kot.maniacmod.client.screen.statistics.MatchResultScreen());
+            // Після сцени перемоги екран статистики чекає, поки розтемниться лобі.
+            com.log_to_kot.maniacmod.client.victory.VictoryClient.runWhenIdle(() ->
+                Minecraft.getInstance().setScreen(
+                    new com.log_to_kot.maniacmod.client.screen.statistics.MatchSummaryScreen()));
         }
+    }
+
+    /** Статистика матчу для екрана підсумків. */
+    public static void onSummary(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchSummaryPacket packet) {
+        ClientMatchState.setSummary(packet);
+    }
+
+    /** Нагорода XP за матч — приходить одразу після підсумку, РАНІШЕ за фазу ENDING. */
+    public static void onReward(com.log_to_kot.maniacmod.net.s2c.matchstate.MatchRewardPacket packet) {
+        ClientMatchState.setReward(packet);
+    }
+
+    /** Підсумок матчу (хто переміг) — приходить РАНІШЕ за фазу ENDING. */
+    public static void onOutcome(boolean survivorsWon, int escaped, int total) {
+        ClientMatchState.setOutcome(survivorsWon, escaped, total);
     }
 
     public static void onRole(RoleSyncPacket.Role role, String archetypeId, double attackRangeBlocks) {
@@ -90,9 +111,11 @@ public final class ClientPacketHandler {
      */
     public static void onTrapLoadout(java.util.List<String> trapIds, double placeRange) {
         ClientMatchState.setTrapLoadout(trapIds, placeRange);
+        if (!trapIds.isEmpty()) pendingCatalog = null;   // вибір зроблено — меню більше не потрібне
         // Оголошення ролі маньяка: іконки пасток, які він щойно узяв.
         com.log_to_kot.maniacmod.client.overlay.notify.RoleRevealOverlay.onTrapLoadout(trapIds);
-        if (Minecraft.getInstance().screen instanceof com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen) {
+        if (!trapIds.isEmpty()
+            && Minecraft.getInstance().screen instanceof com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen) {
             Minecraft.getInstance().setScreen(null);
         }
     }
@@ -102,7 +125,28 @@ public final class ClientPacketHandler {
      * (реконект, повторна відправка) — оновлюємо дані замість другого
      * екрана поверх першого.
      */
+    /** Каталог, з якого маньяк ще не підтвердив вибір (щоб відкрити меню знову після Esc). */
+    private record PendingCatalog(java.util.List<String> ids, int limit) {}
+    private static PendingCatalog pendingCatalog;
+
+    /**
+     * Маньяк натиснув клавішу пастки, а пасток у нього ще немає: відкриває
+     * меню вибору знову (якщо він закрив його через Esc). Гра не чекає на
+     * вибір, тож повернутись до нього можна будь-коли.
+     *
+     * @return true, якщо меню відкрито
+     */
+    public static boolean reopenTrapChoice() {
+        PendingCatalog p = pendingCatalog;
+        if (p == null) return false;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen != null) return false;
+        mc.setScreen(new com.log_to_kot.maniacmod.client.screen.maniac.TrapChooseScreen(p.ids(), p.limit()));
+        return true;
+    }
+
     public static void onTrapCatalog(java.util.List<String> trapIds, int limit) {
+        pendingCatalog = new PendingCatalog(java.util.List.copyOf(trapIds), limit);
         // Кіно-вступ блокує екрани (Esc/чат/меню). Каталог приходить раз — не губимо його,
         // а відкриваємо вибір пасток, щойно розтемнення закінчилось.
         if (com.log_to_kot.maniacmod.client.intro.IntroClient.blocksScreens()) {
@@ -213,6 +257,57 @@ public final class ClientPacketHandler {
         ClientMatchState.setRoster(entries);
     }
 
+    /** Перелік маньяків для оцінки та збережені оцінки гравця — див. {@code ClientManiacRatingState}. */
+    public static void onManiacRatings(com.log_to_kot.maniacmod.net.s2c.rating.ManiacRatingSyncPacket packet) {
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        java.util.Map<String, float[]> saved = new java.util.HashMap<>();
+        for (var e : packet.entries()) {
+            ids.add(e.id());
+            saved.put(e.id(), new float[]{e.look(), e.abilities(), e.fear()});
+        }
+        com.log_to_kot.maniacmod.client.screen.rating.ClientManiacRatingState.get()
+            .onSync(ids, saved, packet.everSubmitted(), packet.comment());
+    }
+
+    /** Відгуки гравців для адміна: оновлює відкритий екран або відкриває новий. */
+    public static void onAdminReviews(com.log_to_kot.maniacmod.net.s2c.rating.AdminReviewsPacket packet) {
+        var screen = Minecraft.getInstance().screen;
+        if (screen instanceof com.log_to_kot.maniacmod.client.screen.admin.AdminReviewsScreen reviews) {
+            reviews.update(packet);
+        } else {
+            Minecraft.getInstance().setScreen(
+                new com.log_to_kot.maniacmod.client.screen.admin.AdminReviewsScreen(packet));
+        }
+    }
+
+    /** Сторінка історії матчів (адмінський список або історія гравця). */
+    public static void onHistoryList(com.log_to_kot.maniacmod.net.s2c.history.HistoryListPacket packet) {
+        com.log_to_kot.maniacmod.client.history.ClientHistoryState.receiveList(
+            packet.target(), packet.total(), packet.offset(), packet.items());
+    }
+
+    /** Команда {@code /maniac history}: відкрити архів усіх матчів або історію вказаного гравця. */
+    public static void onOpenHistory(com.log_to_kot.maniacmod.net.s2c.history.OpenHistoryPacket packet) {
+        var mc = net.minecraft.client.Minecraft.getInstance();
+        mc.setScreen(packet.target() == null
+            ? new com.log_to_kot.maniacmod.client.screen.history.MatchHistoryScreen(null)
+            : new com.log_to_kot.maniacmod.client.screen.history.MatchHistoryScreen(
+                null, packet.target(), packet.targetName()));
+    }
+
+    /** Повний матч для екрана деталей (або «заборонено/не знайдено»). */
+    public static void onHistoryDetail(com.log_to_kot.maniacmod.net.s2c.history.HistoryDetailPacket packet) {
+        com.log_to_kot.maniacmod.client.history.ClientHistoryState.receiveDetail(packet.matchId(), packet.record());
+    }
+
+    public static void onLeaderboardPage(com.log_to_kot.maniacmod.net.s2c.leaderboard.LeaderboardPagePacket packet) {
+        com.log_to_kot.maniacmod.client.leaderboard.ClientLeaderboardState.receivePage(packet);
+    }
+
+    public static void onLeaderboardOverview(com.log_to_kot.maniacmod.net.s2c.leaderboard.LeaderboardOverviewPacket packet) {
+        com.log_to_kot.maniacmod.client.leaderboard.ClientLeaderboardState.receiveOverview(packet);
+    }
+
     /** Ціль матчу («N з M генераторів», віхи) — джерело для верхньої картки tab-екрана. */
     public static void onObjectives(com.log_to_kot.maniacmod.net.s2c.matchstate.ObjectiveSyncPacket packet) {
         ClientMatchState.setObjectives(packet);
@@ -253,6 +348,27 @@ public final class ClientPacketHandler {
         com.log_to_kot.maniacmod.client.screen.minigame.RopeSwingScreen.open();
     }
 
+    /** Меню приймача (див. {@code ReceiverMenuOpenPacket}). */
+    public static void onReceiverMenu(int state) {
+        com.log_to_kot.maniacmod.client.evac.ReceiverMenuScreen.open(state);
+    }
+
+    /** Стан евакуації для екранного HUD (див. {@code EvacStatusPacket}). */
+    public static void onEvacStatus(com.log_to_kot.maniacmod.net.s2c.evac.EvacStatusPacket packet) {
+        com.log_to_kot.maniacmod.client.evac.ClientEvac.setStatus(packet);
+    }
+
+    /** Хтось втік — анімований банер і звук (див. {@code EscapeAnnouncePacket}). */
+    public static void onEscapeAnnounce(String name, int escaped, int total) {
+        com.log_to_kot.maniacmod.client.evac.ClientEvac.onEscape(name, escaped, total);
+        com.log_to_kot.maniacmod.client.style.UiAnim.playTabGeneratorDone();
+    }
+
+    /** Розмітка галявин для жовтого контуру (див. {@code ClearingSyncPacket}). */
+    public static void onClearings(java.util.List<com.log_to_kot.maniacmod.net.s2c.evac.ClearingSyncPacket.Rect> rects) {
+        com.log_to_kot.maniacmod.client.evac.ClientEvac.setClearings(rects);
+    }
+
     /** Показати/сховати підказку "Натисни F" (див. {@code TrapEscapePromptPacket}). */
     public static void onTrapEscapePrompt(boolean active) {
         ClientMatchState.setTrapEscapePrompt(active);
@@ -266,6 +382,22 @@ public final class ClientPacketHandler {
     public static void onWireShock(boolean active, double degrees, double hz) {
         ClientMatchState.setWireShocked(active);
         com.log_to_kot.maniacmod.client.WireShockCameraShake.configure(active, degrees, hz);
+    }
+
+    /**
+     * Приглушити/повернути звуки в хмарі димової міни (див.
+     * {@code SmokeMufflePacket}). Сам стан і застосування — у {@code SmokeMuffle}.
+     */
+    public static void onSmokeMuffle(boolean active, float factor) {
+        com.log_to_kot.maniacmod.client.SmokeMuffle.set(active, factor);
+    }
+
+    /**
+     * Жертва наступила на шипи (див. {@code SpikeHitPacket}): вмикає екранний
+     * ефект — шипи знизу, кров, спалах, удар камери. Стан гри не чіпає.
+     */
+    public static void onSpikeHit(boolean downed) {
+        com.log_to_kot.maniacmod.client.SpikeHitEffect.trigger(downed);
     }
 
     /**

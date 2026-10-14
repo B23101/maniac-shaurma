@@ -38,6 +38,8 @@ public final class ModCreativeTab {
                         .filter(e -> e.group() == group)
                         .forEach(e -> output.accept(ModItems.get(e.id()).get()));
                 }
+                // Блоки мода (не входять до ItemRegistry — це BlockItem, а не ItemArchetype).
+                output.accept(ModBlocks.BOARDS_ITEM.get());
             })
             .build());
 

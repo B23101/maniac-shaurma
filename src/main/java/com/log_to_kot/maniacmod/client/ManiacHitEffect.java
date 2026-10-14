@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client;
 
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
+
 import com.log_to_kot.maniacmod.ManiacMod;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -45,6 +47,8 @@ public final class ManiacHitEffect {
     private ManiacHitEffect() {}
 
     public static void trigger(boolean downed) {
+        VrCompat.haptic(VrCompat.Hand.MAIN, downed ? 0.5f : 0.25f, 1.0f);
+        VrCompat.haptic(VrCompat.Hand.OFF, downed ? 0.5f : 0.25f, 1.0f);
         startNanos = System.nanoTime();
         active = true;
         power = downed ? 1.35f : 1.0f;
@@ -123,6 +127,7 @@ public final class ManiacHitEffect {
 
     @SubscribeEvent
     public static void onCameraAngles(ViewportEvent.ComputeCameraAngles event) {
+        if (VrCompat.isVrActive()) return; // VR: кивок камери = нудота
         if (!active) return;
         float e = elapsed();
         if (!active) return;

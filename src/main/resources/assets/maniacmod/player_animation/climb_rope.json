@@ -1,0 +1,181 @@
+{
+	"format_version": "1.8.0",
+	"animations": {
+		"climb_rope": {
+			"loop": true,
+			"animation_length": 1.2,
+			"bones": {
+				"right_arm": {
+					"rotation": {
+						"0.0": {
+							"post": {
+								"vector": [
+									172,
+									0,
+									-6
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"0.6": {
+							"post": {
+								"vector": [
+									128,
+									0,
+									-6
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"1.2": {
+							"post": {
+								"vector": [
+									172,
+									0,
+									-6
+								]
+							},
+							"lerp_mode": "linear"
+						}
+					}
+				},
+				"left_arm": {
+					"rotation": {
+						"0.0": {
+							"post": {
+								"vector": [
+									128,
+									0,
+									6
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"0.6": {
+							"post": {
+								"vector": [
+									172,
+									0,
+									6
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"1.2": {
+							"post": {
+								"vector": [
+									128,
+									0,
+									6
+								]
+							},
+							"lerp_mode": "linear"
+						}
+					}
+				},
+				"right_leg": {
+					"rotation": {
+						"0.0": {
+							"post": {
+								"vector": [
+									0,
+									0,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"0.6": {
+							"post": {
+								"vector": [
+									-55,
+									0,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"1.2": {
+							"post": {
+								"vector": [
+									0,
+									0,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						}
+					}
+				},
+				"left_leg": {
+					"rotation": {
+						"0.0": {
+							"post": {
+								"vector": [
+									-55,
+									0,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"0.6": {
+							"post": {
+								"vector": [
+									0,
+									0,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"1.2": {
+							"post": {
+								"vector": [
+									-55,
+									0,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						}
+					}
+				},
+				"body": {
+					"rotation": {
+						"0.0": {
+							"post": {
+								"vector": [
+									0,
+									-4,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"0.6": {
+							"post": {
+								"vector": [
+									0,
+									4,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						},
+						"1.2": {
+							"post": {
+								"vector": [
+									0,
+									-4,
+									0
+								]
+							},
+							"lerp_mode": "linear"
+						}
+					}
+				}
+			}
+		}
+	}
+}

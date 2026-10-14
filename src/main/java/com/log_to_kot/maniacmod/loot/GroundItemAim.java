@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.loot;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.entity.GroundItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ClipContext;
@@ -49,8 +51,8 @@ public final class GroundItemAim {
     /** Найближчий предмет під променем погляду або {@code null}. */
     public static GroundItemEntity find(Player player, double margin) {
         Level level = player.level();
-        Vec3 eye = player.getEyePosition();
-        Vec3 look = player.getLookAngle();
+        Vec3 eye = VrServerCompat.aimOrigin(player);
+        Vec3 look = VrServerCompat.aimDir(player);
         Vec3 end = eye.add(look.scale(AIM_REACH));
         double blockDist = blockDistance(player, eye, end);
 
@@ -72,8 +74,8 @@ public final class GroundItemAim {
     /** Чи промінь погляду гравця влучає саме в цей предмет (і не закритий стіною). */
     public static boolean isAimedAt(Player player, GroundItemEntity item, double margin) {
         if (!item.hasStack()) return false;
-        Vec3 eye = player.getEyePosition();
-        Vec3 end = eye.add(player.getLookAngle().scale(AIM_REACH));
+        Vec3 eye = VrServerCompat.aimOrigin(player);
+        Vec3 end = eye.add(VrServerCompat.aimDir(player).scale(AIM_REACH));
         double d = rayDistance(item, eye, end, margin);
         return !Double.isNaN(d) && d <= blockDistance(player, eye, end) + OCCLUSION_EPS;
     }

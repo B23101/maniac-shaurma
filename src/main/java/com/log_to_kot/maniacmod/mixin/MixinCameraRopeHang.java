@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
 import com.log_to_kot.maniacmod.client.rope.RopeHangClient;
 import net.minecraft.client.Camera;
 import net.minecraft.world.entity.Entity;
@@ -27,6 +29,8 @@ public abstract class MixinCameraRopeHang {
     @Inject(method = "setup", at = @At("TAIL"), require = 0)
     private void maniacmod$followHangingHead(BlockGetter level, Entity entity, boolean detached,
                                              boolean mirrored, float partialTick, CallbackInfo ci) {
+        // VR: камера = голова гравця, зсув камери викликає нудоту.
+        if (VrCompat.isVrActive()) return;
         if (detached) return;
         Vec3 shift = RopeHangClient.cameraShift(entity);
         if (shift == null) return;

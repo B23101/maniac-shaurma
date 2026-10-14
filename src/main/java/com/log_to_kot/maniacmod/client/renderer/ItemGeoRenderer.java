@@ -8,6 +8,7 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.client.extensions.common.IClientItemExtensions;
 import software.bernie.geckolib.core.animatable.GeoAnimatable;
 import software.bernie.geckolib.renderer.GeoItemRenderer;
+import software.bernie.geckolib.renderer.layer.AutoGlowingGeoLayer;
 
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -70,6 +71,9 @@ public class ItemGeoRenderer<T extends Item & GeoAnimatable> extends GeoItemRend
     public ItemGeoRenderer(ItemVisuals visuals) {
         super(new ItemGeoModel<>(visuals));
         this.visuals = visuals;
+        // Світиться лише те, що намальовано в <id>_glowmask.png (скло ліхтаря);
+        // предмети без такого файлу не змінюються.
+        addRenderLayer(new AutoGlowingGeoLayer<>(this));
     }
 
     /** Вигляд, з яким створено цей рендерер (для діагностики й декораторів). */

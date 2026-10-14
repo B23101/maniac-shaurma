@@ -13,6 +13,7 @@ import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.player.AttackEntityEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
@@ -71,6 +72,15 @@ public final class ServerHooks {
                 if (current != null) current.reloadConfiguredMap();
             }
             DarkZoneConfigs.tickWatcher();
+            com.log_to_kot.maniacmod.config.ClearingConfigs.tickWatcher();
+            // Розмітку барикад правили руками в yml — у лобі одразу виставляємо в світ
+            // (посеред матчу не чіпаємо: зламане лишається зламаним).
+            if (com.log_to_kot.maniacmod.config.BarricadeConfigs.tickWatcher()) {
+                MatchOrchestrator current = ManiacMod.match();
+                if (current != null && current.phases().is(com.log_to_kot.maniacmod.core.phase.GamePhase.LOBBY)) {
+                    current.barricades().restoreAll(event.getServer());
+                }
+            }
         }
 
         MatchOrchestrator match = ManiacMod.match();
@@ -92,6 +102,23 @@ public final class ServerHooks {
     }
 
     /**
+     * ПКМ маньяка: по лежачому — взяти на плече, по гаку з жертвою на плечі — повісити.
+     * Лише головна рука (подія приходить двічі, по разу на руку). Логіка — {@code HookModule}.
+     */
+    @SubscribeEvent
+    public void onEntityInteract(PlayerInteractEvent.EntityInteract event) {
+        if (event.getLevel().isClientSide()) return;
+        if (event.getHand() != net.minecraft.world.InteractionHand.MAIN_HAND) return;
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        MatchOrchestrator match = ManiacMod.match();
+        if (match == null) return;
+        if (match.hooks().onManiacInteract(player, event.getTarget())) {
+            event.setCanceled(true);
+            event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+        }
+    }
+
+    /**
      * Удар ЛКМ по будь-якій сутності. Тут вирішується, ХТО кого може бити.
      *
      * ── Правила (у порядку перевірки) ────────────────────────────────
@@ -105,7 +132,8 @@ public final class ServerHooks {
      *    бути й більшою (до 8 блоків у конфізі) — тоді подія для
      *    далекої цілі просто ніколи не приходить. Див. докстрінг
      *    {@code ManiacCombatModule} для повного пояснення.
-     * 2. Б'є ВИЖИВИЙ по КАПКАНУ → звільнення/знешкодження, див. нижче.
+     * 2. Б'є ВИЖИВИЙ по КАПКАНУ чи ДИМОВІЙ МІНІ → звільнення/знешкодження,
+     *    див. нижче.
      * 3. Б'є ВИЖИВИЙ ЛОМОМ по МАНЬЯКУ → оглушення, той самий принцип
      *    ванільного скасування + делегування {@code ManiacStunModule}.
      *    Перевіряється ПІСЛЯ капкана (різні цілі, не перетинаються) і
@@ -138,13 +166,15 @@ public final class ServerHooks {
         }
 
         // Виживий б'є ЛОМОМ по капкану — звільнення (своє чи тімейта) або
-        // знешкодження. Ванільний удар скасовується завжди, коли ціль —
-        // капкан: шкоди йому бути не повинно, а що сталось (зараховано чи
-        // лом на перезарядці/зламаний), вирішує TrapModule.
-        if (event.getTarget() instanceof com.log_to_kot.maniacmod.entity.BearTrapEntity trap
+        // знешкодження; по димовій міні — лише знешкодження до спрацювання.
+        // Ванільний удар скасовується завжди, коли ціль — така пастка:
+        // шкоди їй бути не повинно, а що сталось (зараховано чи лом на
+        // перезарядці/зламаний), вирішує TrapModule.
+        if ((event.getTarget() instanceof com.log_to_kot.maniacmod.entity.BearTrapEntity
+                || event.getTarget() instanceof com.log_to_kot.maniacmod.entity.SmokeMineEntity)
             && match.isSurvivor(attacker.getUUID())) {
             event.setCanceled(true);
-            match.traps().onCrowbarHit(attacker, trap, attacker.getMainHandItem());
+            match.traps().onCrowbarHit(attacker, event.getTarget(), attacker.getMainHandItem());
             return;
         }
 
@@ -163,6 +193,15 @@ public final class ServerHooks {
             } else {
                 match.maniacStun().onCrowbarHitManiac(attacker, targetPlayer, held);
             }
+            return;
+        }
+
+        // Тіло офлайн-гравця — це той самий «гравець»: PvP по ньому теж немає, а оглушення
+        // лому/бити по тілу маньяка немає сенсу (він не рухається). Урон тілу завдає лише
+        // удар маньяка (ManiacCombatModule) і пастки.
+        if (dev.shaurmalib.forge.offline.OfflineActors.isAvatar(event.getTarget())
+            && match.isSurvivor(attacker.getUUID())) {
+            event.setCanceled(true);
             return;
         }
 
@@ -206,12 +245,38 @@ public final class ServerHooks {
         var lib = ManiacMod.lib();
         boolean hadRole = match.isManiac(player.getUUID()) || match.isSurvivor(player.getUUID());
 
+        // lib на HIGHEST уже повернув гравця до його тіла (позиція, прибране тіло); тут
+        // дізнаємося, ЩО саме повернулось. Результат віддається один раз.
+        var offline = com.log_to_kot.maniacmod.offline.ManiacOffline.module();
+        java.util.Optional<dev.shaurmalib.common.offline.OfflineReturn> back = offline == null
+            ? java.util.Optional.empty() : offline.takeReturn(player.getUUID());
+        boolean returnedAlive = back.isPresent() && hadRole
+            && back.get().finalStatus() == dev.shaurmalib.common.offline.OfflineStatus.STANDING;
+
         if (!match.phases().isGameplay()) {
             // Немає активного матчу (LOBBY/CINEMATIC/SCATTER/ROLE_REVEAL
             // ще не встиг призначити ролі/ENDING/RESET) — гравець, що
             // заходить, завжди йде в лобі-точку тим самим шляхом, яким
             // ішов в оригіналі snipers_shaurma.
             lib.lobbyModule().sendToLobby(player);
+        } else if (returnedAlive) {
+            // Повернувся до свого ЖИВОГО тіла: роль, HP, пастка лишились за ним. Режим гри
+            // збережено в player.dat; applyReturn тут зашкодив би, бо його політика
+            // (RESET_TO_SPECTATOR) зробила б живого виживого глядачем.
+            match.onOfflineOwnerReturned(player.getUUID());
+            if (match.isSurvivor(player.getUUID())) {
+                match.survivors().onPlayerReturned(player);
+                match.evac().syncClearingsTo(player);
+                match.evac().syncStatusTo(player);
+            } else {
+                match.traps().syncLoadout(player);   // маньяк: набір пасток у HUD
+            }
+            match.traps().onPlayerReturned(player);
+        } else if (back.isPresent()) {
+            // Тіло вбили (або воно прострочене), поки власник був офлайн: з матчу його вже
+            // виключено, лут випав. Далі як будь-хто, хто зайшов посеред матчу: глядач.
+            match.onOfflineOwnerReturned(player.getUUID());
+            lib.playerLifecycleModule().applyJoin(player);
         } else if (hadRole) {
             // Був у цьому матчі (маньяк ніколи не видаляється зі складу
             // при виході; виживий видаляється лише при остаточному
@@ -299,6 +364,7 @@ public final class ServerHooks {
     @SubscribeEvent
     public void onEntityJoin(EntityJoinLevelEvent event) {
         if (!(event.getLevel() instanceof net.minecraft.server.level.ServerLevel)) return;
+        if (event.getEntity() == null) return;
         if (!com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry
                 .isRegistered(event.getEntity())) return;
 

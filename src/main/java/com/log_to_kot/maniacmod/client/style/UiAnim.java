@@ -102,6 +102,24 @@ public final class UiAnim {
         play(SoundEvents.NOTE_BLOCK_BASEDRUM.get(), 0.45f, 0.42f);
     }
 
+    // ── Звуки ESC-меню та екрана оцінок (відкриття/закриття — без звуку) ─
+
+    /** Наведення на кнопку меню — сухий низький «тік». */
+    public static void playMenuHover() {
+        play(SoundEvents.NOTE_BLOCK_HAT.get(), 0.30f, 0.55f);
+    }
+
+    /** Кнопка «небезпечної» дії (вихід) натиснута вперше — тривожний подвійний тон. */
+    public static void playMenuWarn() {
+        play(SoundEvents.NOTE_BLOCK_BASEDRUM.get(), 0.50f, 0.28f);
+        play(SoundEvents.NOTE_BLOCK_BELL.get(), 0.25f, 0.55f);
+    }
+
+    /** Виставлена зірочка оцінки — короткий дзвінкий тон, вищий за вищої оцінки. */
+    public static void playStar(float value) {
+        play(SoundEvents.NOTE_BLOCK_BELL.get(), 0.35f, 0.7f + 0.22f * value);
+    }
+
     private static void play(SoundEvent sound, float volume, float pitch) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.getSoundManager() == null) return;

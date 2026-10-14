@@ -32,7 +32,15 @@ public final class MatchObjectives {
         SOMEONE_ESCAPED,
 
         /** Маньяк вивів з гри хоча б одного виживого. */
-        FIRST_BLOOD
+        FIRST_BLOOD,
+
+        // Нові значення — ЛИШЕ в кінець: ObjectiveSyncPacket шле їх бітовою маскою по ordinal().
+
+        /** Виживі викликали вертоліт із приймача. */
+        HELI_CALLED,
+
+        /** Сигнальну ракету запущено в зоні галявини — вертоліт летить. */
+        FLARE_FIRED
     }
 
     private final Set<Objective> completed = EnumSet.noneOf(Objective.class);

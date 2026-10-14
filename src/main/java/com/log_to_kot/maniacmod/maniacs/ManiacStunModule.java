@@ -359,6 +359,8 @@ public final class ManiacStunModule implements PhaseListener {
         spawnHitParticles(maniac);
 
         MatchOrchestrator m = match();
+        // Оглушений маньяк роняє тіло, яке ніс: воно падає на землю й знову лежить.
+        if (m != null) m.hooks().onManiacStunned(maniac.getUUID());
         List<ServerPlayer> everyone = m != null ? m.onlinePlayers() : List.of(maniac);
         ModNetwork.toPlayers(everyone, new ManiacStunPacket(maniac.getUUID(), true, duration));
     }

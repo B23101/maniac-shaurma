@@ -93,9 +93,29 @@ public final class BoneClipLoader {
                         channelEntry.getValue(), warnings);
                     if (keys.isEmpty()) continue;
                     for (BoneClip.Key key : keys) maxKeyTime = Math.max(maxKeyTime, key.time());
+                    if (channel == BoneClip.Channel.SCALE) warnZeroScale(bone, keys, warnings);
                     tracks.put(channel, new BoneClip.Track(keys));
                 }
-                if (!tracks.isEmpty()) bones.put(bone, tracks);
+                if (tracks.isEmpty()) continue;
+                // Blockbench-експорт інколи містить ОДНУ кістку під двома іменами (rightItem і
+                // right_item, rightArm і right_arm) — після normalizeBone це той самий ключ.
+                // Раніше друга копія мовчки ПЕРЕПИСУВАЛА першу цілком (так статичне
+                // right_item: [0,4,12] з кінця файлу «з'їдало» анімовану позицію rightItem).
+                // Тепер канали зливаються; якщо канал визначено двічі — перемагає ПЕРШИЙ,
+                // а про дубль іде попередження в лог, щоб його прибрали з файлу.
+                Map<BoneClip.Channel, BoneClip.Track> existing = bones.get(bone);
+                if (existing == null) {
+                    bones.put(bone, tracks);
+                } else {
+                    for (Map.Entry<BoneClip.Channel, BoneClip.Track> e : tracks.entrySet()) {
+                        if (existing.containsKey(e.getKey())) {
+                            warnings.accept("кістка '" + bone + "' (" + boneEntry.getKey() + "): канал "
+                                + e.getKey() + " уже заданий раніше під іншим іменем — дубль ігнорую");
+                        } else {
+                            existing.put(e.getKey(), e.getValue());
+                        }
+                    }
+                }
             }
         }
 
@@ -108,6 +128,26 @@ public final class BoneClipLoader {
         }
 
         return new BoneClip(chosen, length, loop, bones);
+    }
+
+    /**
+     * Масштаб 0 на кістці = кістка (або предмет у руці) ЗНИКАЄ. У Blockbench це майже завжди
+     * випадковий ключ (так було в {@code generator_repair.json}: right_item/left_item зі
+     * scale 0 ховали предмет під час ремонту), тому тут — гучне попередження.
+     */
+    private static void warnZeroScale(String bone, List<BoneClip.Key> keys, Consumer<String> warnings) {
+        for (BoneClip.Key key : keys) {
+            for (float[] v : new float[][] { key.pre(), key.post() }) {
+                for (float c : v) {
+                    if (Math.abs(c) < 1.0e-3f) {
+                        warnings.accept("кістка '" + bone + "': масштаб 0 на t=" + key.time()
+                            + " — кістка/предмет зникне. Постав 1,1,1 (предмет у руці з нульовим "
+                            + "масштабом ігнорується, див. HeldItemBones)");
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     // ── Розбір одного треку ─────────────────────────────────────────────

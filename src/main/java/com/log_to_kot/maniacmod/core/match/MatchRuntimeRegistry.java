@@ -29,6 +29,9 @@ public final class MatchRuntimeRegistry {
 
     /** Чи була сутність створена як тимчасова сутність матчу. */
     public static boolean isRegistered(Entity entity) {
+        // null приходить із подій (EntityJoinLevelEvent від чужих модів) і з
+        // обходу світу — раніше це був NPE, що валив цикл тіків сервера.
+        if (entity == null) return false;
         return entity.getPersistentData().getBoolean(MATCH_ENTITY_KEY);
     }
 
@@ -39,10 +42,23 @@ public final class MatchRuntimeRegistry {
     public static int cleanup(MinecraftServer server) {
         int removed = 0;
         for (ServerLevel level : server.getAllLevels()) {
+            // discard() видаляє сутність із тієї самої колекції, яку ми
+            // перебираємо, — це давало ConcurrentModificationException
+            // «іноді» (залежно від того, чи був після видаленої ще хтось
+            // в ітераторі) і ламало /maniac stop. Спершу збираємо список.
+            java.util.List<Entity> toRemove = new java.util.ArrayList<>();
             for (Entity entity : level.getAllEntities()) {
-                if (!isRegistered(entity) || entity instanceof ServerPlayer) continue;
-                entity.discard();
-                removed++;
+                if (entity == null || !isRegistered(entity) || entity instanceof ServerPlayer) continue;
+                toRemove.add(entity);
+            }
+            for (Entity entity : toRemove) {
+                try {
+                    entity.discard();
+                    removed++;
+                } catch (Exception e) {
+                    com.log_to_kot.maniacmod.ManiacMod.LOGGER.error(
+                        "[ManiacMod] не вдалося прибрати сутність матчу {}", entity, e);
+                }
             }
         }
         return removed;

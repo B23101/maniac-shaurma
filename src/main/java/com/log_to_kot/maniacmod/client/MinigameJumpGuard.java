@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.client;
 
+import com.log_to_kot.maniacmod.client.vr.VrCompat;
+
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
@@ -56,6 +58,7 @@ public final class MinigameJumpGuard {
     }
 
     private static boolean isSpaceDown() {
+        if (VrCompat.isVrActive()) return Minecraft.getInstance().options.keyJump.isDown();
         long window = Minecraft.getInstance().getWindow().getWindow();
         return GLFW.glfwGetKey(window, GLFW.GLFW_KEY_SPACE) == GLFW.GLFW_PRESS;
     }

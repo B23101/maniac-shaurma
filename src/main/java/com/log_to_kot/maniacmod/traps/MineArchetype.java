@@ -2,6 +2,7 @@ package com.log_to_kot.maniacmod.traps;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
 
 /**
  * Розтяжка (міна) — невидима для виживших без викрутки в руці.
@@ -15,13 +16,13 @@ public class MineArchetype extends TrapArchetype {
     }
 
     @Override
-    public void applyEffect(ServerPlayer victim, BlockPos trapPos) {
+    public void applyEffect(LivingEntity victim, BlockPos trapPos) {
         // TODO: перенести з v3 MineState (-1❤, сповільнення 3с, знешкодження викруткою)
         throw new UnsupportedOperationException("applyEffect() ще не перенесено з v3");
     }
 
     @Override
-    public boolean shouldTrigger(ServerPlayer candidate) {
+    public boolean shouldTrigger(LivingEntity candidate) {
         // TODO: перенести перевірку "виживший, не маньяк" з v3
         return true;
     }

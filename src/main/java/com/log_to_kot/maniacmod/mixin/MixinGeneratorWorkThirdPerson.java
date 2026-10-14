@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.mixin;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.client.ClientMatchState;
 import com.log_to_kot.maniacmod.client.HandPoseTracks;
 import com.log_to_kot.maniacmod.client.ItemPickupPose;
@@ -38,6 +40,7 @@ public abstract class MixinGeneratorWorkThirdPerson {
                                           float ageInTicks, float netHeadYaw, float headPitch,
                                           CallbackInfo ci) {
         if (!(entity instanceof Player player)) return;
+        if (VrServerCompat.isVrPlayer(player)) return; // VR: руки = контролери
         if (ClientMatchState.isProne(player.getUUID())) return;
 
         PlayerModel<?> m = (PlayerModel<?>) (Object) this;

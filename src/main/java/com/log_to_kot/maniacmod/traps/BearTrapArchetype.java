@@ -8,6 +8,7 @@ import com.log_to_kot.maniacmod.registry.ModEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.entity.Entity;
 
@@ -68,14 +69,17 @@ public class BearTrapArchetype extends TrapArchetype {
      * читав конфіг капкана в обхід архетипу.
      */
     @Override
-    public void applyEffect(ServerPlayer victim, BlockPos trapPos) {
+    public void applyEffect(LivingEntity victim, BlockPos trapPos) {
         var match = ManiacMod.match();
         if (match == null) return;
 
         spawnTriggerParticles(victim);
 
         int damage = ManiacConfigs.get(ConfigSchema.BEAR_TRAP_DAMAGE);
-        if (damage > 0 && match.damageSurvivor(victim.getUUID(), damage)) {
+        java.util.UUID id = com.log_to_kot.maniacmod.offline.ManiacOffline.idOf(victim);
+        if (id == null) return;
+        if (damage > 0 && match.damageSurvivor(id, damage)) {
+            // Онлайн-гравець або тіло: SurvivorModule сам обирає шлях (повалення з таймером).
             match.survivors().onSurvivorDowned(victim);
         }
         match.survivors().onTrapLegDamage(victim,
@@ -89,7 +93,7 @@ public class BearTrapArchetype extends TrapArchetype {
      * того, чи вистачило шкали цілісності ніг для реального перелому
      * цим конкретним ударом.
      */
-    private static void spawnTriggerParticles(ServerPlayer victim) {
+    private static void spawnTriggerParticles(LivingEntity victim) {
         if (!(victim.level() instanceof ServerLevel level)) return;
         for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
             if (viewer.serverLevel() != level) continue;
@@ -101,12 +105,12 @@ public class BearTrapArchetype extends TrapArchetype {
 
     /** Спрацьовує лише на живого виживого, який ще не в пастці й не лежить. */
     @Override
-    public boolean shouldTrigger(ServerPlayer candidate) {
+    public boolean shouldTrigger(LivingEntity candidate) {
         var match = ManiacMod.match();
         if (match == null) return false;
-        var id = candidate.getUUID();
-        if (!match.isSurvivor(id)) return false;
-        if (candidate.isSpectator() || candidate.isCreative()) return false;
+        var id = com.log_to_kot.maniacmod.offline.ManiacOffline.idOf(candidate);
+        if (id == null || !match.isSurvivor(id)) return false;
+        if (candidate instanceof ServerPlayer sp && (sp.isSpectator() || sp.isCreative())) return false;
         return match.survivorStateOf(id) != com.log_to_kot.maniacmod.survivors.SurvivorState.UNCONSCIOUS
             && match.survivorStateOf(id) != com.log_to_kot.maniacmod.survivors.SurvivorState.CRAWLING;
     }

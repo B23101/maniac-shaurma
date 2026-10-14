@@ -68,7 +68,9 @@ final class TrapPlacementClientRules {
     static PlacementResult checkOccupied(ClientLevel level, BlockPos floor) {
         AABB box = new AABB(floor.above());
         for (Entity e : level.getEntities((Entity) null, box.inflate(0.3),
-                x -> x instanceof BearTrapEntity || x instanceof RopeTrapEntity)) {
+                x -> x instanceof BearTrapEntity || x instanceof RopeTrapEntity
+                    || x instanceof com.log_to_kot.maniacmod.entity.SmokeMineEntity
+                    || x instanceof com.log_to_kot.maniacmod.entity.SpikeTrapEntity)) {
             if (e.isAlive()) return PlacementResult.OCCUPIED;
         }
 

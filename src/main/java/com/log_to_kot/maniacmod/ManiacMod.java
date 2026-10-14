@@ -10,6 +10,7 @@ import com.log_to_kot.maniacmod.core.match.MatchOrchestrator;
 import com.log_to_kot.maniacmod.core.match.MatchRuntimeRegistry;
 import com.log_to_kot.maniacmod.core.match.MatchBlockRegistry;
 import com.log_to_kot.maniacmod.maniacs.ManiacRegistry;
+import com.log_to_kot.maniacmod.offline.ManiacOffline;
 import com.log_to_kot.maniacmod.net.ModNetwork;
 import com.log_to_kot.maniacmod.registry.ModBlocks;
 import com.log_to_kot.maniacmod.registry.ModCreativeTab;
@@ -25,6 +26,8 @@ import dev.shaurmalib.common.damage.DamageInterceptorRegistry;
 import dev.shaurmalib.common.lifecycle.DisconnectPolicy;
 import dev.shaurmalib.common.lifecycle.JoinPolicy;
 import dev.shaurmalib.common.lifecycle.MatchLifecycleState;
+import dev.shaurmalib.common.offline.OfflineCloseReason;
+import dev.shaurmalib.forge.offline.OfflineAvatarBase;
 import dev.shaurmalib.common.chat.ChatChannelRegistry;
 import dev.shaurmalib.forge.chat.ChatModule;
 import dev.shaurmalib.common.sound.SoundCategoryRegistry;
@@ -32,6 +35,7 @@ import dev.shaurmalib.common.sound.SoundCueRegistry;
 import dev.shaurmalib.forge.ShaurmaLib;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
 import net.minecraftforge.event.server.ServerAboutToStartEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -90,6 +94,11 @@ public class ManiacMod {
     public ManiacMod() {
         modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
+        // VR (Vivecraft): клієнтські налаштування. Файл створюється лише на клієнті.
+        net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
+            net.minecraftforge.fml.config.ModConfig.Type.CLIENT,
+            com.log_to_kot.maniacmod.vr.VrClientConfig.SPEC, "maniacmod-vr-client.toml");
+
         // ── Контент. Нічого, крім реєстрації: жодної логіки в конструкторі ──
         ModItems.ITEMS.register(modEventBus);
         ModBlocks.BLOCKS.register(modEventBus);
@@ -101,12 +110,14 @@ public class ManiacMod {
 
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::onRegisterOverlays);
+        modEventBus.addListener(this::onEntityAttributes);
 
         // Серверний lifecycle — на forge-шині, не на mod-шині.
         MinecraftForge.EVENT_BUS.addListener(this::onServerAboutToStart);
         MinecraftForge.EVENT_BUS.addListener(this::onServerStopping);
         MinecraftForge.EVENT_BUS.register(new ServerHooks());
         MinecraftForge.EVENT_BUS.register(new GroundItemHooks());
+        MinecraftForge.EVENT_BUS.register(new com.log_to_kot.maniacmod.server.BarricadeHooks());
         // Таймер для LiveHeldItemAction.beginServerTimed (аптечка,
         // удар ломом тощо) — той самий стиль реєстрації, що вище.
         MinecraftForge.EVENT_BUS.register(new com.log_to_kot.maniacmod.items.LiveHeldItemAction.Ticker());
@@ -156,6 +167,12 @@ public class ManiacMod {
             .withPlayerLifecycle(JoinPolicy.SPECTATE, null,
                 DisconnectPolicy.RESET_TO_SPECTATOR, null)
             .withLobby(NAMETAG_HIDE_TEAM, match::currentLobbySpawn)
+            // Гравець, що вийшов посеред матчу, лишає тіло: воно лишається в матчі
+            // (пастка, удар маньяка, лут), а власник повертається в той самий стан.
+            // Scope тіл відкривається/закривається вручну в lifecycle-sink нижче:
+            // шина lifecycle створюється всередині цього ж ланцюжка, тож
+            // bindScopeToLifecycle тут недоступний.
+            .withOfflinePresence(ManiacOffline.config(NAMETAG_HIDE_TEAM))
             // Слоти інвентаря: 4 у виживого, 0 у маньяка. Саме це
             // звільняє клавіші 1-4 маньяку і 5 виживому.
             .withInventorySlotAllocation()
@@ -204,6 +221,8 @@ public class ManiacMod {
         ManiacConfigs.init(lib.configModule());
         MapPointConfigs.init(ManiacConfigs.namespaceDirectory());
         DarkZoneConfigs.init(ManiacConfigs.namespaceDirectory());
+        com.log_to_kot.maniacmod.config.ClearingConfigs.init(ManiacConfigs.namespaceDirectory());
+        com.log_to_kot.maniacmod.config.BarricadeConfigs.init(ManiacConfigs.namespaceDirectory());
         match.reloadConfiguredMap();
 
         // Звуки описуються один раз — далі будь-де досить SoundCenter.play(...).
@@ -259,16 +278,33 @@ public class ManiacMod {
                 if (current == null) return false;
                 return current.isSurvivor(victim.getUUID()) || current.isManiac(victim.getUUID());
             });
+        // Те саме правило для ТІЛА офлайн-гравця (там немає ServerPlayer, лише UUID
+        // власника). Учасник матчу не отримує ванільного урону ні онлайн, ні у вигляді
+        // тіла. HP знімає лише удар маньяка/пастка через MatchOrchestrator.damageSurvivor.
+        // Порожнеча і /kill обходять це правило на боці lib (BYPASSES_INVULNERABILITY).
+        DamageInterceptorRegistry.registerOwnerRule(MOD_ID + ":match_damage_owner",
+            (owner, source, amount, ctx) -> {
+                if (!com.log_to_kot.maniacmod.core.phase.Phases.allows(
+                        com.log_to_kot.maniacmod.core.phase.PhaseRule.DAMAGE)) {
+                    return true;
+                }
+                MatchOrchestrator current = match;
+                if (current == null) return false;
+                return current.isSurvivor(owner) || current.isManiac(owner);
+            });
 
         // Фази дзеркаляться в грубий стан бібліотеки одним місцем.
         // v3 тримав для цього окремий enum GameState і switch — тепер
         // кожна фаза сама знає свій LifecycleMirror.
-        match.attachLifecycle(state -> lib.lifecycleModule().lifecycleBus()
-            .transitionTo(switch (state) {
+        match.attachLifecycle(state -> {
+            MatchLifecycleState next = switch (state) {
                 case IDLE   -> MatchLifecycleState.IDLE;
                 case ACTIVE -> MatchLifecycleState.ACTIVE;
                 case ENDING -> MatchLifecycleState.ENDING;
-            }));
+            };
+            lib.lifecycleModule().lifecycleBus().transitionTo(next);
+            syncOfflineScope(next);
+        });
 
         // ── Реєстрація ігрових модулів ──────────────────────────────────
         // Кожен модуль — PhaseListener. Додати механіку = додати рядок
@@ -315,6 +351,26 @@ public class ManiacMod {
         ChatModule.shutdown();
         lib = null;
         LOGGER.info("[ManiacMod] матч знято, стан очищено");
+    }
+
+    /**
+     * Тіла живуть лише поки матч активний: вихід посеред HUNT/POWERED/FINALE лишає тіло,
+     * а вхід у ENDING чи IDLE прибирає всі тіла без дропу й без подій.
+     * Повторні виклики на тому самому стані нешкідливі.
+     */
+    private static void syncOfflineScope(MatchLifecycleState state) {
+        var module = ManiacOffline.module();
+        if (module == null) return;
+        if (state == MatchLifecycleState.ACTIVE) {
+            if (!module.isScopeOpen()) module.openScope();
+        } else if (module.isScopeOpen()) {
+            module.closeScope(OfflineCloseReason.MATCH_ENDED);
+        }
+    }
+
+    /** Атрибути тіла офлайн-гравця (без них PathfinderMob падає при створенні). */
+    private void onEntityAttributes(final EntityAttributeCreationEvent event) {
+        event.put(ModEntityTypes.OFFLINE_AVATAR.get(), OfflineAvatarBase.createAttributes().build());
     }
 
     private void onRegisterOverlays(final RegisterGuiOverlaysEvent event) {

@@ -62,6 +62,10 @@ final class TabGeoView {
     private static final ResourceLocation GENERATOR_ANIMATION =
         new ResourceLocation(ManiacMod.MOD_ID, "animations/entity/generator.animation.json");
 
+    private static ResourceLocation geo(String n)  { return new ResourceLocation(ManiacMod.MOD_ID, "geo/entity/" + n + ".geo.json"); }
+    private static ResourceLocation tex(String n)  { return new ResourceLocation(ManiacMod.MOD_ID, "textures/entity/" + n + ".png"); }
+    private static ResourceLocation anim(String n) { return new ResourceLocation(ManiacMod.MOD_ID, "animations/entity/" + n + ".animation.json"); }
+
     static boolean available() {
         return !broken;
     }
@@ -78,6 +82,27 @@ final class TabGeoView {
         Entry e = ENTRIES.computeIfAbsent("generator:" + loop, k -> new Entry(
             new Prop(GENERATOR_MODEL, GENERATOR_TEXTURE, GENERATOR_ANIMATION, loop)));
         return draw(g, e, cx, baseY, scale, yawDeg, 10f);
+    }
+
+    /** Приймач. {@code loop}: «off» / «ready» (живлення є) / «called» — ті самі, що в світі. */
+    static boolean drawReceiver(GuiGraphics g, float cx, float baseY, float scale, float yawDeg, String loop) {
+        Entry e = ENTRIES.computeIfAbsent("receiver:" + loop, k -> new Entry(
+            new Prop(geo("receiver"), tex("receiver"), anim("receiver"), loop)));
+        return draw(g, e, cx, baseY, scale, yawDeg, 10f);
+    }
+
+    /** Вертоліт у польоті (анімація «fly» — гвинт крутиться). Модель велика, масштаб підбирає викликач. */
+    static boolean drawHelicopter(GuiGraphics g, float cx, float baseY, float scale, float yawDeg) {
+        Entry e = ENTRIES.computeIfAbsent("helicopter", k -> new Entry(
+            new Prop(geo("helicopter"), tex("helicopter"), anim("helicopter"), "fly")));
+        return draw(g, e, cx, baseY, scale, yawDeg, 14f);
+    }
+
+    /** Сигнальна ракета: власна невелика модель, фітиль іскрить. */
+    static boolean drawFlare(GuiGraphics g, float cx, float baseY, float scale, float yawDeg) {
+        Entry e = ENTRIES.computeIfAbsent("signal_flare", k -> new Entry(
+            new Prop(geo("signal_flare"), tex("signal_flare"), anim("signal_flare"), "idle")));
+        return draw(g, e, cx, baseY, scale, yawDeg, 8f);
     }
 
     /** Маньяк заданого архетипу: анімація стояння з його набору анімацій. */

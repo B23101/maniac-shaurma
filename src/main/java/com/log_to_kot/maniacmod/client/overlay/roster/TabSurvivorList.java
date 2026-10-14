@@ -73,6 +73,15 @@ final class TabSurvivorList {
         return Component.translatable("maniacmod.tab.status." + s.name().toLowerCase(Locale.ROOT)).getString();
     }
 
+    /**
+     * Чи варто взагалі писати стан. «Здоровий» — норма: його вже каже хп-шкала,
+     * а рядок «Здоровий» у кожного гравця лише засмічує список. Пишемо тільки те,
+     * що змінює гру: зламана нога, повзе, без свідомості, втік, вибув.
+     */
+    static boolean worthShowing(SurvivorState s) {
+        return s != SurvivorState.HEALTHY;
+    }
+
     static int stateColor(SurvivorState s) {
         return switch (s) {
             case HEALTHY    -> ManiacTabTheme.OK;
@@ -226,12 +235,19 @@ final class TabSurvivorList {
         int rightBlock = withVitals ? 96 : 0;
         String name = TabFx.clip(c.font, e.displayName(), w - (nameX - x) - rightBlock - 6, 1f);
         int nameColor = isMe ? ManiacTabTheme.SILVER_HI : 0xFFE6E9EE;
-        TabFx.text(g, c.font, name, nameX, y + 3, 1f, TabFx.a(downed ? 0xFFFFB0B5 : nameColor, 1f));
+        // Здоровий гравець: лише ім'я по центру рядка (стан — норма, нічого писати).
+        boolean showState = withVitals && worthShowing(state);
+        int nameY = withVitals && !showState ? y + (h - c.font.lineHeight) / 2 : y + 3;
+        TabFx.text(g, c.font, name, nameX, nameY, 1f, TabFx.a(downed ? 0xFFFFB0B5 : nameColor, 1f));
 
         if (withVitals) {
-            int sc = stateColor(state);
-            g.fill(nameX, y + 15, nameX + 3, y + 18, TabFx.a(sc, 0.75f + 0.25f * TabFx.pulse(c.nowMs, 900f)));
-            TabFx.text(g, c.font, stateLabel(state), nameX + 6, y + 14, 0.7f, TabFx.a(sc, 1f));
+            if (showState) {
+                int sc = stateColor(state);
+                float blink = 0.75f + 0.25f * TabFx.pulse(c.nowMs, 900f);
+                TabIcons.Icon icon = TabIcons.forState(state);
+                TabIcons.draw(g, icon, nameX, y + 14, TabFx.a(sc, blink), 1);
+                TabFx.text(g, c.font, stateLabel(state), nameX + icon.w + 4, y + 14, 0.7f, TabFx.a(sc, 1f));
+            }
             drawVitals(c, e, a, downed, x + w - rightBlock - 4, y, rightBlock, h);
         } else if (isMe) {
             String you = Component.translatable("maniacmod.tab.tag.you").getString().toUpperCase(Locale.ROOT);
@@ -247,6 +263,13 @@ final class TabSurvivorList {
         if (downed) {
             // Таймер до смерті: реальні дані сервера, а не вигадка клієнта.
             DownedSurvivorsPacket.Entry d = downedEntry(e.playerId());
+            if (d != null && !d.timed()) {
+                // Лежить / несуть: таймера немає, показуємо лише статус.
+                String label = Component.translatable("maniacmod.hook.status." + d.status()).getString();
+                TabFx.textRight(g, c.font, label, right, y + 3, 0.9f, TabFx.a(ManiacTabTheme.WARN, 1f));
+                GeneratorFuelUiTheme.drawBarFx(g, bx, y + 15, bw, 5, 1f, 1f, ManiacTabTheme.WARN, 0f);
+                return;
+            }
             if (d != null) {
                 long ms = ClientMatchState.downedMillisLeft(d);
                 float frac = ClientMatchState.downedFraction(d);
@@ -310,7 +333,11 @@ final class TabSurvivorList {
             } else {
                 c.theme.drawStrikeThrough(c.g, c.font, name, x + 20, ry + 2, 1f, c.style.tickCount());
             }
-            TabFx.textRight(c.g, c.font, stateLabel(e.state()).toUpperCase(Locale.ROOT), x + w - 6, ry + 2, 0.7f, TabFx.a(col, 1f));
+            String stateText = stateLabel(e.state()).toUpperCase(Locale.ROOT);
+            TabFx.textRight(c.g, c.font, stateText, x + w - 6, ry + 2, 0.7f, TabFx.a(col, 1f));
+            TabIcons.Icon stateIcon = TabIcons.forState(e.state());
+            int iconX = x + w - 6 - TabFx.width(c.font, stateText, 0.7f) - stateIcon.w - 4;
+            TabIcons.draw(c.g, stateIcon, iconX, ry + 3, TabFx.a(col, 1f), 1);
             pose.popPose();
         }
         return cursor + list.size() * COMPACT_H;

@@ -1,5 +1,7 @@
 package com.log_to_kot.maniacmod.traps;
 
+import com.log_to_kot.maniacmod.vr.VrServerCompat;
+
 import com.log_to_kot.maniacmod.ManiacMod;
 import com.log_to_kot.maniacmod.config.ConfigSchema;
 import com.log_to_kot.maniacmod.config.ManiacConfigs;
@@ -10,6 +12,8 @@ import com.log_to_kot.maniacmod.core.phase.PhaseRule;
 import com.log_to_kot.maniacmod.entity.BearTrapEntity;
 import com.log_to_kot.maniacmod.entity.ElectricWireEntity;
 import com.log_to_kot.maniacmod.entity.RopeTrapEntity;
+import com.log_to_kot.maniacmod.entity.SmokeMineEntity;
+import com.log_to_kot.maniacmod.entity.SpikeTrapEntity;
 import com.log_to_kot.maniacmod.items.GeoScissorsItem;
 import com.log_to_kot.maniacmod.maniacs.ManiacArchetype;
 import com.log_to_kot.maniacmod.map.minigame.TargetMinigameSpec;
@@ -21,21 +25,29 @@ import com.log_to_kot.maniacmod.net.s2c.minigame.TargetMinigameOpenPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.ActionBarPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.TrapEscapePromptPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.TrapVictimGlowPacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.SmokeMufflePacket;
+import com.log_to_kot.maniacmod.net.s2c.notify.SpikeHitPacket;
 import com.log_to_kot.maniacmod.net.s2c.notify.WireShockPacket;
 import com.log_to_kot.maniacmod.net.s2c.minigame.TrapEscapeAttemptPacket;
 import com.log_to_kot.maniacmod.net.s2c.traps.TrapCatalogPacket;
 import com.log_to_kot.maniacmod.net.s2c.traps.TrapLoadoutPacket;
+import com.log_to_kot.maniacmod.registry.ModParticles;
 import com.log_to_kot.maniacmod.registry.ModSounds;
 import com.log_to_kot.maniacmod.sound.OggSoundLength;
 import com.log_to_kot.maniacmod.survivors.SurvivorState;
+import dev.shaurmalib.forge.stamina.StaminaService;
 import dev.shaurmalib.common.overlay.ActionBarMessageType;
 import dev.shaurmalib.common.lock.LockType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.effect.MobEffects;
+import com.log_to_kot.maniacmod.offline.ManiacOffline;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -43,6 +55,7 @@ import net.minecraft.world.phys.Vec3;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -64,7 +77,8 @@ import java.util.function.Supplier;
  *   • {@link #placed}      — усі пастки матчу (для тіку й очищення);
  *   • {@link #victims}     — хто зараз у пастці і в якій;
  *   • {@link #slotCooldown} — перезарядка розміщення по слотах;
- *   • {@link #immunity}    — короткий імунітет жертви після звільнення.
+ *   • {@link #immunity}    — короткий імунітет жертви після звільнення;
+ *   • {@link #smokeClouds} — хмари димових мін (див. секцію «Димова міна»).
  * Усе це стирається на виході з ігрових фаз. Сама сутність прибирається
  * {@code MatchRuntimeRegistry.cleanup}, тому світ не засмічується.
  *
@@ -180,6 +194,63 @@ public final class TrapModule implements PhaseListener {
     private record WireShock(UUID victimId, int ticksLeft, int elapsed) {}
 
     /**
+     * Активні хмари газу димових мін за UUID сутності-міни. Хмара не
+     * «тримає» гравця (на відміну від капкана) — тому жертви сюди НЕ
+     * потрапляють у {@link #victims}, а лок руху не ставиться: з хмари
+     * можна вибігти.
+     */
+    private final Map<UUID, SmokeCloud> smokeClouds = new HashMap<>();
+
+    /**
+     * Гравець → скільки тіків він ще світиться контуром після хмари. Склад
+     * їде в тому самому {@link TrapVictimGlowPacket}, що й жертви капкана
+     * (див. {@link #broadcastVictimGlow}) — окремого шару підсвітки немає.
+     */
+    private final Map<UUID, Integer> smokeGlow = new HashMap<>();
+
+    /** Хто зараз у хмарі й має приглушені звуки (щоб слати пакет лише на зміну). */
+    private final Set<UUID> smokeMuffled = new HashSet<>();
+
+    /**
+     * Гравець → скільки тіків стаміна ще НЕ відновлюється після газу. У хмарі
+     * щотіка скидається на {@code smokeMineStaminaLockTicks}, після виходу
+     * спадає до нуля; поки &gt; 0 — стаміна притиснута до нуля.
+     */
+    private final Map<UUID, Integer> smokeStaminaLock = new HashMap<>();
+
+    /** Одна хмара газу. Стан змінюється щотіка лише в {@link #tickSmoke}. */
+    private static final class SmokeCloud {
+        final ServerLevel level;
+        final UUID mineId;
+        /** Центр міни: x/z — середина блока, floorY — верхня грань підлоги. */
+        final double x, floorY, z;
+        int ticksLeft;
+        int elapsed;
+        /** Гравець → скільки тіків поспіль він у хмарі (за цим щосекунди йде доза). */
+        final Map<UUID, Integer> inside = new HashMap<>();
+        /** Кого цей газ уже зарахував у статистику «жертв» (кожен — один раз за хмару). */
+        final Set<UUID> counted = new HashSet<>();
+
+        SmokeCloud(ServerLevel level, UUID mineId, double x, double floorY, double z, int ticks) {
+            this.level = level;
+            this.mineId = mineId;
+            this.x = x;
+            this.floorY = floorY;
+            this.z = z;
+            this.ticksLeft = ticks;
+        }
+    }
+
+    /** Скільки тіків наприкінці хмари нові частинки вже не додаємо — вони доживають і гаснуть разом із газом. */
+    private static final int SMOKE_NO_EMIT_TICKS = 60;
+
+    /** Густота диму: скільки частинок і як часто сиплемо (на ВСЮ зону, а не на кубик 3×3). */
+    private static final int SMOKE_EMIT_PERIOD_TICKS = 2;
+    private static final int SMOKE_EMIT_COUNT = 28;
+    /** Перший викид при спрацюванні — хмара «вибухає» одразу, а не наповнюється поступово. */
+    private static final int SMOKE_BURST_COUNT = 260;
+
+    /**
      * UUID капкана → тіків до наступного звуку боротьби жертви.
      *
      * ── Чому період = довжині файлу ─────────────────────────────────
@@ -257,9 +328,17 @@ public final class TrapModule implements PhaseListener {
         // через те, що не було кому натиснути. Клієнту одразу шлемо набір.
         if (phase.allows(PhaseRule.TRAPS)) {
             MatchOrchestrator m = match();
-            if (m != null && chosenSlots.isEmpty()) chooseAll(m.maniacArchetype());
+            ManiacArchetype archetype = m == null ? null : m.maniacArchetype();
+            // Автовибір лише там, де вибирати НЕМА З ЧОГО (каталог не більший за
+            // ліміт). Якщо вибір є — пастки з'являться, лише коли маньяк сам
+            // підтвердить їх у меню; гра тим часом триває.
+            if (m != null && chosenSlots.isEmpty() && !choiceRequired(archetype)) chooseAll(archetype);
             for (ServerPlayer p : players) {
-                if (m != null && m.isManiac(p.getUUID())) syncLoadout(p);
+                if (m == null || !m.isManiac(p.getUUID())) continue;
+                syncLoadout(p);
+                // Вибір ще не зроблено (старт командою, меню не встигло відкритись) —
+                // меню пропонуємо тут; якщо воно вже відкрите, клієнт лише оновить дані.
+                if (choicePending(archetype)) syncCatalogIfChoiceNeeded(p, archetype);
             }
             return;
         }
@@ -269,6 +348,7 @@ public final class TrapModule implements PhaseListener {
         clearLoadoutOnClient(players);
         releaseEveryone(players);
         placed.clear();
+        clearSmoke();
         // Разом із пастками зникає й їхній звуковий стан: у новому матчі
         // ті самі UUID не повторяться, але тримати мертві записи нема сенсу
         // (і саме цей виклик робить скидання повним, а не частковим).
@@ -308,6 +388,7 @@ public final class TrapModule implements PhaseListener {
         releaseInvalidVictims(players);
         tickEscapePrompts(players);
         tickEscapes(players);
+        tickSmoke();
     }
 
     // ── Вибір пасток у меню ──────────────────────────────────────────────
@@ -337,7 +418,7 @@ public final class TrapModule implements PhaseListener {
     }
 
     /**
-     * Автовибір: усі пастки архетипу до ліміту. Викликається, коли меню
+     * Автовибір: усі пастки архетипу до ліміту. Лише коли вибирати нема з чого, а раніше — коли меню
      * не показувалось (дебаг-режим, старт командою) — маньяк не має
      * лишитись без пасток лише через те, що не було кому натиснути.
      */
@@ -349,6 +430,19 @@ public final class TrapModule implements PhaseListener {
         for (int i = 0; i < archetype.traps().size() && chosenSlots.size() < limit; i++) {
             chosenSlots.add(i);
         }
+    }
+
+    /** Чи є з чого вибирати: каталог архетипу більший за ліміт пасток на матч. */
+    private boolean choiceRequired(ManiacArchetype archetype) {
+        if (archetype == null) return false;
+        int limit = Math.min(ManiacConfigs.get(ConfigSchema.TRAPS_PER_MATCH),
+                             ManiacArchetype.MAX_TRAP_SLOTS);
+        return archetype.traps().size() > limit;
+    }
+
+    /** Чи вже зроблено вибір (підтверджено в меню або взято автоматично). */
+    public boolean hasChosen() {
+        return !chosenSlots.isEmpty();
     }
 
     /** Порожній вибір — наступний матч починається без застарілих пасток. */
@@ -606,6 +700,8 @@ public final class TrapModule implements PhaseListener {
     /** Записує тіло пастки в реєстр, ставить перезарядку слоту й шле її клієнту. */
     private void finishPlacement(ServerPlayer maniac, int slot, TrapArchetype type, Entity body, BlockPos at) {
         placed.put(body.getUUID(), new PlacedTrap(type, body.getUUID()));
+        MatchOrchestrator stats = match();
+        if (stats != null) stats.recordTrapPlaced(maniac.getUUID(), type.id());
         int cooldown = type.placementCooldownTicks();
         slotCooldown[slot] = cooldown;
         ModNetwork.toPlayer(maniac,
@@ -669,7 +765,8 @@ public final class TrapModule implements PhaseListener {
     private boolean isOccupied(ServerLevel level, BlockPos floor) {
         AABB box = new AABB(floor.above());
         for (Entity e : level.getEntities((Entity) null, box.inflate(0.3),
-                x -> x instanceof BearTrapEntity || x instanceof RopeTrapEntity)) {
+                x -> x instanceof BearTrapEntity || x instanceof RopeTrapEntity
+                    || x instanceof SmokeMineEntity || x instanceof SpikeTrapEntity)) {
             if (isRegistered(e)) return true;
         }
 
@@ -693,6 +790,7 @@ public final class TrapModule implements PhaseListener {
 
     /** Чи модуль знає цю сутність. Сирота (пережила матч) — ні, і сама себе прибирає. */
     public boolean isRegistered(Entity entity) {
+        if (entity == null) return false;
         return placed.containsKey(entity.getUUID());
     }
 
@@ -714,12 +812,15 @@ public final class TrapModule implements PhaseListener {
         }
 
         AABB zone = trap.getBoundingBox();
-        for (ServerPlayer candidate : trap.level().getEntitiesOfClass(ServerPlayer.class, zone)) {
-            if (immunity.containsKey(candidate.getUUID())) continue;
-            if (victims.containsKey(candidate.getUUID())) continue;
+        // Гравці І тіла тих, хто вийшов: тіло, що стоїть у зоні, наступає на пастку так само.
+        for (LivingEntity candidate : ManiacOffline.inBox(trap.level(), zone)) {
+            UUID cid = ManiacOffline.idOf(candidate);
+            if (cid == null) continue;
+            if (immunity.containsKey(cid)) continue;
+            if (victims.containsKey(cid)) continue;
             // Лежачого пастка не ловить — і це перевіряється ОДИН раз тут,
             // на всі типи пасток, а не в кожній архетипі (див. canCatch).
-            if (!canCatch(candidate)) continue;
+            if (!canCatchId(cid)) continue;
             if (!info.type().shouldTrigger(candidate)) continue;
             trigger(trap, info, candidate);
             return;
@@ -779,9 +880,347 @@ public final class TrapModule implements PhaseListener {
      * {@link #tickTrap}.
      */
     private boolean canCatch(ServerPlayer candidate) {
+        return canCatchId(candidate.getUUID());
+    }
+
+    /** Те саме за UUID: потрібне й для тіла, якого як {@link ServerPlayer} немає. */
+    private boolean canCatchId(UUID id) {
         MatchOrchestrator m = match();
-        if (m == null || !m.isSurvivor(candidate.getUUID())) return false;
-        return standsUp(m.survivorStateOf(candidate.getUUID()));
+        if (m == null || !m.isSurvivor(id)) return false;
+        return standsUp(m.survivorStateOf(id));
+    }
+
+    // ── Димова міна ──────────────────────────────────────────────────────
+    //
+    // Життєвий цикл: міна чекає → хтось наступив ({@link #tickSmokeMine}) →
+    // хмара ({@link SmokeCloud}) живе {@code smokeMineCloudTicks} і веде
+    // {@link #tickSmoke} → хмара скінчилась, міна зникає. Усередині зони
+    // (квадрат навколо міни) щосекунди діє доза газу
+    // ({@link SmokeMineArchetype#applyEffect}: шкода + сліпота), гравець
+    // світиться контуром ({@link #smokeGlow}) і чує приглушено
+    // ({@link #smokeMuffled}). Хмара НЕ знерухомлює: вибігти можна.
+
+    /** Тік міни (з {@code SmokeMineEntity.tick}): чекає, чи хтось наступить. */
+    public void tickSmokeMine(SmokeMineEntity mine) {
+        PlacedTrap info = placed.get(mine.getUUID());
+        if (info == null) return;
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return;
+        // Спрацювала — далі хмару веде tickSmoke, міна більше нікого не «ловить».
+        if (mine.isTriggered()) return;
+
+        for (LivingEntity candidate : ManiacOffline.inBox(mine.level(), mine.getBoundingBox())) {
+            UUID cid = ManiacOffline.idOf(candidate);
+            if (cid == null) continue;
+            if (immunity.containsKey(cid)) continue;
+            if (victims.containsKey(cid)) continue;
+            if (!canCatchId(cid)) continue;
+            if (!info.type().shouldTrigger(candidate)) continue;
+            triggerSmokeMine(mine);
+            return;
+        }
+    }
+
+    /** Наступили: клацання, шипіння, перша порція диму — і хмара починає жити. */
+    private void triggerSmokeMine(SmokeMineEntity mine) {
+        if (!(mine.level() instanceof ServerLevel level)) return;
+        mine.setTriggered(true);
+
+        SmokeCloud cloud = new SmokeCloud(level, mine.getUUID(), mine.getX(), mine.getY(), mine.getZ(),
+            ManiacConfigs.get(ConfigSchema.SMOKE_MINE_CLOUD_TICKS));
+        smokeClouds.put(mine.getUUID(), cloud);
+
+        level.playSound(null, mine.blockPosition(), ModSounds.TRAP_SNAP.get(),
+            SoundSource.BLOCKS, 1.0f, 1.0f);
+        level.playSound(null, mine.blockPosition(), SoundEvents.FIRE_EXTINGUISH,
+            SoundSource.BLOCKS, 2.0f, 0.6f);
+        sendSmoke(cloud, SMOKE_BURST_COUNT);
+    }
+
+    /**
+     * Раз на тік для ВСІХ хмар і для спільного стану «у хмарі»: дози газу,
+     * підсвітка, глушіння звуків, прибирання відпрацьованих хмар.
+     *
+     * <p>Спільний стан (підсвітка, глушіння) рахується тут, а не в самій
+     * хмарі, бо гравець може стояти одразу в кількох хмарах: пакет шлеться
+     * лише коли він увійшов у першу чи вийшов з останньої.</p>
+     */
+    private void tickSmoke() {
+        MatchOrchestrator m = match();
+        if (m == null) return;
+
+        Set<UUID> insideNow = new HashSet<>();
+        boolean glowChanged = false;
+        int glowTicks = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_GLOW_TICKS);
+        int staminaLockTicks = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_STAMINA_LOCK_TICKS);
+
+        for (SmokeCloud cloud : new ArrayList<>(smokeClouds.values())) {
+            PlacedTrap info = placed.get(cloud.mineId);
+            if (info == null) {
+                // Міну прибрали (скидання матчу): хмарі нічого лишатись.
+                smokeClouds.remove(cloud.mineId);
+                continue;
+            }
+
+            double r = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_RADIUS_BLOCKS);
+            double h = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_HEIGHT_BLOCKS);
+            AABB zone = new AABB(cloud.x - r, cloud.floorY, cloud.z - r,
+                cloud.x + r, cloud.floorY + h, cloud.z + r);
+            BlockPos minePos = BlockPos.containing(cloud.x, cloud.floorY, cloud.z);
+
+            Set<UUID> inZone = new HashSet<>();
+            for (LivingEntity p : ManiacOffline.inBox(cloud.level, zone)) {
+                UUID id = ManiacOffline.idOf(p);
+                // Те саме правило, що й у інших пасток: лише живий виживий на ногах.
+                if (id == null || !canCatchId(id) || !info.type().shouldTrigger(p)) continue;
+                inZone.add(id);
+                insideNow.add(id);
+                if (cloud.counted.add(id)) m.recordTrapCaught(info.type().id(), id);
+
+                int inTicks = cloud.inside.getOrDefault(id, 0);
+                // Доза (шкода) в момент входу й далі щосекунди, поки гравець у хмарі.
+                if (inTicks % 20 == 0) info.type().applyEffect(p, minePos);
+                // Сліпота й стаміна — КОЖЕН тік, а не раз на секунду: інакше
+                // сліпота могла б «мигнути», а стаміна встигала б відновитись.
+                // Стаміна є лише в онлайн-гравця; тіло лише дихає димом (шкода + підсвітка).
+                cloud.inside.put(id, inTicks + 1);
+                if (p instanceof ServerPlayer sp) {
+                    SmokeMineArchetype.applyGasTick(sp);
+                    if (staminaLockTicks > 0) smokeStaminaLock.put(id, staminaLockTicks);
+                }
+
+                if (glowTicks > 0 && smokeGlow.put(id, glowTicks) == null) glowChanged = true;
+            }
+            // Вийшов із зони — лічильник скидається: повторний вхід знову дає дозу одразу.
+            cloud.inside.keySet().retainAll(inZone);
+
+            cloud.elapsed++;
+            if (cloud.elapsed % SMOKE_EMIT_PERIOD_TICKS == 0 && cloud.ticksLeft > SMOKE_NO_EMIT_TICKS) {
+                sendSmoke(cloud, SMOKE_EMIT_COUNT);
+            }
+            if (--cloud.ticksLeft <= 0) endSmokeCloud(cloud);
+        }
+
+        // «Хвіст» стаміни: поза хмарою лічильник спадає, а поки він > 0 —
+        // стаміна щотіка притиснута до нуля (не відновлюється).
+        for (Iterator<Map.Entry<UUID, Integer>> it = smokeStaminaLock.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<UUID, Integer> entry = it.next();
+            ServerPlayer p = onlinePlayer(entry.getKey());
+            if (p == null) {
+                it.remove();
+                continue;
+            }
+            if (!insideNow.contains(entry.getKey())) {
+                int left = entry.getValue() - 1;
+                if (left <= 0) {
+                    it.remove();
+                    continue;
+                }
+                entry.setValue(left);
+            }
+            SmokeMineArchetype.drainStamina(p);
+        }
+
+        // Підсвітка: у хмарі тримається на максимумі, після неї спадає.
+        for (Iterator<Map.Entry<UUID, Integer>> it = smokeGlow.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<UUID, Integer> entry = it.next();
+            if (insideNow.contains(entry.getKey())) continue;
+            int left = entry.getValue() - 1;
+            if (left <= 0) {
+                it.remove();
+                glowChanged = true;
+            } else {
+                entry.setValue(left);
+            }
+        }
+        if (glowChanged) broadcastVictimGlow();
+
+        // Глушіння звуків: пакет лише на вхід у першу хмару й вихід з останньої.
+        // Пакет шлемо й при mufflePercent=0 (з множником 1.0): клієнт за ним же
+        // вмикає плями диму на екрані, глушіння там лише одна з двох реакцій.
+        int mufflePercent = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_MUFFLE_PERCENT);
+        for (UUID id : insideNow) {
+            if (!smokeMuffled.add(id)) continue;
+            ServerPlayer p = onlinePlayer(id);
+            if (p != null) ModNetwork.toPlayer(p, new SmokeMufflePacket(true, 1.0f - mufflePercent / 100.0f));
+        }
+        for (Iterator<UUID> it = smokeMuffled.iterator(); it.hasNext();) {
+            UUID id = it.next();
+            if (insideNow.contains(id)) continue;
+            it.remove();
+            ServerPlayer p = onlinePlayer(id);
+            if (p != null) ModNetwork.toPlayer(p, SmokeMufflePacket.stop());
+        }
+    }
+
+    /** Хмара скінчилась: міна (вона одноразова) зникає разом із нею. */
+    private void endSmokeCloud(SmokeCloud cloud) {
+        smokeClouds.remove(cloud.mineId);
+        placed.remove(cloud.mineId);
+        Entity mine = cloud.level.getEntity(cloud.mineId);
+        if (mine != null) mine.discard();
+    }
+
+    /**
+     * Сипле частинки диму всім, хто в тому ж вимірі. Шлемо «силою» (довга
+     * відстань): хмару мають бачити здалеку, це й є її сенс як завіси.
+     * Розкид — у межах зони, тож видимий дим збігається з реальною зоною.
+     */
+    private static void sendSmoke(SmokeCloud cloud, int count) {
+        double r = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_RADIUS_BLOCKS);
+        double h = ManiacConfigs.get(ConfigSchema.SMOKE_MINE_HEIGHT_BLOCKS);
+        for (ServerPlayer viewer : cloud.level.getServer().getPlayerList().getPlayers()) {
+            if (viewer.serverLevel() != cloud.level) continue;
+            // Розкид гаусів: ~68% частинок у межах ±(0.55·r), решта далі — тож
+            // дим заповнює всю зону й трохи виповзає за її межі (м'який край).
+            cloud.level.sendParticles(viewer, ModParticles.SMOKE_CLOUD.get(), true,
+                cloud.x, cloud.floorY + h * 0.45, cloud.z,
+                count, r * 0.55, h * 0.28, r * 0.55, 0.01);
+        }
+    }
+
+    /**
+     * Повне скидання димових мін: хмари, підсвітка, глушіння. Тим, кого газ
+     * застав, знімаємо сліпоту й повертаємо звук — інакше після кінця
+     * матчу вони ще кілька секунд сиділи б сліпими в лобі.
+     */
+    private void clearSmoke() {
+        Set<UUID> touched = new HashSet<>(smokeMuffled);
+        touched.addAll(smokeGlow.keySet());
+        for (UUID id : touched) {
+            ServerPlayer p = onlinePlayer(id);
+            if (p == null) continue;
+            p.removeEffect(MobEffects.BLINDNESS);
+            ModNetwork.toPlayer(p, SmokeMufflePacket.stop());
+        }
+        smokeClouds.clear();
+        smokeGlow.clear();
+        smokeMuffled.clear();
+        smokeStaminaLock.clear();
+    }
+
+    // ── Шипи ─────────────────────────────────────────────────────────────
+    //
+    // Життєвий цикл: шипи чекають ({@link SpikeTrapEntity#ARMED}) → хтось
+    // наступив ({@link #tickSpikeTrap}) → удар ({@link #triggerSpikes}: шкода,
+    // стаміна в нуль, підсвітка, звук, кров, екранний ефект жертви) → шипи
+    // стирчать {@code spikeTrapLingerTicks} → ховаються й зникають.
+    // Жертву шипи НЕ тримають: ні лока руху, ні запису в {@link #victims}.
+    //
+    // Підсвітка й «хвіст» стаміни йдуть тими самими картами, що й у димової
+    // міни ({@link #smokeGlow}, {@link #smokeStaminaLock}): їх щотіка веде
+    // {@link #tickSmoke} і так само чистять onPlayerLeft/onOfflineBodyGone/
+    // clearSmoke — окремого стану для шипів не потрібно.
+
+    /**
+     * Тік шипів (з {@code SpikeTrapEntity.tick}): поки зведені — чекають, чи
+     * хтось наступить; після спрацювання лише ведуть таймер стирчання.
+     */
+    public void tickSpikeTrap(SpikeTrapEntity spike) {
+        PlacedTrap info = placed.get(spike.getUUID());
+        if (info == null) return;
+
+        if (!spike.isArmed()) {
+            if (spike.advanceAfterTrigger()) {
+                placed.remove(spike.getUUID());
+                spike.discard();
+            }
+            return;
+        }
+
+        MatchOrchestrator m = match();
+        if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return;
+
+        // Усі, хто стоїть на шипах цього тіка, отримують удар разом.
+        List<LivingEntity> hit = null;
+        for (LivingEntity candidate : ManiacOffline.inBox(spike.level(), spike.getBoundingBox())) {
+            UUID cid = ManiacOffline.idOf(candidate);
+            if (cid == null) continue;
+            if (immunity.containsKey(cid)) continue;
+            if (victims.containsKey(cid)) continue;
+            // Лежачого пастка не ловить — єдине місце перевірки, див. canCatch.
+            if (!canCatchId(cid)) continue;
+            if (!info.type().shouldTrigger(candidate)) continue;
+            if (hit == null) hit = new ArrayList<>();
+            hit.add(candidate);
+        }
+        if (hit != null) triggerSpikes(spike, info, hit);
+    }
+
+    /** Наступили: шипи вискакують, звук, і кожна жертва отримує удар. */
+    private void triggerSpikes(SpikeTrapEntity spike, PlacedTrap info, List<LivingEntity> hit) {
+        if (!(spike.level() instanceof ServerLevel level)) return;
+        MatchOrchestrator m = match();
+        if (m == null) return;
+
+        spike.extend(ManiacConfigs.get(ConfigSchema.SPIKE_TRAP_LINGER_TICKS));
+
+        // Звук із місця пастки: металевий «шінг» + хруст (власний ogg) і колючий
+        // шерех поверх нього — чути всім поблизу, не лише жертві.
+        BlockPos pos = spike.blockPosition();
+        level.playSound(null, pos, ModSounds.SPIKE_HIT.get(), SoundSource.BLOCKS,
+            1.6f, 0.92f + level.random.nextFloat() * 0.16f);
+        level.playSound(null, pos, SoundEvents.PLAYER_HURT_SWEET_BERRY_BUSH, SoundSource.BLOCKS,
+            1.2f, 0.7f);
+        // Іскри від металу в самій пастці.
+        level.sendParticles(net.minecraft.core.particles.ParticleTypes.CRIT,
+            spike.getX(), spike.getY() + 0.25, spike.getZ(), 16, 0.35, 0.1, 0.35, 0.4);
+
+        int glowTicks = ManiacConfigs.get(ConfigSchema.SPIKE_TRAP_GLOW_TICKS);
+        int lockTicks = ManiacConfigs.get(ConfigSchema.SPIKE_TRAP_STAMINA_LOCK_TICKS);
+        double knockUp = ManiacConfigs.get(ConfigSchema.SPIKE_TRAP_KNOCK_UP);
+        boolean glowChanged = false;
+
+        for (LivingEntity victim : hit) {
+            UUID vid = ManiacOffline.idOf(victim);
+            if (vid == null) continue;
+
+            // Шкода + стаміна в нуль (SpikeTrapArchetype.applyEffect).
+            m.recordTrapCaught(info.type().id(), vid);   // ДО applyEffect: падіння від шипів приписується пастці
+            info.type().applyEffect(victim, pos);
+            // Якщо хп скінчились — applyEffect уже завів жертву в «лежачий» стан.
+            boolean downed = !standsUp(m.survivorStateOf(vid));
+
+            // Підсвітка контуром для всіх + «хвіст» стаміни: ведуть їх tickSmoke.
+            if (glowTicks > 0) {
+                Integer prev = smokeGlow.get(vid);
+                smokeGlow.put(vid, Math.max(glowTicks, prev == null ? 0 : prev));
+                if (prev == null) glowChanged = true;
+            }
+            if (lockTicks > 0) smokeStaminaLock.merge(vid, lockTicks, Math::max);
+
+            // Удар знизу підкидає: жертва не «залипає», а відлітає з шипів.
+            if (knockUp > 0.0 && victim instanceof ServerPlayer sp) {
+                Vec3 dm = sp.getDeltaMovement();
+                sp.setDeltaMovement(dm.x * 0.6, Math.max(dm.y, knockUp), dm.z * 0.6);
+                sp.hurtMarked = true;
+            }
+
+            // Бризки: шматочки крові й іскри навколо жертви + плями на підлозі/стінах
+            // (той самий BloodSplatterPacket, що й від удару маньяка).
+            level.sendParticles(new net.minecraft.core.particles.BlockParticleOption(
+                    net.minecraft.core.particles.ParticleTypes.BLOCK,
+                    net.minecraft.world.level.block.Blocks.REDSTONE_BLOCK.defaultBlockState()),
+                victim.getX(), victim.getY() + 0.5, victim.getZ(), 24, 0.25, 0.4, 0.25, 0.14);
+            sendSpikeBlood(level, victim, downed);
+
+            // Екранний ефект «потрапив на шипи» — лише самій жертві.
+            if (victim instanceof ServerPlayer sp) {
+                ModNetwork.toPlayer(sp, new SpikeHitPacket(downed));
+            }
+        }
+        if (glowChanged) broadcastVictimGlow();
+    }
+
+    /** Кров від шипів — з тих самих налаштувань, що й кров від ударів маньяка. */
+    private static void sendSpikeBlood(ServerLevel level, LivingEntity victim, boolean downed) {
+        if (!ManiacConfigs.get(ConfigSchema.BLOOD_ENABLED)) return;
+        int droplets = ManiacConfigs.get(ConfigSchema.BLOOD_DROPLETS);
+        if (droplets <= 0) return;
+        // Напрямку «від маньяка» немає (0,0) — клієнт розкидає краплі на всі боки.
+        ModNetwork.toLevel(level, new com.log_to_kot.maniacmod.net.s2c.notify.BloodSplatterPacket(
+            victim.getX(), victim.getY() + victim.getBbHeight() * 0.35, victim.getZ(),
+            0f, 0f, downed, droplets, level.random.nextLong()));
     }
 
     // ── Електричний дріт (ТЗ 2-9) ─────────────────────────────────────────
@@ -816,11 +1255,13 @@ public final class TrapModule implements PhaseListener {
         // рамки. Саме торкання — ТОЧНЕ: відрізок дроту проти AABB гравця
         // ({@link #sweptBox}), тож кут «порожнього прямокутника»
         // діагоналі не рахується.
-        for (ServerPlayer candidate : wire.level().getEntitiesOfClass(ServerPlayer.class,
+        for (LivingEntity candidate : ManiacOffline.inBox(wire.level(),
                 wire.getBoundingBoxForCulling().inflate(1.5))) {
-            if (immunity.containsKey(candidate.getUUID())) continue;
-            if (victims.containsKey(candidate.getUUID())) continue;
-            if (!canCatch(candidate)) continue;
+            UUID cid = ManiacOffline.idOf(candidate);
+            if (cid == null) continue;
+            if (immunity.containsKey(cid)) continue;
+            if (victims.containsKey(cid)) continue;
+            if (!canCatchId(cid)) continue;
             if (!info.type().shouldTrigger(candidate)) continue;
             if (!WireGeometry.segmentTouchesBox(a, b, sweptBox(candidate))) continue;
             startShock(wire, candidate);
@@ -845,18 +1286,19 @@ public final class TrapModule implements PhaseListener {
      * запиті; якщо минулого тіка гравця не питали (був далеко від усіх
      * дротів), шлях не рахуємо — стара позиція була б застарілою.
      */
-    private AABB sweptBox(ServerPlayer player) {
+    private AABB sweptBox(LivingEntity player) {
         AABB now = player.getBoundingBox();
         long tick = player.level().getGameTime();
         Vec3 pos = player.position();
 
-        Trail trail = trails.get(player.getUUID());
+        UUID trailId = ManiacOffline.idOf(player);
+        Trail trail = trails.get(trailId);
         if (trail == null || tick - trail.tick() > 1) {
             trail = new Trail(tick, pos, pos);
         } else if (trail.tick() != tick) {
             trail = new Trail(tick, trail.current(), pos);
         }
-        trails.put(player.getUUID(), trail);
+        trails.put(trailId, trail);
 
         Vec3 back = trail.previous().subtract(pos);
         if (back.lengthSqr() < 1.0E-6 || back.lengthSqr() > MAX_SWEEP_BLOCKS * MAX_SWEEP_BLOCKS) {
@@ -866,20 +1308,28 @@ public final class TrapModule implements PhaseListener {
     }
 
     /** Жертва торкнулась дроту: починаємо удар струмом (ТЗ 5). */
-    private void startShock(ElectricWireEntity wire, ServerPlayer victim) {
-        wireShocks.put(wire.getUUID(), new WireShock(victim.getUUID(),
+    private void startShock(ElectricWireEntity wire, LivingEntity victim) {
+        UUID vid = ManiacOffline.idOf(victim);
+        if (vid == null) return;
+        wireShocks.put(wire.getUUID(), new WireShock(vid,
             ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHOCK_TICKS), 0));
-        victims.put(victim.getUUID(), wire.getUUID());
+        MatchOrchestrator statsMatch = match();
+        PlacedTrap wireInfo = placed.get(wire.getUUID());
+        if (statsMatch != null && wireInfo != null) statsMatch.recordTrapCaught(wireInfo.type().id(), vid);
+        victims.put(vid, wire.getUUID());
         ManiacMod.lib().interactionLockModule()
-            .lock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
+            .lock(vid, LockType.MOVEMENT, LOCK_REASON);
 
-        MatchOrchestrator m = match();
-        if (m != null) m.survivors().forceVitalsRefresh(victim);
-        // Окремий прапор для клієнта: рух і так глушиться trapped, але
-        // дріт додатково блокує камеру й трясе нею (ТЗ 5).
-        ModNetwork.toPlayer(victim, new WireShockPacket(true,
-            ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_DEGREES),
-            ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_HZ)));
+        // Пакети HUD і камери бачить лише онлайн-власник; тіло лише б'є струмом.
+        if (victim instanceof ServerPlayer player) {
+            MatchOrchestrator m = match();
+            if (m != null) m.survivors().forceVitalsRefresh(player);
+            // Окремий прапор для клієнта: рух і так глушиться trapped, але
+            // дріт додатково блокує камеру й трясе нею (ТЗ 5).
+            ModNetwork.toPlayer(player, new WireShockPacket(true,
+                ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_DEGREES),
+                ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_HZ)));
+        }
         broadcastVictimGlow();
         playZap(wire, 0);
     }
@@ -887,22 +1337,26 @@ public final class TrapModule implements PhaseListener {
     /** Раз на тік активного удару: секундна шкода, почергові звуки, частинки, завершення. */
     private void tickShock(ElectricWireEntity wire, WireShock shock) {
         MatchOrchestrator m = match();
-        ServerPlayer victim = onlinePlayer(shock.victimId());
+        UUID victimId = shock.victimId();
+        ServerPlayer victim = onlinePlayer(victimId);
+        // Жертва вийшла з сервера, але її тіло стоїть на дроті: шок триває на тілі.
+        LivingEntity body = victim == null ? bodyOf(victimId) : null;
         // Жертва зникла або більше не «на ногах» (непритомність — пастка
         // мусить відпустити, ТЗ 7) — завершуємо й прибираємо пастку.
-        if (victim == null || m == null || !canCatch(victim)) {
+        if ((victim == null && body == null) || m == null || !canCatchId(victimId)) {
             endShock(wire, victim, true);
             return;
         }
 
         if (shock.elapsed() % 20 == 0) {
             int damage = ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_DAMAGE_PER_SECOND);
-            if (damage > 0 && m.damageSurvivor(victim.getUUID(), damage)) {
-                m.survivors().onSurvivorDowned(victim);
+            if (damage > 0 && m.damageSurvivor(victimId, damage)) {
+                // Гравець чи тіло: SurvivorModule валить обох однаково (повалення з таймером).
+                m.survivors().onSurvivorDowned(victim != null ? victim : body);
             }
             playZap(wire, shock.elapsed() / 20);
         }
-        spawnShockParticles(victim);
+        spawnShockParticles(victim != null ? victim : body);
 
         int ticksLeft = shock.ticksLeft() - 1;
         if (ticksLeft <= 0) {
@@ -919,17 +1373,21 @@ public final class TrapModule implements PhaseListener {
      * спрацювання не залишається.
      */
     private void endShock(ElectricWireEntity wire, ServerPlayer victim, boolean removeTrap) {
-        wireShocks.remove(wire.getUUID());
-        if (victim != null) {
-            victims.remove(victim.getUUID());
+        WireShock ended = wireShocks.remove(wire.getUUID());
+        // Жертву знаємо й тоді, коли вона офлайн (тіло): id лежить у самому записі шоку.
+        UUID victimId = victim != null ? victim.getUUID() : (ended == null ? null : ended.victimId());
+        if (victimId != null) {
+            victims.remove(victimId);
             ManiacMod.lib().interactionLockModule()
-                .unlock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
-            ModNetwork.toPlayer(victim, WireShockPacket.stop());
+                .unlock(victimId, LockType.MOVEMENT, LOCK_REASON);
             // Імунітет — як після капкана: гравець стоїть на тому місці,
             // де був дріт.
-            immunity.put(victim.getUUID(), RELEASE_IMMUNITY_TICKS);
-            MatchOrchestrator m = match();
-            if (m != null) m.survivors().forceVitalsRefresh(victim);
+            immunity.put(victimId, RELEASE_IMMUNITY_TICKS);
+            if (victim != null) {
+                ModNetwork.toPlayer(victim, WireShockPacket.stop());
+                MatchOrchestrator m = match();
+                if (m != null) m.survivors().forceVitalsRefresh(victim);
+            }
         }
         broadcastVictimGlow();
         if (removeTrap) {
@@ -970,6 +1428,7 @@ public final class TrapModule implements PhaseListener {
         // лок і шле WireShockPacket(false)).
         WireShock shock = wireShocks.get(wire.getUUID());
         ServerPlayer victim = shock == null ? null : onlinePlayer(shock.victimId());
+        // Жертва-тіло: endShock бере її id із запису шоку й теж звільняє.
         endShock(wire, victim, false);
 
         // Одноразовість: предмет зникає (ТЗ 4/8).
@@ -1007,8 +1466,8 @@ public final class TrapModule implements PhaseListener {
 
         ServerLevel level = player.serverLevel();
         double range = ManiacConfigs.get(ConfigSchema.GEO_SCISSORS_RANGE_BLOCKS);
-        Vec3 eye = player.getEyePosition();
-        Vec3 look = player.getViewVector(1.0f).normalize();
+        Vec3 eye = VrServerCompat.aimOrigin(player);
+        Vec3 look = VrServerCompat.aimDirView(player).normalize();
 
         // Блок на шляху променя закриває дріт за собою (не різати крізь стіну).
         double blockDist = range;
@@ -1071,7 +1530,7 @@ public final class TrapModule implements PhaseListener {
      * (normal=false прибирає far-видимість) — ефект тілесний, він має
      * бути прив'язаний до гравця й повторюватись щотіка.
      */
-    private static void spawnShockParticles(ServerPlayer victim) {
+    private static void spawnShockParticles(LivingEntity victim) {
         if (!(victim.level() instanceof ServerLevel level)) return;
         for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
             if (viewer.serverLevel() != level) continue;
@@ -1091,9 +1550,11 @@ public final class TrapModule implements PhaseListener {
         return state != null && !state.isCrawlOnly() && !state.isTerminal();
     }
 
-    private void trigger(BearTrapEntity trap, PlacedTrap info, ServerPlayer victim) {
+    private void trigger(BearTrapEntity trap, PlacedTrap info, LivingEntity victim) {
+        UUID vid = ManiacOffline.idOf(victim);
+        if (vid == null) return;
         trap.setSnapped(true);
-        victims.put(victim.getUUID(), trap.getUUID());
+        victims.put(vid, trap.getUUID());
         // Клацок капкана чути з його місця — це головний звук-підказка
         // для тих, хто ще не бачить, що сталося. Боротьба почнеться після
         // нього, а не в один тік із ним (див. tickStruggle).
@@ -1113,10 +1574,16 @@ public final class TrapModule implements PhaseListener {
 
         // Жертву притягуємо до центру капкана: нога має опинитись «в зубах»,
         // а не збоку від моделі.
-        victim.teleportTo(trap.getX(), trap.getY(), trap.getZ());
+        if (victim.level() instanceof ServerLevel trapLevel) {
+            ManiacOffline.placeAt(victim, trapLevel, trap.getX(), trap.getY(), trap.getZ(),
+                victim.getYRot(), victim.getXRot());
+        }
         ManiacMod.lib().interactionLockModule()
-            .lock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
+            .lock(vid, LockType.MOVEMENT, LOCK_REASON);
 
+        // Статистика ДО applyEffect: падіння від капкана в історії приписується пастці, а не минулому удару.
+        MatchOrchestrator statsMatch = match();
+        if (statsMatch != null) statsMatch.recordTrapCaught(info.type().id(), vid);
         info.type().applyEffect(victim, trap.blockPosition());
 
         // Форс-знімок HUD одразу, а не на наступному throttled тіку:
@@ -1124,14 +1591,18 @@ public final class TrapModule implements PhaseListener {
         // trapped із SurvivorVitalsPacket і має спрацювати в той самий
         // момент, що серверний лок, інакше жертва встигає на кадр-два
         // зрушити з місця до прильоту пакета.
-        MatchOrchestrator m = match();
-        if (m != null) m.survivors().forceVitalsRefresh(victim);
+        // Підказка й HUD лише онлайн-власнику. Тіло, що наступило, вільне лише через
+        // союзника (лом) або коли власник повернеться (див. onPlayerReturned).
+        if (victim instanceof ServerPlayer player) {
+            MatchOrchestrator m = match();
+            if (m != null) m.survivors().forceVitalsRefresh(player);
 
-        // А вже потім — підказка "Натисни F": клієнт вибирає її вигляд
-        // за власним станом «я в пастці» (той самий стиль тексту, що
-        // GeneratorHintOverlay), тож знімок HUD мусить прийти раніше за
-        // цей стан (інакше на кадр блимнула б чужа підказка).
-        openEscapePrompt(victim, trap);
+            // А вже потім — підказка "Натисни F": клієнт вибирає її вигляд
+            // за власним станом «я в пастці» (той самий стиль тексту, що
+            // GeneratorHintOverlay), тож знімок HUD мусить прийти раніше за
+            // цей стан (інакше на кадр блимнула б чужа підказка).
+            openEscapePrompt(player, trap);
+        }
     }
 
     // ── Саморятунок: міні-гра «попади в ціль» ─────────────────────────────
@@ -1442,10 +1913,12 @@ public final class TrapModule implements PhaseListener {
             tickRopeHang(rope);
             return;
         }
-        for (ServerPlayer candidate : rope.level().getEntitiesOfClass(ServerPlayer.class, rope.getBoundingBox())) {
-            if (immunity.containsKey(candidate.getUUID())) continue;
-            if (victims.containsKey(candidate.getUUID())) continue;
-            if (!canCatch(candidate)) continue;
+        for (LivingEntity candidate : ManiacOffline.inBox(rope.level(), rope.getBoundingBox())) {
+            UUID cid = ManiacOffline.idOf(candidate);
+            if (cid == null) continue;
+            if (immunity.containsKey(cid)) continue;
+            if (victims.containsKey(cid)) continue;
+            if (!canCatchId(cid)) continue;
             if (!info.type().shouldTrigger(candidate)) continue;
             triggerRope(rope, info, candidate);
             return;
@@ -1507,7 +1980,9 @@ public final class TrapModule implements PhaseListener {
         return bestYaw;
     }
 
-    private void triggerRope(RopeTrapEntity rope, PlacedTrap info, ServerPlayer victim) {
+    private void triggerRope(RopeTrapEntity rope, PlacedTrap info, LivingEntity victim) {
+        UUID vid = ManiacOffline.idOf(victim);
+        if (vid == null || !(victim.level() instanceof ServerLevel victimLevel)) return;
         float yaw = victim.getYRot();               // погляд фіксується
         Vec3 pivot = rope.ceilingPoint();
         double restY = rope.getY() + ROPE_HEAD_CLEARANCE;
@@ -1515,13 +1990,13 @@ public final class TrapModule implements PhaseListener {
         double breakRad = Math.toRadians(ManiacConfigs.get(ConfigSchema.ROPE_SWING_BREAK_DEGREES));
 
         // Вісь гойдання — туди, де вільно (не обов'язково вздовж погляду).
-        float axisYaw = chooseSwingAxisYaw(victim.serverLevel(), pivot, length, breakRad, yaw);
+        float axisYaw = chooseSwingAxisYaw(victimLevel, pivot, length, breakRad, yaw);
         double ar = Math.toRadians(axisYaw);
         Vec3 axis = new Vec3(-Math.cos(ar), 0, -Math.sin(ar));
 
         RopeHang hang = new RopeHang(rope.getUUID(), pivot, length, axis, yaw, breakRad);
-        ropeHangs.put(victim.getUUID(), hang);
-        victims.put(victim.getUUID(), rope.getUUID());
+        ropeHangs.put(vid, hang);
+        victims.put(vid, rope.getUUID());
 
         rope.setVictim(victim.getId());
         rope.setAxisYaw(axisYaw);
@@ -1530,30 +2005,35 @@ public final class TrapModule implements PhaseListener {
         rope.setSnapped(true);
 
         ManiacMod.lib().interactionLockModule()
-            .lock(victim.getUUID(), LockType.MOVEMENT, LOCK_REASON);
+            .lock(vid, LockType.MOVEMENT, LOCK_REASON);
         victim.setNoGravity(true);
         victim.setDeltaMovement(Vec3.ZERO);
         victim.fallDistance = 0f;
         Vec3 origin = ropeOrigin(hang, 0.0);
-        victim.teleportTo(victim.serverLevel(), origin.x, origin.y, origin.z, yaw, 0f);
+        ManiacOffline.placeAt(victim, victimLevel, origin.x, origin.y, origin.z, yaw, 0f);
 
         rope.level().playSound(null, rope.blockPosition(),
             ModSounds.ROPE_CATCH.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
+        MatchOrchestrator statsMatch = match();
+        if (statsMatch != null) statsMatch.recordTrapCaught(info.type().id(), vid);
         info.type().applyEffect(victim, rope.blockPosition());
         broadcastVictimGlow();
 
-        MatchOrchestrator m = match();
-        if (m != null) m.survivors().forceVitalsRefresh(victim);
-        notify(victim, ActionBarMessageType.INFO, "maniacmod.trap.rope_hung");
-        // Підказка «Натисни F» — міні-гра відкривається окремим екраном, як у капкана.
-        ModNetwork.toPlayer(victim, new TrapEscapePromptPacket(true));
+        if (victim instanceof ServerPlayer player) {
+            MatchOrchestrator m = match();
+            if (m != null) m.survivors().forceVitalsRefresh(player);
+            notify(player, ActionBarMessageType.INFO, "maniacmod.trap.rope_hung");
+            // Підказка «Натисни F» — міні-гра відкривається окремим екраном, як у капкана.
+            ModNetwork.toPlayer(player, new TrapEscapePromptPacket(true));
+        }
     }
 
     private void tickRopeHang(RopeTrapEntity rope) {
         UUID vid = victimOf(rope.getUUID());
         RopeHang h = vid == null ? null : ropeHangs.get(vid);
-        ServerPlayer v = vid == null ? null : onlinePlayer(vid);
-        if (h == null || v == null) {
+        // Підвішений може бути й ТІЛОМ (власник вийшов): нитка тримає сутність, а не гравця.
+        LivingEntity v = vid == null ? null : playerOrBody(vid);
+        if (h == null || v == null || !(v.level() instanceof ServerLevel vLevel)) {
             // Жертви більше нема (вийшла, скинули) — пастка одноразова, прибираємо.
             if (vid != null) endRopeHang(vid);
             placed.remove(rope.getUUID());
@@ -1569,8 +2049,10 @@ public final class TrapModule implements PhaseListener {
         if (Math.abs(next) >= h.breakRad) {
             v.level().playSound(null, v.blockPosition(),
                 ModSounds.ROPE_ESCAPE.get(), SoundSource.BLOCKS, 1.0f, 1.0f);
-            notify(v, ActionBarMessageType.SUCCESS, "maniacmod.trap.rope_snapped");
-            endRopeHang(v.getUUID());
+            if (v instanceof ServerPlayer player) {
+                notify(player, ActionBarMessageType.SUCCESS, "maniacmod.trap.rope_snapped");
+            }
+            endRopeHang(vid);
             return;
         }
 
@@ -1580,12 +2062,15 @@ public final class TrapModule implements PhaseListener {
         h.theta = next;
         Vec3 origin = ropeOrigin(h, next);
         if (origin.distanceToSqr(v.position()) > 1.0E-4) {
-            v.teleportTo(v.serverLevel(), origin.x, origin.y, origin.z, h.yaw, 0f);
+            ManiacOffline.placeAt(v, vLevel, origin.x, origin.y, origin.z, h.yaw, 0f);
         }
         // Жертва не падає й не їде: гасимо все, що встигла накопичити фізика.
         v.setDeltaMovement(Vec3.ZERO);
         v.fallDistance = 0f;
         v.setNoGravity(true);
+        // id сутності міняється, коли власник виходить/повертається (гравець <-> тіло):
+        // нитка мусить завжди вести до актуальної. Однакове значення не шле пакетів.
+        rope.setVictim(v.getId());
         rope.setSwing((float) h.theta);
     }
 
@@ -1615,20 +2100,23 @@ public final class TrapModule implements PhaseListener {
     private void endRopeHang(UUID victimId) {
         RopeHang h = ropeHangs.remove(victimId);
         victims.remove(victimId);
-        ServerPlayer v = onlinePlayer(victimId);
+        LivingEntity v = playerOrBody(victimId);
         ManiacMod.lib().interactionLockModule()
             .unlock(victimId, LockType.MOVEMENT, LOCK_REASON);
         if (v != null) {
-            ModNetwork.toPlayer(v, new TrapEscapePromptPacket(false));
             v.setNoGravity(false);
             v.fallDistance = 0f;
             immunity.put(victimId, RELEASE_IMMUNITY_TICKS);
-            MatchOrchestrator m = match();
-            if (m != null) m.survivors().forceVitalsRefresh(v);
+            if (v instanceof ServerPlayer player) {
+                ModNetwork.toPlayer(player, new TrapEscapePromptPacket(false));
+                MatchOrchestrator m = match();
+                if (m != null) m.survivors().forceVitalsRefresh(player);
+            }
         }
         if (h != null) {
             placed.remove(h.ropeId);
-            if (v != null && v.serverLevel().getEntity(h.ropeId) instanceof RopeTrapEntity rope) {
+            if (v != null && v.level() instanceof ServerLevel vLevel
+                && vLevel.getEntity(h.ropeId) instanceof RopeTrapEntity rope) {
                 rope.discard();
             }
         }
@@ -1639,18 +2127,28 @@ public final class TrapModule implements PhaseListener {
      * ПКМ ножицями по підвішеному гравцеві (союзником) або самим підвішеним.
      * Ножиці одноразові — витрачаються, як і на дроті.
      */
-    private boolean cutRope(ServerPlayer cutter, ServerPlayer victim) {
-        if (!ropeHangs.containsKey(victim.getUUID())) return false;
+    private boolean cutRope(ServerPlayer cutter, LivingEntity victim) {
+        UUID vid = ManiacOffline.idOf(victim);
+        if (vid == null || !ropeHangs.containsKey(vid)) return false;
         ItemStack scissors = scissorsInHand(cutter);
         if (scissors.isEmpty()) return false;
 
         victim.level().playSound(null, victim.blockPosition(),
             ModSounds.ROPE_ESCAPE.get(), SoundSource.PLAYERS, 1.0f, 1.0f);
         scissors.shrink(1);
-        endRopeHang(victim.getUUID());
-        notify(victim, ActionBarMessageType.SUCCESS, "maniacmod.trap.rope_cut");
+        endRopeHang(vid);
+        if (victim instanceof ServerPlayer player) {
+            notify(player, ActionBarMessageType.SUCCESS, "maniacmod.trap.rope_cut");
+        }
         if (cutter != victim) notify(cutter, ActionBarMessageType.INFO, "maniacmod.trap.rope_cut_ally");
         return true;
+    }
+
+    /** Онлайн-гравець або його живе тіло: те, що фізично висить/стоїть у пастці. */
+    private LivingEntity playerOrBody(UUID id) {
+        ServerPlayer player = onlinePlayer(id);
+        if (player != null) return player;
+        return bodyOf(id);
     }
 
     /**
@@ -1660,8 +2158,8 @@ public final class TrapModule implements PhaseListener {
     private boolean tryCutHangingInSight(ServerPlayer player) {
         if (ropeHangs.isEmpty()) return false;
         double range = ManiacConfigs.get(ConfigSchema.GEO_SCISSORS_RANGE_BLOCKS) + 0.5;
-        Vec3 eye = player.getEyePosition();
-        Vec3 end = eye.add(player.getViewVector(1.0f).normalize().scale(range));
+        Vec3 eye = VrServerCompat.aimOrigin(player);
+        Vec3 end = eye.add(VrServerCompat.aimDirView(player).normalize().scale(range));
 
         double blockDist = range;
         var blockHit = player.level().clip(new net.minecraft.world.level.ClipContext(
@@ -1671,11 +2169,11 @@ public final class TrapModule implements PhaseListener {
             blockDist = eye.distanceTo(blockHit.getLocation());
         }
 
-        ServerPlayer best = null;
+        LivingEntity best = null;
         double bestDist = Double.MAX_VALUE;
         for (UUID vid : ropeHangs.keySet()) {
             if (vid.equals(player.getUUID())) continue;
-            ServerPlayer v = onlinePlayer(vid);
+            LivingEntity v = playerOrBody(vid);
             if (v == null || v.level() != player.level()) continue;
             var hit = v.getBoundingBox().inflate(0.3).clip(eye, end);
             if (hit.isEmpty()) continue;
@@ -1690,8 +2188,8 @@ public final class TrapModule implements PhaseListener {
     // ── Звільнення ───────────────────────────────────────────────────────
 
     /**
-     * Виживий вдарив по капкану ломом (ЛКМ). Викликається з хука
-     * {@code AttackEntityEvent}.
+     * Виживий вдарив по капкану чи димовій міні ломом (ЛКМ). Викликається
+     * з хука {@code AttackEntityEvent}.
      *
      * Що робить удар залежить від стану капкана: якщо він захлопнув
      * жертву — звільняє її; якщо порожній — просто знешкоджує (зникає).
@@ -1705,9 +2203,13 @@ public final class TrapModule implements PhaseListener {
      * @return true, якщо удар зараховано — хук тоді скасовує ванільний
      *         {@code attack}; false — не наш випадок, подію не чіпаємо
      */
-    public boolean onCrowbarHit(ServerPlayer hitter, BearTrapEntity trap, net.minecraft.world.item.ItemStack crowbar) {
+    public boolean onCrowbarHit(ServerPlayer hitter, Entity trap, net.minecraft.world.item.ItemStack crowbar) {
         if (!(crowbar.getItem() instanceof com.log_to_kot.maniacmod.items.CrowbarItem)) return false;
         if (!placed.containsKey(trap.getUUID())) return false;
+        // Шипи знешкодити НЕ можна (ні до спрацювання, ні після) — лом їх ігнорує.
+        if (trap instanceof SpikeTrapEntity) return false;
+        // Димова міна, що вже випустила хмару, — не ціль: розряджати нічого.
+        if (trap instanceof SmokeMineEntity mine && mine.isTriggered()) return false;
         MatchOrchestrator m = match();
         if (m == null || !m.phases().allows(PhaseRule.TRAPS)) return false;
         if (!m.isSurvivor(hitter.getUUID())) return false;
@@ -1737,9 +2239,10 @@ public final class TrapModule implements PhaseListener {
         com.log_to_kot.maniacmod.items.CrowbarItem.playHitLive(hitter);
 
         UUID trappedId = victimOf(trap.getUUID());
-        if (trappedId != null) {
+        if (trappedId != null && trap instanceof BearTrapEntity bearTrap) {
             ServerPlayer victim = onlinePlayer(trappedId);
-            if (victim != null) release(victim, trap);
+            if (victim != null) release(victim, bearTrap);
+            else if (ManiacOffline.hasBody(trappedId)) releaseBody(trappedId);
         }
         trap.discard();
         placed.remove(trap.getUUID());
@@ -1780,6 +2283,65 @@ public final class TrapModule implements PhaseListener {
     }
 
     /**
+     * Те саме, що {@link #release}, для ТІЛА: власник офлайн, тож немає ні мінііри
+     * визволення, ні пакетів клієнту. Повернувшись, він уже вільний.
+     */
+    private void releaseBody(UUID ownerId) {
+        victims.remove(ownerId);
+        ManiacMod.lib().interactionLockModule()
+            .unlock(ownerId, LockType.MOVEMENT, LOCK_REASON);
+        immunity.put(ownerId, RELEASE_IMMUNITY_TICKS);
+        broadcastVictimGlow();
+    }
+
+    /**
+     * Тіло власника зникло зі складу матчу (вбите). Усе, що пастки тримали за його
+     * UUID: звільнення капкана, дріт під струмом, лок руху, підсвітка, спроба
+     * визволення, бо ні {@link #releaseInvalidVictims}, ні {@link #onPlayerLeft}
+     * вже не побачать його серед онлайн-гравців.
+     */
+    public void onOfflineBodyGone(UUID owner) {
+        // Підвішене тіло: прибираємо нитку (endRopeHang сам знімає лок і жертву).
+        if (ropeHangs.containsKey(owner)) endRopeHang(owner);
+        escapes.remove(owner);
+        escapePromptTicks.remove(owner);
+        escapePromptTrap.remove(owner);
+        immunity.remove(owner);
+        trails.remove(owner);
+        smokeMuffled.remove(owner);
+        smokeStaminaLock.remove(owner);
+        smokeGlow.remove(owner);
+
+        UUID trapId = victims.remove(owner);
+        ManiacMod.lib().interactionLockModule()
+            .unlock(owner, LockType.MOVEMENT, LOCK_REASON);
+        // Дріт, що бив цю жертву: запис шоку знімаємо тут (сам дріт прибере tickShock).
+        wireShocks.values().removeIf(shock -> shock.victimId().equals(owner));
+        if (trapId != null) {
+            BearTrapEntity trap = bearTrapAnywhere(trapId);
+            if (trap != null) trap.setSnapped(false);
+        }
+        broadcastVictimGlow();
+    }
+
+    /** Капкан за UUID у будь-якому завантаженому світі (власника-гравця для контексту немає). */
+    private BearTrapEntity bearTrapAnywhere(UUID trapId) {
+        MatchOrchestrator m = match();
+        if (trapId == null || m == null || m.server() == null) return null;
+        for (ServerLevel level : m.server().getAllLevels()) {
+            if (level.getEntities().get(trapId) instanceof BearTrapEntity trap) return trap;
+        }
+        return null;
+    }
+
+    /** Живе тіло власника або {@code null}. */
+    private LivingEntity bodyOf(UUID id) {
+        MatchOrchestrator m = match();
+        if (m == null || m.server() == null || !ManiacOffline.hasBody(id)) return null;
+        return ManiacOffline.actor(m.server(), id).orElse(null);
+    }
+
+    /**
      * Надсилає всім актуальний склад підсвічених жертв. ПОВНИЙ набір, а
      * не дельту (див. {@code TrapVictimGlowPacket}) — тому викликається
      * після будь-якої зміни {@link #victims}, а не лише на додавання.
@@ -1793,11 +2355,20 @@ public final class TrapModule implements PhaseListener {
     private void broadcastVictimGlow() {
         MatchOrchestrator m = match();
         int[] ids = new int[0];
-        if (m != null && !victims.isEmpty()) {
+        if (m != null && (!victims.isEmpty() || !smokeGlow.isEmpty())) {
+            // Жертви капкана/дроту/мотузки + ті, хто світиться після димової міни.
+            Set<UUID> glowing = new HashSet<>(victims.keySet());
+            glowing.addAll(smokeGlow.keySet());
             List<Integer> collected = new ArrayList<>();
-            for (UUID victimId : victims.keySet()) {
+            for (UUID victimId : glowing) {
                 ServerPlayer victim = m.onlinePlayer(victimId);
-                if (victim != null) collected.add(victim.getId());
+                if (victim != null) {
+                    collected.add(victim.getId());
+                } else {
+                    // Власник офлайн: світиться його тіло (та сама жертва, інша сутність).
+                    LivingEntity body = bodyOf(victimId);
+                    if (body != null) collected.add(body.getId());
+                }
             }
             ids = new int[collected.size()];
             for (int i = 0; i < ids.length; i++) ids[i] = collected.get(i);
@@ -1828,7 +2399,9 @@ public final class TrapModule implements PhaseListener {
         MatchOrchestrator m = match();
         for (UUID id : new ArrayList<>(victims.keySet())) {
             ServerPlayer p = onlinePlayer(id);
-            boolean stillTrapWorthy = p != null && m.isSurvivor(id)
+            // «Присутній» = онлайн або стоїть тілом: тіло в капкані лишається в капкані.
+            boolean present = p != null || ManiacOffline.hasBody(id);
+            boolean stillTrapWorthy = present && m.isSurvivor(id)
                 && standsUp(m.survivorStateOf(id));
             if (stillTrapWorthy) continue;
 
@@ -1839,10 +2412,15 @@ public final class TrapModule implements PhaseListener {
             }
 
             UUID trapId = victims.remove(id);
-            if (p == null) continue;
 
+            // Лок знімаємо й для офлайн-жертви: інакше він лишився б у реєстрі lib назавжди.
             ManiacMod.lib().interactionLockModule()
                 .unlock(id, LockType.MOVEMENT, LOCK_REASON);
+            if (p == null) {
+                BearTrapEntity orphan = bearTrapAnywhere(trapId);
+                if (orphan != null) orphan.setSnapped(false);
+                continue;
+            }
             closeEscape(p);
 
             BearTrapEntity trap = trapEntity(trapId, p);
@@ -1878,22 +2456,61 @@ public final class TrapModule implements PhaseListener {
     /** Гравець вийшов із сервера — не лишаємо замок і запис у мапах. */
     public void onPlayerLeft(ServerPlayer player) {
         UUID id = player.getUUID();
-        RopeHang leftHang = ropeHangs.remove(id);
-        if (leftHang != null) {
+        boolean hasBody = ManiacOffline.hasBody(id);
+        RopeHang leftHang = hasBody ? ropeHangs.get(id) : ropeHangs.remove(id);
+        if (leftHang != null && !hasBody) {
             player.setNoGravity(false);   // інакше після перезаходу висітиме в повітрі
             placed.remove(leftHang.ropeId);
         }
-        if (victims.remove(id) != null) {
+        // Тіло в капкані, на дроті чи на мотузці ТРИМАЄ жертву: запис і лок руху лишаються,
+        // бо власник повернеться в ту саму пастку (звільнити можна ломом/ножицями або
+        // добити таймером кровотечі). Підвішене тіло висить далі: нитку веде сервер за
+        // сутністю (див. tickRopeHang), а id нитки він оновлює сам.
+        boolean keepAsBody = hasBody && victims.containsKey(id);
+        if (keepAsBody) {
+            broadcastVictimGlow();   // підсвітка переходить з гравця на його тіло
+        } else if (victims.remove(id) != null) {
             ManiacMod.lib().interactionLockModule().unlock(id, LockType.MOVEMENT, LOCK_REASON);
             broadcastVictimGlow();
         }
         immunity.remove(id);
         trails.remove(id);
+        smokeMuffled.remove(id);
+        smokeStaminaLock.remove(id);
+        if (smokeGlow.remove(id) != null) broadcastVictimGlow();
         // Спроба визволення (і підказка "Натисни F") померли разом із
         // сесією: пакет шукати нема кому.
         escapes.remove(id);
         escapePromptTicks.remove(id);
         escapePromptTrap.remove(id);
+    }
+
+    /**
+     * Власник повернувся до свого тіла. Якщо тіло трималося в пастці, власник знову
+     * онлайн з НОВИМ id сутності: підсвітку треба перебудувати, а під шоком клієнту
+     * повторно віддати прапор тряски камери (пакет пішов би лише тоді, коли гравець був онлайн).
+     */
+    public void onPlayerReturned(ServerPlayer player) {
+        UUID id = player.getUUID();
+        if (!victims.containsKey(id)) return;
+        // Повернувся в пастку: гравцеві знову доступна спроба вибратися (як якщо б він
+        // не виходив). Капкан: підказка F; мотузка: нитка веде до нового id сутності.
+        UUID trapId = victims.get(id);
+        if (ropeHangs.containsKey(id)) {
+            ModNetwork.toPlayer(player, new TrapEscapePromptPacket(true));
+        } else if (trapId != null && !wireShocks.containsKey(trapId)) {
+            BearTrapEntity bear = bearTrapAnywhere(trapId);
+            if (bear != null) openEscapePrompt(player, bear);
+        }
+        for (WireShock shock : wireShocks.values()) {
+            if (shock.victimId().equals(id)) {
+                ModNetwork.toPlayer(player, new WireShockPacket(true,
+                    ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_DEGREES),
+                    ManiacConfigs.get(ConfigSchema.ELECTRIC_WIRE_SHAKE_HZ)));
+                break;
+            }
+        }
+        broadcastVictimGlow();
     }
 
     // ── Запити ───────────────────────────────────────────────────────────

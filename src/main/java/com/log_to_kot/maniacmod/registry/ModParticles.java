@@ -41,6 +41,9 @@ public final class ModParticles {
     /** Зірочка над оглушеним маньяком. */
     public static final RegistryObject<SimpleParticleType> STUN_STAR = simple("stun_star");
 
+    /** Клуб диму димової міни — велика напівпрозора «завіса». */
+    public static final RegistryObject<SimpleParticleType> SMOKE_CLOUD = simple("smoke_cloud");
+
     private ModParticles() {}
 
     private static RegistryObject<SimpleParticleType> simple(String id) {

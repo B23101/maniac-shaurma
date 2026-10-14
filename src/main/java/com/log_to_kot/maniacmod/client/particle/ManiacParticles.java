@@ -37,11 +37,22 @@ public final class ManiacParticles {
     static final ManiacParticle.Profile STUN_STAR =
         new ManiacParticle.Profile(20, 30, -0.02f, 0.20f, 0.96f, 0.5f, false, true, 0.10f, false);
 
+    /**
+     * Дим димової міни: ДУЖЕ ВЕЛИКИЙ (3+ блоки на частинку — вони перекриваються
+     * й дають суцільну густу стіну), напівпрозорий,
+     * майже без руху й гравітації; живе довго, гасне останні 35% життя.
+     * Тривалість підібрана так, щоб видимий дим доживав і гас приблизно
+     * тоді, коли закінчується сам газ ({@code TrapModule.SMOKE_NO_EMIT_TICKS}).
+     */
+    static final ManiacParticle.Profile SMOKE_CLOUD =
+        new ManiacParticle.Profile(90, 130, 0.0f, 3.2f, 0.97f, 0.7f, false, false, 0.01f, false);
+
     public static void register(RegisterParticleProvidersEvent event) {
         event.registerSpriteSet(ModParticles.BONE_SHARD.get(), sprites -> provider(sprites, BONE_SHARD));
         event.registerSpriteSet(ModParticles.TRAP_SNAP.get(),  sprites -> provider(sprites, TRAP_SNAP));
         event.registerSpriteSet(ModParticles.WIRE_SPARK.get(), sprites -> provider(sprites, WIRE_SPARK));
         event.registerSpriteSet(ModParticles.STUN_STAR.get(),  sprites -> provider(sprites, STUN_STAR));
+        event.registerSpriteSet(ModParticles.SMOKE_CLOUD.get(), sprites -> provider(sprites, SMOKE_CLOUD));
     }
 
     private static ParticleProvider<SimpleParticleType> provider(SpriteSet sprites, ManiacParticle.Profile profile) {

@@ -246,5 +246,93 @@
         "stream": false
       }
     ]
+  },
+  "spike_hit": {
+    "sounds": [
+      {
+        "name": "maniacmod:spike_hit",
+        "stream": false
+      }
+    ]
+  },
+  "dispatcher_open": {
+    "sounds": [
+      {
+        "name": "maniacmod:dispatcher_open",
+        "stream": false
+      }
+    ]
+  },
+  "dispatcher_close": {
+    "sounds": [
+      {
+        "name": "maniacmod:dispatcher_close",
+        "stream": false
+      }
+    ]
+  },
+  "dispatcher_call_1": {
+    "sounds": [
+      {
+        "name": "maniacmod:dispatcher_call_1",
+        "stream": false
+      }
+    ]
+  },
+  "dispatcher_call_2": {
+    "sounds": [
+      {
+        "name": "maniacmod:dispatcher_call_2",
+        "stream": false
+      }
+    ]
+  },
+  "dispatcher_call_3": {
+    "sounds": [
+      {
+        "name": "maniacmod:dispatcher_call_3",
+        "stream": false
+      }
+    ]
+  },
+  "nail_pop": {
+    "sounds": [
+      {
+        "name": "maniacmod:nail_pop_1",
+        "stream": false
+      },
+      {
+        "name": "maniacmod:nail_pop_2",
+        "stream": false
+      },
+      {
+        "name": "maniacmod:nail_pop_3",
+        "stream": false
+      }
+    ]
+  },
+  "board_fall": {
+    "sounds": [
+      {
+        "name": "maniacmod:board_fall",
+        "stream": false
+      }
+    ]
+  },
+  "nail_grab": {
+    "sounds": [
+      {
+        "name": "maniacmod:nail_grab",
+        "stream": false
+      }
+    ]
+  },
+  "barricade_collapse": {
+    "sounds": [
+      {
+        "name": "maniacmod:barricade_collapse",
+        "stream": false
+      }
+    ]
   }
 }

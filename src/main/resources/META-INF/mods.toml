@@ -44,3 +44,10 @@ versionRange="[1.0.2-rc1+1.20,)"
 ordering="AFTER"
 side="BOTH"
 
+
+[[dependencies.maniacmod]]
+modId="vivecraft"
+mandatory=false
+versionRange="[0,)"
+ordering="AFTER"
+side="CLIENT"
